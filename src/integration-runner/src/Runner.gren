@@ -138,7 +138,7 @@ executeToolTask cpPermission toolPath workspace input =
             , runDuration = ChildProcess.NoLimit
             }
     in
-    ChildProcess.run cpPermission "node" [ Path.toPosixString toolPath, workspaceStr, jsonInput ] options
+    ChildProcess.run cpPermission (Path.toPosixString toolPath) [ workspaceStr, jsonInput ] options
         |> Task.map parseSuccessOutput
         |> Task.onError
             (\failedRun ->
