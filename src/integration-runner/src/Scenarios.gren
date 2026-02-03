@@ -1,0 +1,148 @@
+module Scenarios exposing
+    ( TestSuite
+    , Scenario
+    , Setup
+    , Expect
+    , decodeSuite
+    )
+
+{-| JSON parsing for test scenario definitions.
+-}
+
+import Dict exposing (Dict)
+import Json.Decode as Decode exposing (Decoder)
+
+
+{-| A test suite contains multiple scenarios for a tool.
+-}
+type alias TestSuite =
+    { name : String
+    , scenarios : Array Scenario
+    }
+
+
+{-| A single test scenario.
+-}
+type alias Scenario =
+    { name : String
+    , setup : Setup
+    , input : Decode.Value
+    , expect : Expect
+    }
+
+
+{-| Setup defines files to create before running the tool.
+-}
+type alias Setup =
+    { files : Dict String String
+    }
+
+
+{-| Expected results from the tool.
+-}
+type alias Expect =
+    { status : String
+    , output : Dict String Decode.Value
+    , outputContains : Dict String String
+    , errorContains : Maybe String
+    , filesExist : Array String
+    , filesNotExist : Array String
+    , fileContent : Dict String String
+    }
+
+
+{-| Decode a test suite from JSON.
+-}
+decodeSuite : Decoder TestSuite
+decodeSuite =
+    Decode.map2
+        (\name scenarios -> { name = name, scenarios = scenarios })
+        (Decode.field "name" Decode.string)
+        (Decode.field "scenarios" (Decode.array decodeScenario))
+
+
+decodeScenario : Decoder Scenario
+decodeScenario =
+    Decode.map4
+        (\name setup input expect ->
+            { name = name
+            , setup = setup
+            , input = input
+            , expect = expect
+            }
+        )
+        (Decode.field "name" Decode.string)
+        (Decode.oneOf
+            [ Decode.field "setup" decodeSetup
+            , Decode.succeed { files = Dict.empty }
+            ]
+        )
+        (Decode.field "input" Decode.value)
+        (Decode.field "expect" decodeExpect)
+
+
+decodeSetup : Decoder Setup
+decodeSetup =
+    Decode.map
+        (\files -> { files = files })
+        (Decode.oneOf
+            [ Decode.field "files" (Decode.dict Decode.string)
+            , Decode.succeed Dict.empty
+            ]
+        )
+
+
+decodeExpect : Decoder Expect
+decodeExpect =
+    Decode.succeed
+        (\status output outputContains errorContains filesExist filesNotExist fileContent ->
+            { status = status
+            , output = output
+            , outputContains = outputContains
+            , errorContains = errorContains
+            , filesExist = filesExist
+            , filesNotExist = filesNotExist
+            , fileContent = fileContent
+            }
+        )
+        |> andMap (Decode.field "status" Decode.string)
+        |> andMap
+            (Decode.oneOf
+                [ Decode.field "output" (Decode.dict Decode.value)
+                , Decode.succeed Dict.empty
+                ]
+            )
+        |> andMap
+            (Decode.oneOf
+                [ Decode.field "output_contains" (Decode.dict Decode.string)
+                , Decode.succeed Dict.empty
+                ]
+            )
+        |> andMap (Decode.maybe (Decode.field "error_contains" Decode.string))
+        |> andMap
+            (Decode.oneOf
+                [ Decode.field "files_exist" (Decode.array Decode.string)
+                , Decode.succeed []
+                ]
+            )
+        |> andMap
+            (Decode.oneOf
+                [ Decode.field "files_not_exist" (Decode.array Decode.string)
+                , Decode.succeed []
+                ]
+            )
+        |> andMap
+            (Decode.oneOf
+                [ Decode.field "file_content" (Decode.dict Decode.string)
+                , Decode.succeed Dict.empty
+                ]
+            )
+
+
+{-| Helper for applicative-style decoding.
+-}
+andMap : Decoder a -> Decoder (a -> b) -> Decoder b
+andMap argDecoder funcDecoder =
+    Decode.andThen
+        (\func -> Decode.map func argDecoder)
+        funcDecoder

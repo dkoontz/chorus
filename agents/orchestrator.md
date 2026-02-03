@@ -34,12 +34,14 @@ Report files (where `N` is the current iteration number):
 ```
 ASK → [planning] → dev → review → qa → COMPLETE
                     ↑      |       |
-                    |      |       |
+                    |      v       |
                     +------+-------+
-                    (on failure, return to dev)
+                    (on failure, return to dev, then back through review)
 ```
 
 Where `[planning]` is optional - only invoked if the user describes a new task.
+
+**Important:** All paths back to `dev` must proceed through `review` before returning to `qa`. The reviewer must verify fixes before QA re-tests.
 
 ### Phase: `ask`
 - Use AskUserQuestion to ask the user what they want to work on
@@ -61,7 +63,7 @@ Where `[planning]` is optional - only invoked if the user describes a new task.
 - Invoke the Developer agent using the Task tool
 - After completion, read developer report
 - If build or tests FAIL → stay in `dev`, increment iteration, invoke Developer again
-- If PASS → transition to `review` phase
+- If PASS → transition to `review` phase (always, regardless of whether dev was fixing review feedback or QA failures)
 
 ### Phase: `review`
 - Invoke the Developer Review agent using the Task tool
@@ -72,7 +74,7 @@ Where `[planning]` is optional - only invoked if the user describes a new task.
 ### Phase: `qa`
 - Invoke the QA agent using the Task tool
 - After completion, read QA report
-- If FAIL → transition to `dev` phase, increment iteration
+- If FAIL → transition to `dev` phase, increment iteration (dev will then go to review before returning to qa)
 - If PASS → transition to `complete` phase
 
 ### Phase: `complete`
@@ -226,6 +228,8 @@ Last Updated: [ISO timestamp]
 3. **Blocking Review Issues**: Any BLOCKING issue means CHANGES REQUESTED, even if there are also many suggestions.
 
 4. **QA Failures**: Any BLOCKER severity issue means FAIL.
+
+5. **Review Required After Dev**: Developer work must always be reviewed before QA testing. Never send dev fixes directly to QA - the flow is always dev → review → qa.
 
 ## Important
 

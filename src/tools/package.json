@@ -4,10 +4,12 @@
   "description": "Sandboxed file operations for Chorus agents",
   "main": "build/file-tools.js",
   "scripts": {
-    "build": "gren make Main --output=build/file-tools.js",
+    "build": "gren make Main --output=build/file-tools",
+    "build:runner": "cd ../integration-runner && npm run build",
     "clean": "rm -rf build .gren tests/.gren",
     "test": "cd tests && gren run Main",
-    "start": "node main.js"
+    "test:integration": "npm run build && npm run build:runner && ../integration-runner/build/runner tests/integration build/file-tools",
+    "test:all": "npm test && npm run test:integration"
   },
   "keywords": ["gren", "chorus", "file-tools"],
   "license": "MIT"

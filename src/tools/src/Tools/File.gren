@@ -302,6 +302,7 @@ ensureParentDirectory fsPermission maybePath =
 type alias PatchOperation =
     { find : String
     , replace : String
+    , startLine : Maybe Int
     }
 
 
@@ -382,8 +383,41 @@ applyPatchesHelper content patches appliedCount =
 
         Just patchOp ->
             let
+                -- Determine the search scope based on startLine
+                { prefix, searchContent } =
+                    when patchOp.startLine is
+                        Nothing ->
+                            -- Search entire content
+                            { prefix = "", searchContent = content }
+
+                        Just lineNum ->
+                            -- Search starting from the specified line (1-indexed)
+                            let
+                                lines =
+                                    String.split "\n" content
+
+                                -- Lines before startLine (0-indexed, so take lineNum - 1)
+                                prefixLines =
+                                    Array.takeFirst (lineNum - 1) lines
+
+                                -- Content before startLine including trailing newline
+                                prefixStr =
+                                    if Array.isEmpty prefixLines then
+                                        ""
+                                    else
+                                        String.join "\n" prefixLines ++ "\n"
+
+                                -- Content from startLine onwards
+                                suffixLines =
+                                    Array.dropFirst (lineNum - 1) lines
+
+                                suffix =
+                                    String.join "\n" suffixLines
+                            in
+                            { prefix = prefixStr, searchContent = suffix }
+
                 occurrences =
-                    countOccurrences patchOp.find content
+                    countOccurrences patchOp.find searchContent
             in
             if occurrences == 0 then
                 Task.fail (PatchFailed (FindStringNotFound { find = patchOp.find }))
@@ -391,8 +425,13 @@ applyPatchesHelper content patches appliedCount =
                 Task.fail (PatchFailed (FindStringNotUnique { find = patchOp.find, occurrences = occurrences }))
             else
                 let
+                    -- Replace in the scoped content
+                    newSearchContent =
+                        String.replace patchOp.find patchOp.replace searchContent
+
+                    -- Reconstruct full content
                     newContent =
-                        String.replace patchOp.find patchOp.replace content
+                        prefix ++ newSearchContent
 
                     remainingPatches =
                         Array.dropFirst 1 patches

@@ -1,0 +1,411 @@
+module Main exposing (main)
+
+{-| Integration test runner.
+
+Discovers and runs test scenarios from JSON files in a specified directory.
+
+Usage: integration-runner <scenarios-dir> <tool-path>
+       integration-runner --schema
+-}
+
+import Bytes
+import ChildProcess
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import Init
+import Json.Decode as Decode
+import Node
+import Runner exposing (ScenarioResult)
+import Scenarios exposing (TestSuite)
+import Stream
+import Task exposing (Task)
+
+
+main : Node.SimpleProgram Model
+main =
+    Node.defineSimpleProgram init
+
+
+type alias Model =
+    { passed : Int
+    , failed : Int
+    }
+
+
+type alias Config =
+    { scenariosDir : Path
+    , toolPath : Path
+    }
+
+
+type Command
+    = RunTests Config
+    | PrintSchema
+    | ShowUsage
+
+
+init : Node.Environment -> Init.Task (Cmd msg)
+init env =
+    when parseArgs env.args is
+        ShowUsage ->
+            printUsage env
+                |> Task.andThen (\_ -> Node.setExitCode 1)
+                |> Node.endSimpleProgram
+
+        PrintSchema ->
+            printSchema env
+                |> Node.endSimpleProgram
+
+        RunTests config ->
+            Init.await FileSystem.initialize <|
+                \fsPermission ->
+                    Init.await ChildProcess.initialize <|
+                        \cpPermission ->
+                            runAllTests env fsPermission cpPermission config
+
+
+parseArgs : Array String -> Command
+parseArgs args =
+    -- env.args includes [node, script, ...userArgs], so drop first 2
+    when Array.dropFirst 2 args is
+        [ "--schema" ] ->
+            PrintSchema
+
+        [ scenariosDirStr, toolPathStr ] ->
+            RunTests
+                { scenariosDir = Path.fromPosixString scenariosDirStr
+                , toolPath = Path.fromPosixString toolPathStr
+                }
+
+        _ ->
+            ShowUsage
+
+
+printUsage : Node.Environment -> Task x {}
+printUsage env =
+    let
+        usage =
+            String.join "\n"
+                [ "Integration Test Runner"
+                , ""
+                , "Usage: integration-runner <scenarios-dir> <tool-path>"
+                , "       integration-runner --schema"
+                , ""
+                , "Arguments:"
+                , "  scenarios-dir  Directory containing test scenario JSON files"
+                , "  tool-path      Path to the tool executable to test"
+                , ""
+                , "Options:"
+                , "  --schema       Print the JSON schema for test scenario files"
+                , ""
+                , "Example:"
+                , "  integration-runner ./tests/integration ./build/my-tool"
+                ]
+    in
+    printLine env usage
+
+
+printSchema : Node.Environment -> Task x {}
+printSchema env =
+    let
+        schema =
+            String.join "\n"
+                [ "{"
+                , "  \"$schema\": \"http://json-schema.org/draft-07/schema#\","
+                , "  \"title\": \"TestSuite\","
+                , "  \"description\": \"Integration test scenario file\","
+                , "  \"type\": \"object\","
+                , "  \"required\": [\"name\", \"scenarios\"],"
+                , "  \"properties\": {"
+                , "    \"name\": {"
+                , "      \"type\": \"string\","
+                , "      \"description\": \"Name of the tool being tested\""
+                , "    },"
+                , "    \"scenarios\": {"
+                , "      \"type\": \"array\","
+                , "      \"description\": \"List of test scenarios\","
+                , "      \"items\": { \"$ref\": \"#/definitions/Scenario\" }"
+                , "    }"
+                , "  },"
+                , "  \"definitions\": {"
+                , "    \"Scenario\": {"
+                , "      \"type\": \"object\","
+                , "      \"required\": [\"name\", \"input\", \"expect\"],"
+                , "      \"properties\": {"
+                , "        \"name\": {"
+                , "          \"type\": \"string\","
+                , "          \"description\": \"Descriptive name for this test case\""
+                , "        },"
+                , "        \"setup\": { \"$ref\": \"#/definitions/Setup\" },"
+                , "        \"input\": {"
+                , "          \"description\": \"JSON passed directly to the tool (tool-specific schema)\""
+                , "        },"
+                , "        \"expect\": { \"$ref\": \"#/definitions/Expect\" }"
+                , "      }"
+                , "    },"
+                , "    \"Setup\": {"
+                , "      \"type\": \"object\","
+                , "      \"properties\": {"
+                , "        \"files\": {"
+                , "          \"type\": \"object\","
+                , "          \"description\": \"Map of file paths to their contents\","
+                , "          \"additionalProperties\": { \"type\": \"string\" }"
+                , "        }"
+                , "      }"
+                , "    },"
+                , "    \"Expect\": {"
+                , "      \"type\": \"object\","
+                , "      \"required\": [\"status\"],"
+                , "      \"properties\": {"
+                , "        \"status\": {"
+                , "          \"type\": \"string\","
+                , "          \"enum\": [\"success\", \"error\"],"
+                , "          \"description\": \"Expected status based on presence of error field in output\""
+                , "        },"
+                , "        \"output\": {"
+                , "          \"type\": \"object\","
+                , "          \"description\": \"Exact field value matches in response\""
+                , "        },"
+                , "        \"output_contains\": {"
+                , "          \"type\": \"object\","
+                , "          \"description\": \"Substring matches in response fields\","
+                , "          \"additionalProperties\": { \"type\": \"string\" }"
+                , "        },"
+                , "        \"error_contains\": {"
+                , "          \"type\": \"string\","
+                , "          \"description\": \"Substring that must appear in error message\""
+                , "        },"
+                , "        \"files_exist\": {"
+                , "          \"type\": \"array\","
+                , "          \"items\": { \"type\": \"string\" },"
+                , "          \"description\": \"Paths that must exist after tool runs\""
+                , "        },"
+                , "        \"files_not_exist\": {"
+                , "          \"type\": \"array\","
+                , "          \"items\": { \"type\": \"string\" },"
+                , "          \"description\": \"Paths that must not exist after tool runs\""
+                , "        },"
+                , "        \"file_content\": {"
+                , "          \"type\": \"object\","
+                , "          \"description\": \"Map of paths to their expected contents\","
+                , "          \"additionalProperties\": { \"type\": \"string\" }"
+                , "        }"
+                , "      }"
+                , "    }"
+                , "  }"
+                , "}"
+                ]
+    in
+    printLine env schema
+
+
+runAllTests :
+    Node.Environment
+    -> FileSystem.Permission
+    -> ChildProcess.Permission
+    -> Config
+    -> Init.Task (Cmd msg)
+runAllTests env fsPermission cpPermission config =
+    discoverScenarioFiles fsPermission config.scenariosDir
+        |> Task.andThen
+            (\files ->
+                if Array.isEmpty files then
+                    printLine env ("No scenario files found in " ++ Path.toPosixString config.scenariosDir)
+                        |> Task.map (\_ -> { passed = 0, failed = 0 })
+                else
+                    printLine env ("Found " ++ String.fromInt (Array.length files) ++ " scenario files\n")
+                        |> Task.andThen
+                            (\_ ->
+                                runScenarioFiles env fsPermission cpPermission config.toolPath files
+                            )
+            )
+        |> Task.andThen
+            (\totals ->
+                printSummary env totals
+            )
+        |> Task.onError
+            (\err ->
+                printLine env ("Error: " ++ err)
+            )
+        |> Node.endSimpleProgram
+
+
+discoverScenarioFiles : FileSystem.Permission -> Path -> Task String (Array Path)
+discoverScenarioFiles fsPermission dir =
+    FileSystem.listDirectory fsPermission dir
+        |> Task.mapError (\e -> "Could not list scenarios directory: " ++ FileSystem.errorToString e)
+        |> Task.map
+            (\entries ->
+                entries
+                    |> Array.mapAndKeepJust
+                        (\entry ->
+                            let
+                                pathStr =
+                                    Path.toPosixString entry.path
+
+                                -- entry.path is relative to dir; append onto dir
+                                fullPath =
+                                    Path.append entry.path dir
+                            in
+                            if entry.entityType == FileSystem.File && String.endsWith ".json" pathStr then
+                                Just fullPath
+                            else
+                                Nothing
+                        )
+            )
+
+
+runScenarioFiles :
+    Node.Environment
+    -> FileSystem.Permission
+    -> ChildProcess.Permission
+    -> Path
+    -> Array Path
+    -> Task String Model
+runScenarioFiles env fsPermission cpPermission toolPath files =
+    Array.foldl
+        (\file prevTask ->
+            prevTask
+                |> Task.andThen
+                    (\totals ->
+                        runScenarioFile env fsPermission cpPermission toolPath file
+                            |> Task.map
+                                (\result ->
+                                    { passed = totals.passed + result.passed
+                                    , failed = totals.failed + result.failed
+                                    }
+                                )
+                    )
+        )
+        (Task.succeed { passed = 0, failed = 0 })
+        files
+
+
+runScenarioFile :
+    Node.Environment
+    -> FileSystem.Permission
+    -> ChildProcess.Permission
+    -> Path
+    -> Path
+    -> Task String Model
+runScenarioFile env fsPermission cpPermission toolPath file =
+    FileSystem.readFile fsPermission file
+        |> Task.mapError (\e -> "Could not read " ++ Path.toPosixString file ++ ": " ++ FileSystem.errorToString e)
+        |> Task.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        Task.fail ("Could not decode " ++ Path.toPosixString file ++ " as UTF-8")
+
+                    Just content ->
+                        when Decode.decodeString Scenarios.decodeSuite content is
+                            Err err ->
+                                Task.fail ("Failed to parse " ++ Path.toPosixString file ++ ": " ++ Decode.errorToString err)
+
+                            Ok suite ->
+                                printLine env ("## " ++ suite.name)
+                                    |> Task.andThen (\_ -> runSuite env fsPermission cpPermission toolPath suite)
+            )
+
+
+runSuite :
+    Node.Environment
+    -> FileSystem.Permission
+    -> ChildProcess.Permission
+    -> Path
+    -> TestSuite
+    -> Task String Model
+runSuite env fsPermission cpPermission toolPath suite =
+    Array.foldl
+        (\scenario prevTask ->
+            prevTask
+                |> Task.andThen
+                    (\totals ->
+                        createTempWorkspace fsPermission
+                            |> Task.andThen
+                                (\workspace ->
+                                    Runner.runScenario fsPermission cpPermission toolPath workspace scenario
+                                        |> Task.andThen
+                                            (\result ->
+                                                printResult env result
+                                                    |> Task.andThen
+                                                        (\_ ->
+                                                            cleanupWorkspace fsPermission workspace
+                                                                |> Task.map
+                                                                    (\_ ->
+                                                                        if result.passed then
+                                                                            { passed = totals.passed + 1
+                                                                            , failed = totals.failed
+                                                                            }
+                                                                        else
+                                                                            { passed = totals.passed
+                                                                            , failed = totals.failed + 1
+                                                                            }
+                                                                    )
+                                                        )
+                                            )
+                                )
+                    )
+        )
+        (Task.succeed { passed = 0, failed = 0 })
+        suite.scenarios
+
+
+createTempWorkspace : FileSystem.Permission -> Task String Path
+createTempWorkspace fsPermission =
+    FileSystem.makeTempDirectory fsPermission "integration-test-"
+        |> Task.mapError (\e -> "Failed to create temp directory: " ++ FileSystem.errorToString e)
+
+
+cleanupWorkspace : FileSystem.Permission -> Path -> Task String {}
+cleanupWorkspace fsPermission workspace =
+    FileSystem.remove fsPermission { recursive = True } workspace
+        |> Task.mapError (\e -> "Failed to clean up workspace: " ++ FileSystem.errorToString e)
+        |> Task.map (\_ -> {})
+
+
+printResult : Node.Environment -> ScenarioResult -> Task x {}
+printResult env result =
+    let
+        status =
+            if result.passed then
+                "PASS"
+            else
+                "FAIL"
+
+        line =
+            "  " ++ status ++ ": " ++ result.name ++ (if result.passed then "" else "\n       " ++ result.message)
+    in
+    printLine env line
+
+
+printSummary : Node.Environment -> Model -> Task x {}
+printSummary env totals =
+    let
+        total =
+            totals.passed + totals.failed
+
+        summary =
+            "\n----------------------------------------\n"
+                ++ "Results: "
+                ++ String.fromInt totals.passed
+                ++ " passed, "
+                ++ String.fromInt totals.failed
+                ++ " failed, "
+                ++ String.fromInt total
+                ++ " total"
+
+        exitLine =
+            if totals.failed > 0 then
+                "\nFAILED"
+            else
+                "\nOK"
+    in
+    printLine env (summary ++ exitLine)
+
+
+printLine : Node.Environment -> String -> Task x {}
+printLine env line =
+    Stream.writeLineAsBytes line env.stdout
+        |> Task.onError (\_ -> Task.succeed env.stdout)
+        |> Task.map (\_ -> {})

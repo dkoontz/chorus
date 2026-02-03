@@ -1,0 +1,38 @@
+{
+  "name": "security",
+  "scenarios": [
+    {
+      "name": "Reject path traversal with ..",
+      "input": {
+        "tool": "file.read",
+        "path": "../../../etc/passwd"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "escape"
+      }
+    },
+    {
+      "name": "Reject absolute path",
+      "input": {
+        "tool": "file.read",
+        "path": "/etc/passwd"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "Absolute"
+      }
+    },
+    {
+      "name": "Reject empty path",
+      "input": {
+        "tool": "file.read",
+        "path": ""
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "cannot be empty"
+      }
+    }
+  ]
+}

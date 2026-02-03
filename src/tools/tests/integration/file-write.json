@@ -1,0 +1,63 @@
+{
+  "name": "file.write",
+  "scenarios": [
+    {
+      "name": "Write new file",
+      "input": {
+        "tool": "file.write",
+        "path": "output.txt",
+        "content": "New content here"
+      },
+      "expect": {
+        "status": "success",
+        "output": {
+          "success": true
+        },
+        "files_exist": ["output.txt"],
+        "file_content": {
+          "output.txt": "New content here"
+        }
+      }
+    },
+    {
+      "name": "Overwrite existing file",
+      "setup": {
+        "files": {
+          "existing.txt": "Old content"
+        }
+      },
+      "input": {
+        "tool": "file.write",
+        "path": "existing.txt",
+        "content": "Replaced content"
+      },
+      "expect": {
+        "status": "success",
+        "output": {
+          "success": true
+        },
+        "file_content": {
+          "existing.txt": "Replaced content"
+        }
+      }
+    },
+    {
+      "name": "Write file in nested directory",
+      "input": {
+        "tool": "file.write",
+        "path": "deep/nested/path/file.txt",
+        "content": "Nested file content"
+      },
+      "expect": {
+        "status": "success",
+        "output": {
+          "success": true
+        },
+        "files_exist": ["deep/nested/path/file.txt"],
+        "file_content": {
+          "deep/nested/path/file.txt": "Nested file content"
+        }
+      }
+    }
+  ]
+}

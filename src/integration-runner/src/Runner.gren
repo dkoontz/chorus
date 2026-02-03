@@ -1,0 +1,427 @@
+module Runner exposing
+    ( ScenarioResult
+    , runScenario
+    )
+
+{-| Test execution logic for integration tests.
+-}
+
+import Assertions exposing (AssertionResult(..))
+import Bytes
+import ChildProcess
+import Dict exposing (Dict)
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import Json.Decode as Decode
+import Json.Encode as Encode
+import Scenarios exposing (Expect, Scenario, Setup)
+import Task exposing (Task)
+
+
+{-| Result of running a scenario.
+-}
+type alias ScenarioResult =
+    { name : String
+    , passed : Bool
+    , message : String
+    }
+
+
+{-| Run a single test scenario.
+-}
+runScenario :
+    FileSystem.Permission
+    -> ChildProcess.Permission
+    -> Path
+    -> Path
+    -> Scenario
+    -> Task String ScenarioResult
+runScenario fsPermission cpPermission toolPath workspace scenario =
+    setupFiles fsPermission workspace scenario.setup
+        |> Task.andThen
+            (\_ ->
+                executeToolTask cpPermission toolPath workspace scenario.input
+            )
+        |> Task.andThen
+            (\toolOutput ->
+                checkAssertions fsPermission workspace scenario.expect toolOutput
+            )
+        |> Task.map
+            (\assertionResult ->
+                when assertionResult is
+                    Pass ->
+                        { name = scenario.name
+                        , passed = True
+                        , message = "OK"
+                        }
+
+                    Fail msg ->
+                        { name = scenario.name
+                        , passed = False
+                        , message = msg
+                        }
+            )
+        |> Task.onError
+            (\err ->
+                Task.succeed
+                    { name = scenario.name
+                    , passed = False
+                    , message = err
+                    }
+            )
+
+
+{-| Create fixture files in workspace.
+-}
+setupFiles : FileSystem.Permission -> Path -> Setup -> Task String {}
+setupFiles fsPermission workspace setup =
+    let
+        fileKeys =
+            Dict.keys setup.files
+
+        createFile : String -> Task String {}
+        createFile key =
+            when Dict.get key setup.files is
+                Nothing ->
+                    Task.succeed {}
+
+                Just content ->
+                    let
+                        filePath =
+                            Path.append (Path.fromPosixString key) workspace
+
+                        dirPath =
+                            Path.parentPath filePath
+                                |> Maybe.withDefault workspace
+
+                        bytes =
+                            Bytes.fromString content
+                    in
+                    FileSystem.makeDirectory fsPermission { recursive = True } dirPath
+                        |> Task.onError (\_ -> Task.succeed dirPath)
+                        |> Task.andThen
+                            (\_ ->
+                                FileSystem.writeFile fsPermission bytes filePath
+                                    |> Task.mapError (\e -> "Failed to create file " ++ key ++ ": " ++ FileSystem.errorToString e)
+                                    |> Task.map (\_ -> {})
+                            )
+    in
+    Array.foldl
+        (\key prevTask ->
+            prevTask |> Task.andThen (\_ -> createFile key)
+        )
+        (Task.succeed {})
+        fileKeys
+
+
+{-| Execute the tool and get output.
+-}
+executeToolTask :
+    ChildProcess.Permission
+    -> Path
+    -> Path
+    -> Decode.Value
+    -> Task String ToolOutput
+executeToolTask cpPermission toolPath workspace input =
+    let
+        jsonInput =
+            Encode.encode 0 input
+
+        workspaceStr =
+            Path.toPosixString workspace
+
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.InheritWorkingDirectory
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 1024 * 1024
+            , runDuration = ChildProcess.NoLimit
+            }
+    in
+    ChildProcess.run cpPermission "node" [ Path.toPosixString toolPath, workspaceStr, jsonInput ] options
+        |> Task.map parseSuccessOutput
+        |> Task.onError
+            (\failedRun ->
+                when failedRun is
+                    ChildProcess.ProgramError { stdout, stderr } ->
+                        -- Tool may write error JSON to stderr
+                        let
+                            stderrStr =
+                                stderr
+                                    |> Bytes.toString
+                                    |> Maybe.withDefault ""
+                                    |> String.trim
+
+                            stdoutStr =
+                                stdout
+                                    |> Bytes.toString
+                                    |> Maybe.withDefault ""
+                                    |> String.trim
+
+                            outputStr =
+                                if String.isEmpty stdoutStr then
+                                    stderrStr
+                                else
+                                    stdoutStr
+                        in
+                        when Decode.decodeString (Decode.dict Decode.value) outputStr is
+                            Ok fields ->
+                                Task.succeed
+                                    { status = "error"
+                                    , fields = fields
+                                    , errorMessage =
+                                        Dict.get "error" fields
+                                            |> Maybe.map (Encode.encode 0)
+                                            |> Maybe.withDefault ""
+                                    }
+
+                            Err _ ->
+                                Task.fail ("Tool failed: " ++ outputStr)
+
+                    ChildProcess.InitError { errorCode } ->
+                        Task.fail ("Failed to run tool: " ++ errorCode)
+            )
+
+
+type alias ToolOutput =
+    { status : String
+    , fields : Dict String Decode.Value
+    , errorMessage : String
+    }
+
+
+parseSuccessOutput : ChildProcess.SuccessfulRun -> ToolOutput
+parseSuccessOutput result =
+    let
+        stdout =
+            result.stdout
+                |> Bytes.toString
+                |> Maybe.withDefault ""
+                |> String.trim
+
+        stderr =
+            result.stderr
+                |> Bytes.toString
+                |> Maybe.withDefault ""
+                |> String.trim
+
+        -- Try stdout first, then stderr (tool writes errors to stderr)
+        outputStr =
+            if String.isEmpty stdout then
+                stderr
+            else
+                stdout
+    in
+    when Decode.decodeString (Decode.dict Decode.value) outputStr is
+        Err _ ->
+            { status = "error"
+            , fields = Dict.empty
+            , errorMessage = "Failed to parse tool output as JSON: " ++ outputStr
+            }
+
+        Ok fields ->
+            let
+                hasError =
+                    Dict.member "error" fields
+
+                errorMsg =
+                    Dict.get "error" fields
+                        |> Maybe.map (Encode.encode 0)
+                        |> Maybe.withDefault ""
+            in
+            { status =
+                if hasError then
+                    "error"
+                else
+                    "success"
+            , fields = fields
+            , errorMessage = errorMsg
+            }
+
+
+{-| Check all assertions for a scenario.
+-}
+checkAssertions :
+    FileSystem.Permission
+    -> Path
+    -> Expect
+    -> ToolOutput
+    -> Task String AssertionResult
+checkAssertions fsPermission workspace expect output =
+    let
+        statusResult =
+            Assertions.checkStatus expect.status output.status
+
+        outputResult =
+            if Dict.isEmpty expect.output then
+                Pass
+            else
+                Assertions.checkOutput expect.output output.fields
+
+        containsResult =
+            if Dict.isEmpty expect.outputContains then
+                Pass
+            else
+                Assertions.checkOutputContains expect.outputContains output.fields
+
+        errorResult =
+            when expect.errorContains is
+                Nothing ->
+                    Pass
+
+                Just substring ->
+                    Assertions.checkErrorContains substring output.errorMessage
+    in
+    when combineAll [ statusResult, outputResult, containsResult, errorResult ] is
+        Fail msg ->
+            Task.succeed (Fail msg)
+
+        Pass ->
+            checkFileAssertions fsPermission workspace expect
+
+
+checkFileAssertions :
+    FileSystem.Permission
+    -> Path
+    -> Expect
+    -> Task String AssertionResult
+checkFileAssertions fsPermission workspace expect =
+    if
+        Array.isEmpty expect.filesExist
+            && Array.isEmpty expect.filesNotExist
+            && Dict.isEmpty expect.fileContent
+    then
+        Task.succeed Pass
+    else
+        listWorkspaceFiles fsPermission workspace
+            |> Task.andThen
+                (\existingFiles ->
+                    let
+                        existResult =
+                            Assertions.checkFilesExist expect.filesExist existingFiles
+
+                        notExistResult =
+                            Assertions.checkFilesNotExist expect.filesNotExist existingFiles
+                    in
+                    when combineAll [ existResult, notExistResult ] is
+                        Fail msg ->
+                            Task.succeed (Fail msg)
+
+                        Pass ->
+                            checkFileContents fsPermission workspace expect.fileContent
+                )
+
+
+listWorkspaceFiles : FileSystem.Permission -> Path -> Task String (Array String)
+listWorkspaceFiles fsPermission workspace =
+    listDirectoryRecursive fsPermission workspace
+        |> Task.map
+            (\paths ->
+                paths
+                    |> Array.map
+                        (\path ->
+                            let
+                                workspacePrefix =
+                                    Path.toPosixString workspace ++ "/"
+
+                                fullPath =
+                                    Path.toPosixString path
+                            in
+                            if String.startsWith workspacePrefix fullPath then
+                                String.dropFirst (String.count workspacePrefix) fullPath
+                            else
+                                fullPath
+                        )
+            )
+
+
+{-| Recursively list all files in a directory.
+-}
+listDirectoryRecursive : FileSystem.Permission -> Path -> Task String (Array Path)
+listDirectoryRecursive fsPermission dir =
+    FileSystem.listDirectory fsPermission dir
+        |> Task.mapError (\e -> "Failed to list directory: " ++ FileSystem.errorToString e)
+        |> Task.andThen
+            (\entries ->
+                entries
+                    |> Array.foldl
+                        (\entry accTask ->
+                            accTask
+                                |> Task.andThen
+                                    (\accPaths ->
+                                        let
+                                            -- Build full path: dir/entry.path
+                                            fullPath =
+                                                Path.append entry.path dir
+                                        in
+                                        when entry.entityType is
+                                            FileSystem.File ->
+                                                Task.succeed (Array.pushLast fullPath accPaths)
+
+                                            FileSystem.Directory ->
+                                                listDirectoryRecursive fsPermission fullPath
+                                                    |> Task.map (\subPaths -> Array.append accPaths subPaths)
+
+                                            _ ->
+                                                Task.succeed accPaths
+                                    )
+                        )
+                        (Task.succeed [])
+            )
+
+
+checkFileContents :
+    FileSystem.Permission
+    -> Path
+    -> Dict String String
+    -> Task String AssertionResult
+checkFileContents fsPermission workspace expected =
+    let
+        fileKeys =
+            Dict.keys expected
+
+        readFile : String -> Task String { key : String, value : String }
+        readFile key =
+            let
+                filePath =
+                    Path.append (Path.fromPosixString key) workspace
+            in
+            FileSystem.readFile fsPermission filePath
+                |> Task.mapError (\e -> "Failed to read " ++ key ++ ": " ++ FileSystem.errorToString e)
+                |> Task.andThen
+                    (\bytes ->
+                        when Bytes.toString bytes is
+                            Nothing ->
+                                Task.fail ("Failed to decode " ++ key ++ " as UTF-8")
+
+                            Just content ->
+                                Task.succeed { key = key, value = content }
+                    )
+    in
+    Array.foldl
+        (\key prevTask ->
+            prevTask
+                |> Task.andThen
+                    (\accDict ->
+                        readFile key
+                            |> Task.map (\{ key = k, value = v } -> Dict.set k v accDict)
+                    )
+        )
+        (Task.succeed Dict.empty)
+        fileKeys
+        |> Task.map (\actual -> Assertions.checkFileContent expected actual)
+
+
+combineAll : Array AssertionResult -> AssertionResult
+combineAll results =
+    Array.foldl
+        (\result acc ->
+            when acc is
+                Fail _ ->
+                    acc
+
+                Pass ->
+                    result
+        )
+        Pass
+        results

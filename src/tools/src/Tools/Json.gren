@@ -120,14 +120,16 @@ patchInputDecoder =
 
 patchOperationDecoder : Decoder File.PatchOperation
 patchOperationDecoder =
-    Decode.map2
-        (\find replace ->
+    Decode.map3
+        (\find replace startLine ->
             { find = find
             , replace = replace
+            , startLine = startLine
             }
         )
         (Decode.field "find" Decode.string)
         (Decode.field "replace" Decode.string)
+        (Decode.maybe (Decode.field "startLine" Decode.int))
 
 
 deleteInputDecoder : Decoder File.DeleteInput

@@ -1,0 +1,83 @@
+{
+  "name": "file.search",
+  "scenarios": [
+    {
+      "name": "Search for pattern in files",
+      "setup": {
+        "files": {
+          "code.js": "function hello() {\n  console.log('Hello');\n}",
+          "other.txt": "no match here"
+        }
+      },
+      "input": {
+        "tool": "file.search",
+        "pattern": "function"
+      },
+      "expect": {
+        "status": "success",
+        "output_contains": {
+          "matches": "function hello"
+        }
+      }
+    },
+    {
+      "name": "Search with glob filter",
+      "setup": {
+        "files": {
+          "src/app.js": "const API_KEY = 'secret';",
+          "src/app.ts": "const API_KEY: string = 'value';",
+          "readme.md": "API_KEY documentation"
+        }
+      },
+      "input": {
+        "tool": "file.search",
+        "pattern": "API_KEY",
+        "glob": "*.js"
+      },
+      "expect": {
+        "status": "success",
+        "output_contains": {
+          "matches": "app.js"
+        }
+      }
+    },
+    {
+      "name": "Search with no matches",
+      "setup": {
+        "files": {
+          "test.txt": "nothing relevant"
+        }
+      },
+      "input": {
+        "tool": "file.search",
+        "pattern": "nonexistent-pattern-xyz"
+      },
+      "expect": {
+        "status": "success",
+        "output": {
+          "matches": [],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "Search case insensitive",
+      "setup": {
+        "files": {
+          "mixed.txt": "Hello WORLD hello world"
+        }
+      },
+      "input": {
+        "tool": "file.search",
+        "pattern": "hello",
+        "case_sensitive": false
+      },
+      "expect": {
+        "status": "success",
+        "output_contains": {
+          "matches": "Hello"
+        }
+      }
+    }
+  ]
+}

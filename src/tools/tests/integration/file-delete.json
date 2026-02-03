@@ -1,0 +1,35 @@
+{
+  "name": "file.delete",
+  "scenarios": [
+    {
+      "name": "Delete existing file",
+      "setup": {
+        "files": {
+          "to-delete.txt": "This file will be deleted"
+        }
+      },
+      "input": {
+        "tool": "file.delete",
+        "path": "to-delete.txt"
+      },
+      "expect": {
+        "status": "success",
+        "output": {
+          "success": true
+        },
+        "files_not_exist": ["to-delete.txt"]
+      }
+    },
+    {
+      "name": "Delete nonexistent file",
+      "input": {
+        "tool": "file.delete",
+        "path": "nonexistent.txt"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "ENOENT"
+      }
+    }
+  ]
+}
