@@ -1,136 +1,150 @@
 # Chorus: Multi-Agent Development Workflow
 
-A multi-agent system for Claude Code that coordinates development, code review, and QA through specialized agents.
+A multi-agent system for Claude Code that coordinates planning, development, code review, and QA through specialized agents.
 
 ## Quick Start
 
-1. Create a task file in `tasks/`:
-   ```bash
-   cp tasks/example.md tasks/my-feature.md
-   # Edit tasks/my-feature.md with your requirements
-   ```
+### Option 1: Use the Planner (Recommended)
 
-2. Run the orchestrator:
-   ```
-   claude "Read agents/orchestrator.md and execute the workflow.
+Have the planner agent help define your task:
 
-   Parameters:
-   TASK_FILE: tasks/my-feature.md"
-   ```
+```
+claude "Read agents/planner.md and help me plan a task.
 
-The orchestrator automatically creates `workspaces/my-feature/` for status and reports.
+Parameters:
+TASK_NAME: my-feature
+DESCRIPTION: Add a logout button to the header"
+```
+
+The planner will:
+1. Ask clarifying questions about requirements
+2. Explore the codebase for context
+3. Draft acceptance criteria
+4. Get your approval
+5. Write the task file to `tasks/my-feature.md`
+
+### Option 2: Write Task Directly
+
+Create a task file manually in `tasks/`:
+
+```bash
+cp tasks/example.md tasks/my-feature.md
+# Edit tasks/my-feature.md with your requirements
+```
+
+### Run the Orchestrator
+
+Once you have a task file, run the orchestrator:
+
+```
+claude "Read agents/orchestrator.md and execute the workflow.
+
+Parameters:
+TASK_FILE: tasks/my-feature.md"
+```
 
 ## Architecture
 
 ```
 chorus/
-├── agents/                      # Agent prompt definitions
-│   ├── developer.md            # Implements code changes
-│   ├── developer-review.md     # Reviews code quality
-│   ├── qa.md                   # Tests functionality
-│   └── orchestrator.md         # Coordinates workflow
-├── tasks/                       # Task definitions (one file per task)
-│   ├── example.md
-│   ├── feature-a.md
-│   └── feature-b.md
-└── workspaces/                  # Auto-created per task
+├── agents/
+│   ├── planner.md            # Gathers requirements, writes task files
+│   ├── developer.md          # Implements code changes
+│   ├── developer-review.md   # Reviews code quality
+│   ├── qa.md                 # Tests functionality
+│   └── orchestrator.md       # Coordinates dev/review/qa workflow
+├── tasks/                     # Task definitions (one file per task)
+│   └── example.md
+└── workspaces/                # Auto-created per task
     └── {task-name}/
         ├── status.md
         └── reports/
-            ├── developer-1.md
-            ├── review-1.md
-            └── qa-1.md
 ```
 
-## Workflow
+## Full Workflow
 
 ```
-Developer → Review → QA → Complete
-    ↑         |       |
-    └─────────┴───────┘
-         (on failure)
+Planner → [writes task file] → Orchestrator → Developer → Review → QA → Complete
+                                                  ↑          |       |
+                                                  └──────────┴───────┘
+                                                       (on failure)
 ```
 
-1. **Developer** implements the requirements, runs build and tests
-2. **Review** checks code quality and identifies issues
-3. **QA** verifies functionality through testing
-4. **Orchestrator** coordinates transitions and handles failures
+1. **Planner** - Interacts with user to define requirements and write task file
+2. **Orchestrator** - Coordinates the development workflow
+3. **Developer** - Implements the requirements, runs build and tests
+4. **Review** - Checks code quality and identifies issues
+5. **QA** - Verifies functionality through testing
 
 ## Task File Format
 
-Create a markdown file in `tasks/` describing the work:
+Task files follow a standard template:
 
 ```markdown
 # Add user logout button
 
+## Summary
+Add a logout button to the application header that clears the user session.
+
 ## Requirements
 - Add a logout button to the header component
-- Clicking the button should clear the session and redirect to login
+- Clicking the button should clear the session
+- User should be redirected to /login after logout
 
 ## Acceptance Criteria
-- Button is visible when user is logged in
-- Clicking button logs user out
-- User is redirected to /login after logout
+- [ ] Button is visible when user is logged in
+- [ ] Button is hidden when user is logged out
+- [ ] Clicking button clears session storage
+- [ ] User is redirected to /login after logout
 
-## Context
-The header component is in src/components/Header.tsx.
-Session management uses the useAuth hook.
+## Out of Scope
+- Logout confirmation dialog
+- Remember me functionality
+
+## Technical Context
+
+### Files to Modify
+- `src/components/Header.tsx` - Add logout button
+- `src/hooks/useAuth.ts` - Add logout function
+
+### Related Files
+- `src/pages/Login.tsx` - Redirect target
+
+### Patterns to Follow
+- Use existing Button component from design system
+- Follow useAuth hook pattern for session management
+
+## Testing Requirements
+- Unit test for logout function
+- Integration test for redirect behavior
+
+## Notes
+- Session is stored in localStorage under 'auth_token' key
 ```
-
-The filename becomes the workspace name: `tasks/logout-button.md` → `workspaces/logout-button/`
 
 ## Running Multiple Tasks
 
-Start separate Claude Code sessions, each with a different task:
+Start separate Claude Code sessions:
 
 ```bash
-# Terminal 1
-claude "Read agents/orchestrator.md and execute the workflow.
+# Terminal 1: Plan a task
+claude "Read agents/planner.md and help me plan a task.
 
 Parameters:
-TASK_FILE: tasks/feature-a.md"
+TASK_NAME: feature-a
+DESCRIPTION: Add dark mode support"
 
-# Terminal 2
+# Terminal 2: Execute a different task
 claude "Read agents/orchestrator.md and execute the workflow.
 
 Parameters:
 TASK_FILE: tasks/feature-b.md"
 ```
 
-Each task gets its own workspace directory, so they don't interfere.
-
-## How Sub-Agents Work
-
-The orchestrator uses Claude Code's built-in Task tool to spawn sub-agents:
-
-```
-Orchestrator (receives TASK_FILE)
-    │
-    ├── Derives workspace from task filename
-    │
-    ├── Task tool → Developer sub-agent
-    │                 → writes developer-1.md, returns
-    │
-    ├── [reads developer-1.md, decides next step]
-    │
-    ├── Task tool → Review sub-agent
-    │                 → writes review-1.md, returns
-    │
-    ├── [reads review-1.md, decides next step]
-    │
-    └── Task tool → QA sub-agent
-                      → writes qa-1.md, returns
-```
-
 ## Agent Reports
 
-Reports are numbered by iteration to preserve history:
+Reports are numbered by iteration:
 
-- **developer-{N}.md**: Files modified, build/test status, implementation notes
-- **review-{N}.md**: Issues found (blocking vs suggestions), approval decision
-- **qa-{N}.md**: Test scenarios, failures with reproduction steps, pass/fail decision
-
-Example after 2 iterations:
 ```
 workspaces/my-feature/reports/
 ├── developer-1.md   # Initial implementation
@@ -145,6 +159,13 @@ workspaces/my-feature/reports/
 For debugging, run agents directly:
 
 ```bash
+# Run planner
+claude "Read agents/planner.md and help me plan a task.
+
+Parameters:
+TASK_NAME: my-feature
+DESCRIPTION: Brief description of what you want"
+
 # Run developer only
 claude "Read agents/developer.md and execute your workflow.
 
@@ -152,15 +173,28 @@ Parameters:
 TASK_FILE: tasks/my-feature.md
 STATUS_FILE: workspaces/my-feature/status.md
 REPORT_FILE: workspaces/my-feature/reports/developer-1.md"
+
+# Run review only
+claude "Read agents/developer-review.md and execute your workflow.
+
+Parameters:
+TASK_FILE: tasks/my-feature.md
+DEV_REPORT: workspaces/my-feature/reports/developer-1.md
+REPORT_FILE: workspaces/my-feature/reports/review-1.md"
+
+# Run QA only
+claude "Read agents/qa.md and execute your workflow.
+
+Parameters:
+TASK_FILE: tasks/my-feature.md
+DEV_REPORT: workspaces/my-feature/reports/developer-1.md
+REPORT_FILE: workspaces/my-feature/reports/qa-1.md"
 ```
-
-## Iteration Limits
-
-The orchestrator stops after 5 iterations to prevent infinite loops. If the task cannot be completed, it reports the recurring issues.
 
 ## Customization
 
 Modify the agent prompts in `agents/` to adjust:
+- Planner questions and task template
 - Review criteria
 - Testing approach
 - Report formats

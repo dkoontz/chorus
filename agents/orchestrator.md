@@ -4,8 +4,10 @@ You are the orchestrator agent responsible for coordinating the development work
 
 ## Parameters
 
-When invoked, you will receive:
-- `TASK_FILE`: Path to the task specification (e.g., `tasks/feature-a.md`)
+When invoked, you may optionally receive:
+- `TASK_FILE`: Path to an existing task specification (e.g., `tasks/feature-a.md`)
+
+If `TASK_FILE` is not provided, you will ask the user what they want to work on and invoke the Planner agent if needed.
 
 Derived paths:
 - Task name: filename without extension (e.g., `feature-a`)
@@ -30,19 +32,30 @@ Report files (where `N` is the current iteration number):
 ## Workflow State Machine
 
 ```
-START → dev → review → qa → COMPLETE
-          ↑      |       |
-          |      |       |
-          +------+-------+
-          (on failure, return to dev)
+ASK → [planning] → dev → review → qa → COMPLETE
+                    ↑      |       |
+                    |      |       |
+                    +------+-------+
+                    (on failure, return to dev)
 ```
 
-### Phase: `start`
-- Update status to `dev` phase, iteration 1
-- Invoke the Developer agent using the Task tool
-- After completion, read developer report
-- If build or tests FAIL → stay in `dev` phase, increment iteration, invoke Developer again
-- If PASS → transition to `review` phase
+Where `[planning]` is optional - only invoked if the user describes a new task.
+
+### Phase: `ask`
+- Use AskUserQuestion to ask the user what they want to work on
+- Options:
+  - "Describe a new task" - user will describe what they want to build
+  - "Use an existing task file" - user will provide a path to an existing task file
+- If user describes a new task → transition to `planning` phase
+- If user provides an existing task file path → verify file exists, set `TASK_FILE`, transition to `dev` phase
+
+### Phase: `planning`
+- Invoke the Planner agent using the Task tool
+- Pass the user's task description and a generated task name (kebab-case derived from description)
+- Wait for Planner to complete
+- The Planner will create the task file at `tasks/{task-name}.md`
+- Set `TASK_FILE` to the created file path
+- Transition to `dev` phase
 
 ### Phase: `dev`
 - Invoke the Developer agent using the Task tool
@@ -154,6 +167,21 @@ Task tool:
     Read your instructions from agents/qa.md, then execute your workflow using the parameters above.
 ```
 
+### Planner Agent
+```
+Task tool:
+  subagent_type: "general-purpose"
+  description: "Planner creates task specification"
+  prompt: |
+    You are the Planner agent.
+
+    ## Parameters
+    TASK_NAME: {task-name}
+    DESCRIPTION: {user's description}
+
+    Read your instructions from agents/planner.md, then execute your workflow using the parameters above.
+```
+
 ### Waiting for Sub-Agents
 
 The Task tool blocks until the sub-agent completes. After each invocation:
@@ -170,9 +198,9 @@ Update `workspaces/{task-name}/status.md` after each phase transition:
 # Status
 
 Task: {TASK_FILE}
-Phase: [start | dev | review | qa | complete]
+Phase: [ask | planning | dev | review | qa | complete]
 Iteration: [number - increment each time we return to dev]
-Current Agent: [Developer | Review | QA | none]
+Current Agent: [Planner | Developer | Review | QA | none]
 Last Updated: [ISO timestamp]
 
 ## Current Reports
@@ -212,10 +240,32 @@ Last Updated: [ISO timestamp]
 ## Starting the Workflow
 
 When first invoked:
-1. Parse `TASK_FILE` to extract task name (e.g., `tasks/feature-a.md` → `feature-a`)
-2. Create workspace directory: `workspaces/{task-name}/reports/`
-3. Verify `TASK_FILE` exists and has content
-4. Initialize `workspaces/{task-name}/status.md`
-5. Set phase to `dev` and iteration to 1
-6. Invoke the Developer agent with appropriate parameters
-7. Continue the workflow until complete or max iterations reached
+
+1. **Check if `TASK_FILE` was provided**
+   - If yes → skip to step 4
+   - If no → continue to step 2
+
+2. **Ask the user what they want to work on** (use AskUserQuestion)
+   - Options: "Describe a new task" or "Use an existing task file"
+
+3. **Handle user response**
+   - If user describes a new task:
+     - Generate a task name from the description (kebab-case, e.g., "add logout button" → `add-logout-button`)
+     - Invoke the Planner agent with the description and task name
+     - Wait for the Planner to complete
+     - Set `TASK_FILE` to `tasks/{task-name}.md`
+   - If user specifies an existing task file:
+     - Verify the file exists
+     - Set `TASK_FILE` to the provided path
+
+4. **Parse `TASK_FILE`** to extract task name (e.g., `tasks/feature-a.md` → `feature-a`)
+
+5. **Create workspace directory**: `workspaces/{task-name}/reports/`
+
+6. **Initialize `workspaces/{task-name}/status.md`**
+
+7. **Set phase to `dev` and iteration to 1**
+
+8. **Invoke the Developer agent** with appropriate parameters
+
+9. **Continue the workflow** until complete or max iterations reached
