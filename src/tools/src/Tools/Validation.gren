@@ -1,0 +1,135 @@
+module Tools.Validation exposing
+    ( ValidPath
+    , ValidationError(..)
+    , WorkspaceRoot
+    , makeWorkspaceRoot
+    , validatePath
+    , toPath
+    , toString
+    , workspaceRootPath
+    )
+
+{-| Path validation for sandboxed file operations.
+
+All file operations must go through path validation to ensure:
+- Paths stay within the workspace directory
+- Path traversal attacks are prevented
+- Paths are normalized before use
+
+-}
+
+import FileSystem.Path as Path exposing (Path)
+
+
+{-| A validated path that is guaranteed to be within the workspace.
+The constructor is not exported, so validated paths can only be
+created through the validatePath function.
+-}
+type ValidPath
+    = ValidPath Path
+
+
+{-| The workspace root directory. All operations are scoped to this directory.
+-}
+type WorkspaceRoot
+    = WorkspaceRoot Path
+
+
+{-| Errors that can occur during path validation.
+-}
+type ValidationError
+    = PathTraversalAttempt { path : String, reason : String }
+    | AbsolutePathNotAllowed { path : String }
+    | EmptyPath
+
+
+{-| Create a workspace root from a path string.
+-}
+makeWorkspaceRoot : String -> WorkspaceRoot
+makeWorkspaceRoot pathStr =
+    WorkspaceRoot (Path.fromPosixString pathStr)
+
+
+{-| Get the Path for a workspace root.
+-}
+workspaceRootPath : WorkspaceRoot -> Path
+workspaceRootPath (WorkspaceRoot path) =
+    path
+
+
+{-| Validate a path string, ensuring it stays within the workspace.
+
+This function:
+1. Rejects empty paths
+2. Rejects absolute paths (those starting with /)
+3. Rejects paths containing ".." components
+4. Normalizes the path
+
+Returns a ValidPath that can be used with file operations.
+-}
+validatePath : WorkspaceRoot -> String -> Result ValidationError ValidPath
+validatePath (WorkspaceRoot workspaceRoot) pathStr =
+    let
+        trimmed =
+            String.trim pathStr
+    in
+    if String.isEmpty trimmed then
+        Err EmptyPath
+    else if String.startsWith "/" trimmed then
+        Err (AbsolutePathNotAllowed { path = trimmed })
+    else if containsTraversal trimmed then
+        Err
+            (PathTraversalAttempt
+                { path = trimmed
+                , reason = "Path contains '..' which could escape the workspace"
+                }
+            )
+    else
+        let
+            relativePath =
+                Path.fromPosixString trimmed
+
+            fullPath =
+                Path.append relativePath workspaceRoot
+        in
+        Ok (ValidPath fullPath)
+
+
+{-| Check if a path contains traversal patterns.
+-}
+containsTraversal : String -> Bool
+containsTraversal pathStr =
+    let
+        segments =
+            String.split "/" pathStr
+    in
+    Array.any (\s -> s == "..") segments
+
+
+{-| Convert a ValidPath back to a FileSystem.Path for use with the FileSystem module.
+-}
+toPath : ValidPath -> Path
+toPath (ValidPath path) =
+    path
+
+
+{-| Convert a ValidPath to a string representation.
+-}
+toString : ValidPath -> String
+toString (ValidPath path) =
+    Path.toPosixString path
+
+
+{-| Convert a validation error to a human-readable string.
+-}
+validationErrorToString : ValidationError -> String
+validationErrorToString error =
+    when error is
+        EmptyPath ->
+            "Path cannot be empty"
+
+        AbsolutePathNotAllowed { path } ->
+            "Absolute paths are not allowed: " ++ path
+
+        PathTraversalAttempt { path, reason } ->
+            "Invalid path '" ++ path ++ "': " ++ reason

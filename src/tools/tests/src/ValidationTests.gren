@@ -1,0 +1,200 @@
+module ValidationTests exposing (suite)
+
+import Expect
+import Test exposing (Test, describe, test)
+import Tools.Validation as Validation
+    exposing
+        ( ValidPath
+        , ValidationError(..)
+        , WorkspaceRoot
+        , makeWorkspaceRoot
+        , validatePath
+        )
+
+
+suite : Test
+suite =
+    describe "Path Validation"
+        [ pathTraversalTests
+        , absolutePathTests
+        , emptyPathTests
+        , validPathTests
+        ]
+
+
+pathTraversalTests : Test
+pathTraversalTests =
+    describe "Path traversal prevention"
+        [ test "rejects simple path traversal" <|
+            \_ ->
+                let
+                    workspace =
+                        makeWorkspaceRoot "/var/chorus/workspaces"
+
+                    result =
+                        validatePath workspace "../etc/passwd"
+                in
+                when result is
+                    Err (PathTraversalAttempt _) ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail "Expected PathTraversalAttempt error"
+        , test "rejects path traversal in middle" <|
+            \_ ->
+                let
+                    workspace =
+                        makeWorkspaceRoot "/var/chorus/workspaces"
+
+                    result =
+                        validatePath workspace "foo/../../../etc/passwd"
+                in
+                when result is
+                    Err (PathTraversalAttempt _) ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail "Expected PathTraversalAttempt error"
+        , test "rejects multiple path traversals" <|
+            \_ ->
+                let
+                    workspace =
+                        makeWorkspaceRoot "/var/chorus/workspaces"
+
+                    result =
+                        validatePath workspace "../../../../../../etc/passwd"
+                in
+                when result is
+                    Err (PathTraversalAttempt _) ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail "Expected PathTraversalAttempt error"
+        ]
+
+
+absolutePathTests : Test
+absolutePathTests =
+    describe "Absolute path prevention"
+        [ test "rejects absolute path starting with /" <|
+            \_ ->
+                let
+                    workspace =
+                        makeWorkspaceRoot "/var/chorus/workspaces"
+
+                    result =
+                        validatePath workspace "/etc/passwd"
+                in
+                when result is
+                    Err (AbsolutePathNotAllowed _) ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail "Expected AbsolutePathNotAllowed error"
+        , test "rejects absolute path to workspace" <|
+            \_ ->
+                let
+                    workspace =
+                        makeWorkspaceRoot "/var/chorus/workspaces"
+
+                    result =
+                        validatePath workspace "/var/chorus/workspaces/file.txt"
+                in
+                when result is
+                    Err (AbsolutePathNotAllowed _) ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail "Expected AbsolutePathNotAllowed error"
+        ]
+
+
+emptyPathTests : Test
+emptyPathTests =
+    describe "Empty path handling"
+        [ test "rejects empty string" <|
+            \_ ->
+                let
+                    workspace =
+                        makeWorkspaceRoot "/var/chorus/workspaces"
+
+                    result =
+                        validatePath workspace ""
+                in
+                when result is
+                    Err EmptyPath ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail "Expected EmptyPath error"
+        , test "rejects whitespace-only string" <|
+            \_ ->
+                let
+                    workspace =
+                        makeWorkspaceRoot "/var/chorus/workspaces"
+
+                    result =
+                        validatePath workspace "   "
+                in
+                when result is
+                    Err EmptyPath ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail "Expected EmptyPath error"
+        ]
+
+
+validPathTests : Test
+validPathTests =
+    describe "Valid paths"
+        [ test "accepts simple filename" <|
+            \_ ->
+                let
+                    workspace =
+                        makeWorkspaceRoot "/var/chorus/workspaces"
+
+                    result =
+                        validatePath workspace "file.txt"
+                in
+                when result is
+                    Ok validPath ->
+                        Expect.equal
+                            (Validation.toString validPath)
+                            "/var/chorus/workspaces/file.txt"
+
+                    Err err ->
+                        Expect.fail "Expected Ok but got error"
+        , test "accepts nested path" <|
+            \_ ->
+                let
+                    workspace =
+                        makeWorkspaceRoot "/var/chorus/workspaces"
+
+                    result =
+                        validatePath workspace "src/main/file.txt"
+                in
+                when result is
+                    Ok validPath ->
+                        Expect.equal
+                            (Validation.toString validPath)
+                            "/var/chorus/workspaces/src/main/file.txt"
+
+                    Err err ->
+                        Expect.fail "Expected Ok but got error"
+        , test "accepts current directory reference" <|
+            \_ ->
+                let
+                    workspace =
+                        makeWorkspaceRoot "/var/chorus/workspaces"
+
+                    result =
+                        validatePath workspace "./file.txt"
+                in
+                when result is
+                    Ok _ ->
+                        Expect.pass
+
+                    Err err ->
+                        Expect.fail "Expected Ok but got error"
+        ]

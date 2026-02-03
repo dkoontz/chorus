@@ -1,0 +1,16 @@
+module Main exposing (main)
+
+import FileHelperTests
+import Test exposing (Test, describe, test)
+import Test.Runner.Node exposing (Program, run)
+import ValidationTests
+
+
+main : Program
+main =
+    run
+        (describe "File Tools Tests"
+            [ ValidationTests.suite
+            , FileHelperTests.suite
+            ]
+        )

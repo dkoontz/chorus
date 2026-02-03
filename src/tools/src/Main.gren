@@ -1,0 +1,153 @@
+module Main exposing (main)
+
+{-| CLI entry point for file tools.
+
+Usage:
+    node file-tools.js <workspace_root> <json_input>
+
+The workspace_root is the directory all operations are scoped to.
+The json_input is a JSON object with a "tool" field and tool-specific parameters.
+
+Example:
+    node file-tools.js /var/chorus/workspaces/task-1 '{"tool":"file.read","path":"src/main.gren"}'
+-}
+
+import ChildProcess
+import FileSystem
+import Init
+import Json.Encode as Encode
+import Node
+import Stream
+import Task
+import Tools.File as File
+import Tools.Json as Json
+    exposing
+        ( ToolRequest(..)
+        , encodeReadOutput
+        , encodeWriteOutput
+        , encodePatchOutput
+        , encodeDeleteOutput
+        , encodeListOutput
+        , encodeSearchOutput
+        )
+import Tools.Validation as Validation exposing (WorkspaceRoot)
+
+
+main : Node.SimpleProgram a
+main =
+    Node.defineSimpleProgram init
+
+
+init : Node.Environment -> Init.Task (Cmd a)
+init env =
+    Init.await FileSystem.initialize <|
+        \fsPermission ->
+            Init.await ChildProcess.initialize <|
+                \cpPermission ->
+                    runTool env fsPermission cpPermission
+
+
+runTool : Node.Environment -> FileSystem.Permission -> ChildProcess.Permission -> Init.Task (Cmd a)
+runTool env fsPermission cpPermission =
+    when env.args is
+        [ _, _, workspaceRootStr, jsonInput ] ->
+            let
+                workspaceRoot =
+                    Validation.makeWorkspaceRoot workspaceRootStr
+            in
+            when Json.decodeRequest jsonInput is
+                Err decodeError ->
+                    outputError env ("Invalid JSON input: " ++ decodeError)
+
+                Ok request ->
+                    executeRequest env fsPermission cpPermission workspaceRoot request
+
+        _ ->
+            outputError env "Usage: file-tools <workspace_root> <json_input>"
+
+
+executeRequest :
+    Node.Environment
+    -> FileSystem.Permission
+    -> ChildProcess.Permission
+    -> WorkspaceRoot
+    -> ToolRequest
+    -> Init.Task (Cmd a)
+executeRequest env fsPermission cpPermission workspaceRoot request =
+    when request is
+        ReadRequest input ->
+            File.read fsPermission workspaceRoot input
+                |> Task.map encodeReadOutput
+                |> Task.mapError File.fileErrorToString
+                |> handleResult env
+
+        WriteRequest input ->
+            File.write fsPermission workspaceRoot input
+                |> Task.map encodeWriteOutput
+                |> Task.mapError File.fileErrorToString
+                |> handleResult env
+
+        PatchRequest input ->
+            File.patch fsPermission workspaceRoot input
+                |> Task.map encodePatchOutput
+                |> Task.mapError File.fileErrorToString
+                |> handleResult env
+
+        DeleteRequest input ->
+            File.delete fsPermission workspaceRoot input
+                |> Task.map encodeDeleteOutput
+                |> Task.mapError File.fileErrorToString
+                |> handleResult env
+
+        ListRequest input ->
+            File.list fsPermission cpPermission workspaceRoot input
+                |> Task.map encodeListOutput
+                |> Task.mapError File.fileErrorToString
+                |> handleResult env
+
+        SearchRequest input ->
+            File.search cpPermission workspaceRoot input
+                |> Task.map encodeSearchOutput
+                |> Task.mapError File.fileErrorToString
+                |> handleResult env
+
+
+handleResult : Node.Environment -> Task.Task String Encode.Value -> Init.Task (Cmd a)
+handleResult env task =
+    task
+        |> Task.andThen
+            (\value ->
+                let
+                    json =
+                        Encode.encode 0 value
+                in
+                Stream.writeLineAsBytes json env.stdout
+                    |> Task.mapError (\_ -> "Failed to write output")
+            )
+        |> Task.onError
+            (\errorMsg ->
+                let
+                    errorJson =
+                        Json.encodeError errorMsg
+                in
+                Stream.writeLineAsBytes errorJson env.stderr
+                    |> Task.map (\_ -> env.stderr)
+                    |> Task.onError (\_ -> Task.succeed env.stderr)
+                    |> Task.map (\_ -> errorMsg)
+                    |> Task.andThen (\_ -> Task.fail errorMsg)
+            )
+        |> Task.map (\_ -> env.stdout)
+        |> Task.onError (\_ -> Task.succeed env.stdout)
+        |> Node.endSimpleProgram
+
+
+outputError : Node.Environment -> String -> Init.Task (Cmd a)
+outputError env errorMsg =
+    let
+        errorJson =
+            Json.encodeError errorMsg
+    in
+    Stream.writeLineAsBytes errorJson env.stderr
+        |> Task.onError (\_ -> Task.succeed env.stderr)
+        |> Node.endSimpleProgram
+

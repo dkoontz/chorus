@@ -1,0 +1,14 @@
+{
+  "name": "chorus-file-tools",
+  "version": "0.1.0",
+  "description": "Sandboxed file operations for Chorus agents",
+  "main": "build/file-tools.js",
+  "scripts": {
+    "build": "gren make Main --output=build/file-tools.js",
+    "clean": "rm -rf build .gren tests/.gren",
+    "test": "cd tests && gren run Main",
+    "start": "node main.js"
+  },
+  "keywords": ["gren", "chorus", "file-tools"],
+  "license": "MIT"
+}

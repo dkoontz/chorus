@@ -1,0 +1,294 @@
+module Tools.Json exposing
+    ( -- Request decoding
+      ToolRequest(..)
+    , decodeRequest
+      -- Response encoding
+    , encodeResponse
+    , encodeError
+      -- Output encoders
+    , encodeReadOutput
+    , encodeWriteOutput
+    , encodePatchOutput
+    , encodeDeleteOutput
+    , encodeListOutput
+    , encodeSearchOutput
+    )
+
+{-| JSON encoding and decoding for file tool requests and responses.
+-}
+
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+import Time
+import Tools.File as File
+
+
+-- REQUEST TYPES
+
+
+{-| A tool request parsed from JSON input.
+-}
+type ToolRequest
+    = ReadRequest File.ReadInput
+    | WriteRequest File.WriteInput
+    | PatchRequest File.PatchInput
+    | DeleteRequest File.DeleteInput
+    | ListRequest File.ListInput
+    | SearchRequest File.SearchInput
+
+
+{-| Decode a JSON request into a ToolRequest.
+-}
+decodeRequest : String -> Result String ToolRequest
+decodeRequest jsonStr =
+    Decode.decodeString requestDecoder jsonStr
+        |> Result.mapError Decode.errorToString
+
+
+requestDecoder : Decoder ToolRequest
+requestDecoder =
+    Decode.field "tool" Decode.string
+        |> Decode.andThen toolDecoder
+
+
+toolDecoder : String -> Decoder ToolRequest
+toolDecoder toolName =
+    when toolName is
+        "file.read" ->
+            Decode.map ReadRequest readInputDecoder
+
+        "file.write" ->
+            Decode.map WriteRequest writeInputDecoder
+
+        "file.patch" ->
+            Decode.map PatchRequest patchInputDecoder
+
+        "file.delete" ->
+            Decode.map DeleteRequest deleteInputDecoder
+
+        "file.list" ->
+            Decode.map ListRequest listInputDecoder
+
+        "file.search" ->
+            Decode.map SearchRequest searchInputDecoder
+
+        _ ->
+            Decode.fail ("Unknown tool: " ++ toolName)
+
+
+
+-- INPUT DECODERS
+
+
+readInputDecoder : Decoder File.ReadInput
+readInputDecoder =
+    Decode.map3
+        (\path offset limit ->
+            { path = path
+            , offset = offset
+            , limit = limit
+            }
+        )
+        (Decode.field "path" Decode.string)
+        (Decode.maybe (Decode.field "offset" Decode.int))
+        (Decode.maybe (Decode.field "limit" Decode.int))
+
+
+writeInputDecoder : Decoder File.WriteInput
+writeInputDecoder =
+    Decode.map2
+        (\path content ->
+            { path = path
+            , content = content
+            }
+        )
+        (Decode.field "path" Decode.string)
+        (Decode.field "content" Decode.string)
+
+
+patchInputDecoder : Decoder File.PatchInput
+patchInputDecoder =
+    Decode.map2
+        (\path patches ->
+            { path = path
+            , patches = patches
+            }
+        )
+        (Decode.field "path" Decode.string)
+        (Decode.field "patches" (Decode.array patchOperationDecoder))
+
+
+patchOperationDecoder : Decoder File.PatchOperation
+patchOperationDecoder =
+    Decode.map2
+        (\find replace ->
+            { find = find
+            , replace = replace
+            }
+        )
+        (Decode.field "find" Decode.string)
+        (Decode.field "replace" Decode.string)
+
+
+deleteInputDecoder : Decoder File.DeleteInput
+deleteInputDecoder =
+    Decode.map
+        (\path -> { path = path })
+        (Decode.field "path" Decode.string)
+
+
+listInputDecoder : Decoder File.ListInput
+listInputDecoder =
+    Decode.map2
+        (\path pattern ->
+            { path = path
+            , pattern = pattern
+            }
+        )
+        (Decode.maybe (Decode.field "path" Decode.string))
+        (Decode.maybe (Decode.field "pattern" Decode.string))
+
+
+searchInputDecoder : Decoder File.SearchInput
+searchInputDecoder =
+    Decode.map6
+        (\pattern path glob caseSensitive contextLines maxResults ->
+            { pattern = pattern
+            , path = path
+            , glob = glob
+            , caseSensitive = caseSensitive
+            , contextLines = contextLines
+            , maxResults = maxResults
+            }
+        )
+        (Decode.field "pattern" Decode.string)
+        (Decode.maybe (Decode.field "path" Decode.string))
+        (Decode.maybe (Decode.field "glob" Decode.string))
+        (Decode.maybe (Decode.field "case_sensitive" Decode.bool))
+        (Decode.maybe (Decode.field "context_lines" Decode.int))
+        (Decode.maybe (Decode.field "max_results" Decode.int))
+
+
+{-| We need map6 for SearchInput. Gren doesn't have map6 built-in,
+so we build it using andMap pattern.
+-}
+map6 :
+    (a -> b -> c -> d -> e -> f -> result)
+    -> Decoder a
+    -> Decoder b
+    -> Decoder c
+    -> Decoder d
+    -> Decoder e
+    -> Decoder f
+    -> Decoder result
+map6 fn da db dc dd de df =
+    Decode.map fn da
+        |> andMap db
+        |> andMap dc
+        |> andMap dd
+        |> andMap de
+        |> andMap df
+
+
+andMap : Decoder a -> Decoder (a -> b) -> Decoder b
+andMap da dfn =
+    Decode.map2 (\fn a -> fn a) dfn da
+
+
+
+-- RESPONSE ENCODING
+
+
+{-| Encode a successful response based on the tool type.
+-}
+encodeResponse : ToolRequest -> Encode.Value -> String
+encodeResponse request value =
+    Encode.encode 0 value
+
+
+{-| Encode a read output.
+-}
+encodeReadOutput : File.ReadOutput -> Encode.Value
+encodeReadOutput output =
+    Encode.object
+        [ { key = "content", value = Encode.string output.content }
+        , { key = "total_lines", value = Encode.int output.totalLines }
+        , { key = "truncated", value = Encode.bool output.truncated }
+        ]
+
+
+{-| Encode a write output.
+-}
+encodeWriteOutput : File.WriteOutput -> Encode.Value
+encodeWriteOutput output =
+    Encode.object
+        [ { key = "success", value = Encode.bool output.success }
+        , { key = "bytes_written", value = Encode.int output.bytesWritten }
+        ]
+
+
+{-| Encode a patch output.
+-}
+encodePatchOutput : File.PatchOutput -> Encode.Value
+encodePatchOutput output =
+    Encode.object
+        [ { key = "success", value = Encode.bool output.success }
+        , { key = "patches_applied", value = Encode.int output.patchesApplied }
+        ]
+
+
+{-| Encode a delete output.
+-}
+encodeDeleteOutput : File.DeleteOutput -> Encode.Value
+encodeDeleteOutput output =
+    Encode.object
+        [ { key = "success", value = Encode.bool output.success }
+        ]
+
+
+{-| Encode a list output.
+-}
+encodeListOutput : File.ListOutput -> Encode.Value
+encodeListOutput output =
+    Encode.object
+        [ { key = "files", value = Encode.array encodeFileInfo output.files }
+        ]
+
+
+encodeFileInfo : File.FileInfo -> Encode.Value
+encodeFileInfo info =
+    Encode.object
+        [ { key = "path", value = Encode.string info.path }
+        , { key = "size", value = Encode.int info.size }
+        , { key = "modified", value = Encode.int (Time.posixToMillis info.modified) }
+        , { key = "is_directory", value = Encode.bool info.isDirectory }
+        ]
+
+
+{-| Encode a search output.
+-}
+encodeSearchOutput : File.SearchOutput -> Encode.Value
+encodeSearchOutput output =
+    Encode.object
+        [ { key = "matches", value = Encode.array encodeSearchMatch output.matches }
+        , { key = "truncated", value = Encode.bool output.truncated }
+        ]
+
+
+encodeSearchMatch : File.SearchMatch -> Encode.Value
+encodeSearchMatch match =
+    Encode.object
+        [ { key = "path", value = Encode.string match.path }
+        , { key = "line", value = Encode.int match.line }
+        , { key = "content", value = Encode.string match.content }
+        ]
+
+
+{-| Encode an error response.
+-}
+encodeError : String -> String
+encodeError errorMessage =
+    Encode.object
+        [ { key = "error", value = Encode.string errorMessage }
+        ]
+        |> Encode.encode 0

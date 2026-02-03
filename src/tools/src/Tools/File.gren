@@ -1,0 +1,898 @@
+module Tools.File exposing
+    ( -- Read
+      ReadInput
+    , ReadOutput
+    , read
+      -- Write
+    , WriteInput
+    , WriteOutput
+    , write
+      -- Patch
+    , PatchInput
+    , PatchOperation
+    , PatchOutput
+    , patch
+      -- Delete
+    , DeleteInput
+    , DeleteOutput
+    , delete
+      -- List
+    , ListInput
+    , ListOutput
+    , FileInfo
+    , list
+      -- Search
+    , SearchInput
+    , SearchOutput
+    , SearchMatch
+    , search
+      -- Error
+    , FileError(..)
+    , fileErrorToString
+      -- Pure helpers (exposed for testing)
+    , countOccurrences
+    , parseSearchLine
+    )
+
+{-| File tools for sandboxed file operations.
+
+All operations are scoped to a workspace directory and paths are validated
+before any operation is performed.
+-}
+
+import Bytes exposing (Bytes)
+import Bytes.Encode
+import ChildProcess
+import Dict exposing (Dict)
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import Task exposing (Task)
+import Time
+import Tools.Validation as Validation
+    exposing
+        ( ValidPath
+        , ValidationError
+        , WorkspaceRoot
+        )
+
+
+-- ERROR TYPE
+
+
+{-| Errors that can occur during file operations.
+-}
+type FileError
+    = ValidationFailed ValidationError
+    | FileSystemError FileSystem.Error
+    | FileNotFound { path : String }
+    | IsDirectory { path : String }
+    | NotAFile { path : String }
+    | PatchFailed PatchError
+    | SearchFailed { reason : String }
+    | EncodingError { reason : String }
+
+
+type PatchError
+    = FindStringNotFound { find : String }
+    | FindStringNotUnique { find : String, occurrences : Int }
+
+
+{-| Convert a file error to a human-readable string.
+-}
+fileErrorToString : FileError -> String
+fileErrorToString error =
+    when error is
+        ValidationFailed validationError ->
+            validationErrorToString validationError
+
+        FileSystemError fsError ->
+            FileSystem.errorToString fsError
+
+        FileNotFound { path } ->
+            "File not found: " ++ path
+
+        IsDirectory { path } ->
+            "Cannot operate on directory: " ++ path
+
+        NotAFile { path } ->
+            "Path is not a regular file: " ++ path
+
+        PatchFailed patchError ->
+            when patchError is
+                FindStringNotFound { find } ->
+                    "Find string not found: '" ++ find ++ "'"
+
+                FindStringNotUnique { find, occurrences } ->
+                    "Find string '" ++ find ++ "' is not unique (found " ++ String.fromInt occurrences ++ " occurrences)"
+
+        SearchFailed { reason } ->
+            "Search failed: " ++ reason
+
+        EncodingError { reason } ->
+            "Encoding error: " ++ reason
+
+
+validationErrorToString : ValidationError -> String
+validationErrorToString error =
+    when error is
+        Validation.EmptyPath ->
+            "Path cannot be empty"
+
+        Validation.AbsolutePathNotAllowed { path } ->
+            "Absolute paths are not allowed: " ++ path
+
+        Validation.PathTraversalAttempt { path, reason } ->
+            "Invalid path '" ++ path ++ "': " ++ reason
+
+
+
+-- READ TOOL
+
+
+{-| Input for the read operation.
+-}
+type alias ReadInput =
+    { path : String
+    , offset : Maybe Int
+    , limit : Maybe Int
+    }
+
+
+{-| Output from the read operation.
+-}
+type alias ReadOutput =
+    { content : String
+    , totalLines : Int
+    , truncated : Bool
+    }
+
+
+{-| Read a file with optional pagination.
+
+Returns line-numbered content within the specified range.
+-}
+read :
+    FileSystem.Permission
+    -> WorkspaceRoot
+    -> ReadInput
+    -> Task FileError ReadOutput
+read fsPermission workspaceRoot input =
+    when Validation.validatePath workspaceRoot input.path is
+        Err validationError ->
+            Task.fail (ValidationFailed validationError)
+
+        Ok validPath ->
+            let
+                path =
+                    Validation.toPath validPath
+            in
+            FileSystem.readFile fsPermission path
+                |> Task.mapError FileSystemError
+                |> Task.andThen (processReadContent input)
+
+
+processReadContent : ReadInput -> Bytes -> Task FileError ReadOutput
+processReadContent input bytes =
+    when Bytes.toString bytes is
+        Nothing ->
+            Task.fail (EncodingError { reason = "Could not decode file as UTF-8" })
+
+        Just content ->
+            let
+                allLines =
+                    String.split "\n" content
+
+                totalLines =
+                    Array.length allLines
+
+                offset =
+                    Maybe.withDefault 0 input.offset
+
+                limit =
+                    Maybe.withDefault totalLines input.limit
+
+                selectedLines =
+                    allLines
+                        |> Array.dropFirst offset
+                        |> Array.takeFirst limit
+
+                numberedLines =
+                    selectedLines
+                        |> Array.indexedMap
+                            (\i line ->
+                                let
+                                    lineNum =
+                                        offset + i + 1
+                                in
+                                String.padLeft 6 ' ' (String.fromInt lineNum) ++ "\t" ++ line
+                            )
+
+                truncated =
+                    offset + limit < totalLines
+            in
+            Task.succeed
+                { content = String.join "\n" numberedLines
+                , totalLines = totalLines
+                , truncated = truncated
+                }
+
+
+
+-- WRITE TOOL
+
+
+{-| Input for the write operation.
+-}
+type alias WriteInput =
+    { path : String
+    , content : String
+    }
+
+
+{-| Output from the write operation.
+-}
+type alias WriteOutput =
+    { success : Bool
+    , bytesWritten : Int
+    }
+
+
+{-| Write content to a file, creating parent directories if needed.
+-}
+write :
+    FileSystem.Permission
+    -> WorkspaceRoot
+    -> WriteInput
+    -> Task FileError WriteOutput
+write fsPermission workspaceRoot input =
+    when Validation.validatePath workspaceRoot input.path is
+        Err validationError ->
+            Task.fail (ValidationFailed validationError)
+
+        Ok validPath ->
+            let
+                path =
+                    Validation.toPath validPath
+
+                parentPath =
+                    Path.parentPath path
+
+                bytes =
+                    Bytes.fromString input.content
+
+                bytesLength =
+                    Bytes.length bytes
+            in
+            ensureParentDirectory fsPermission parentPath
+                |> Task.andThen (\_ -> FileSystem.writeFile fsPermission bytes path)
+                |> Task.mapError FileSystemError
+                |> Task.map
+                    (\_ ->
+                        { success = True
+                        , bytesWritten = bytesLength
+                        }
+                    )
+
+
+ensureParentDirectory : FileSystem.Permission -> Maybe Path -> Task FileSystem.Error {}
+ensureParentDirectory fsPermission maybePath =
+    when maybePath is
+        Nothing ->
+            Task.succeed {}
+
+        Just path ->
+            FileSystem.makeDirectory fsPermission { recursive = True } path
+                |> Task.map (\_ -> {})
+                |> Task.onError
+                    (\err ->
+                        -- Ignore error if directory already exists
+                        if FileSystem.errorIsFileExists err then
+                            Task.succeed {}
+                        else
+                            Task.fail err
+                    )
+
+
+
+-- PATCH TOOL
+
+
+{-| A single patch operation.
+-}
+type alias PatchOperation =
+    { find : String
+    , replace : String
+    }
+
+
+{-| Input for the patch operation.
+-}
+type alias PatchInput =
+    { path : String
+    , patches : Array PatchOperation
+    }
+
+
+{-| Output from the patch operation.
+-}
+type alias PatchOutput =
+    { success : Bool
+    , patchesApplied : Int
+    }
+
+
+{-| Apply patches to a file.
+
+Each patch finds an exact string and replaces it. Fails if the find
+string is not found or appears more than once.
+-}
+patch :
+    FileSystem.Permission
+    -> WorkspaceRoot
+    -> PatchInput
+    -> Task FileError PatchOutput
+patch fsPermission workspaceRoot input =
+    when Validation.validatePath workspaceRoot input.path is
+        Err validationError ->
+            Task.fail (ValidationFailed validationError)
+
+        Ok validPath ->
+            let
+                path =
+                    Validation.toPath validPath
+            in
+            FileSystem.readFile fsPermission path
+                |> Task.mapError FileSystemError
+                |> Task.andThen
+                    (\bytes ->
+                        when Bytes.toString bytes is
+                            Nothing ->
+                                Task.fail (EncodingError { reason = "Could not decode file as UTF-8" })
+
+                            Just content ->
+                                applyPatches content input.patches
+                                    |> Task.andThen
+                                        (\{ newContent, patchCount } ->
+                                            let
+                                                newBytes =
+                                                    Bytes.fromString newContent
+                                            in
+                                            FileSystem.writeFile fsPermission newBytes path
+                                                |> Task.mapError FileSystemError
+                                                |> Task.map
+                                                    (\_ ->
+                                                        { success = True
+                                                        , patchesApplied = patchCount
+                                                        }
+                                                    )
+                                        )
+                    )
+
+
+applyPatches : String -> Array PatchOperation -> Task FileError { newContent : String, patchCount : Int }
+applyPatches content patches =
+    applyPatchesHelper content patches 0
+
+
+applyPatchesHelper : String -> Array PatchOperation -> Int -> Task FileError { newContent : String, patchCount : Int }
+applyPatchesHelper content patches appliedCount =
+    when Array.first patches is
+        Nothing ->
+            Task.succeed { newContent = content, patchCount = appliedCount }
+
+        Just patchOp ->
+            let
+                occurrences =
+                    countOccurrences patchOp.find content
+            in
+            if occurrences == 0 then
+                Task.fail (PatchFailed (FindStringNotFound { find = patchOp.find }))
+            else if occurrences > 1 then
+                Task.fail (PatchFailed (FindStringNotUnique { find = patchOp.find, occurrences = occurrences }))
+            else
+                let
+                    newContent =
+                        String.replace patchOp.find patchOp.replace content
+
+                    remainingPatches =
+                        Array.dropFirst 1 patches
+                in
+                applyPatchesHelper newContent remainingPatches (appliedCount + 1)
+
+
+countOccurrences : String -> String -> Int
+countOccurrences needle haystack =
+    if String.isEmpty needle then
+        0
+    else
+        let
+            parts =
+                String.split needle haystack
+        in
+        Array.length parts - 1
+
+
+
+-- DELETE TOOL
+
+
+{-| Input for the delete operation.
+-}
+type alias DeleteInput =
+    { path : String
+    }
+
+
+{-| Output from the delete operation.
+-}
+type alias DeleteOutput =
+    { success : Bool
+    }
+
+
+{-| Delete a file. Refuses to delete directories.
+-}
+delete :
+    FileSystem.Permission
+    -> WorkspaceRoot
+    -> DeleteInput
+    -> Task FileError DeleteOutput
+delete fsPermission workspaceRoot input =
+    when Validation.validatePath workspaceRoot input.path is
+        Err validationError ->
+            Task.fail (ValidationFailed validationError)
+
+        Ok validPath ->
+            let
+                path =
+                    Validation.toPath validPath
+            in
+            FileSystem.metadata fsPermission { resolveLink = True } path
+                |> Task.mapError FileSystemError
+                |> Task.andThen
+                    (\metadata ->
+                        when metadata.entityType is
+                            FileSystem.File ->
+                                FileSystem.remove fsPermission { recursive = False } path
+                                    |> Task.mapError FileSystemError
+                                    |> Task.map (\_ -> { success = True })
+
+                            FileSystem.Directory ->
+                                Task.fail (IsDirectory { path = input.path })
+
+                            _ ->
+                                Task.fail (NotAFile { path = input.path })
+                    )
+
+
+
+-- LIST TOOL
+
+
+{-| Input for the list operation.
+-}
+type alias ListInput =
+    { path : Maybe String
+    , pattern : Maybe String
+    }
+
+
+{-| Information about a file or directory.
+-}
+type alias FileInfo =
+    { path : String
+    , size : Int
+    , modified : Time.Posix
+    , isDirectory : Bool
+    }
+
+
+{-| Output from the list operation.
+-}
+type alias ListOutput =
+    { files : Array FileInfo
+    }
+
+
+{-| List files in a directory, optionally filtered by glob pattern.
+-}
+list :
+    FileSystem.Permission
+    -> ChildProcess.Permission
+    -> WorkspaceRoot
+    -> ListInput
+    -> Task FileError ListOutput
+list fsPermission cpPermission workspaceRoot input =
+    let
+        pathStr =
+            Maybe.withDefault "." input.path
+    in
+    when Validation.validatePath workspaceRoot pathStr is
+        Err validationError ->
+            Task.fail (ValidationFailed validationError)
+
+        Ok validPath ->
+            let
+                path =
+                    Validation.toPath validPath
+            in
+            when input.pattern is
+                Nothing ->
+                    -- Simple directory listing
+                    listDirectorySimple fsPermission path
+
+                Just pattern ->
+                    -- Use find command for glob patterns
+                    listWithPattern cpPermission workspaceRoot validPath pattern
+
+
+listDirectorySimple : FileSystem.Permission -> Path -> Task FileError ListOutput
+listDirectorySimple fsPermission path =
+    FileSystem.listDirectory fsPermission path
+        |> Task.mapError FileSystemError
+        |> Task.andThen
+            (\entries ->
+                entries
+                    |> Array.map
+                        (\entry ->
+                            FileSystem.metadata fsPermission { resolveLink = True } entry.path
+                                |> Task.map
+                                    (\metadata ->
+                                        { path = Path.toPosixString entry.path
+                                        , size = metadata.byteSize
+                                        , modified = metadata.lastModified
+                                        , isDirectory = entry.entityType == FileSystem.Directory
+                                        }
+                                    )
+                                |> Task.onError
+                                    (\_ ->
+                                        -- If metadata fails, return basic info
+                                        Task.succeed
+                                            { path = Path.toPosixString entry.path
+                                            , size = 0
+                                            , modified = Time.millisToPosix 0
+                                            , isDirectory = entry.entityType == FileSystem.Directory
+                                            }
+                                    )
+                        )
+                    |> Task.sequence
+                    |> Task.map (\files -> { files = files })
+                    |> Task.mapError FileSystemError
+            )
+
+
+listWithPattern :
+    ChildProcess.Permission
+    -> WorkspaceRoot
+    -> ValidPath
+    -> String
+    -> Task FileError ListOutput
+listWithPattern cpPermission workspaceRoot validPath pattern =
+    let
+        searchPath =
+            Validation.toString validPath
+
+        -- Use find command with -name for glob patterns
+        args =
+            [ searchPath
+            , "-name"
+            , pattern
+            , "-type"
+            , "f"
+            ]
+
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.SetWorkingDirectory (Path.toPosixString (Validation.workspaceRootPath workspaceRoot))
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 1024 * 1024
+            , runDuration = ChildProcess.Milliseconds 30000
+            }
+    in
+    ChildProcess.run cpPermission "find" args options
+        |> Task.mapError (\_ -> SearchFailed { reason = "find command failed" })
+        |> Task.map
+            (\result ->
+                let
+                    output =
+                        result.stdout
+                            |> Bytes.toString
+                            |> Maybe.withDefault ""
+
+                    files =
+                        output
+                            |> String.split "\n"
+                            |> Array.keepIf (\s -> not (String.isEmpty s))
+                            |> Array.map
+                                (\filePath ->
+                                    { path = filePath
+                                    , size = 0
+                                    , modified = Time.millisToPosix 0
+                                    , isDirectory = False
+                                    }
+                                )
+                in
+                { files = files }
+            )
+
+
+
+-- SEARCH TOOL
+
+
+{-| Input for the search operation.
+-}
+type alias SearchInput =
+    { pattern : String
+    , path : Maybe String
+    , glob : Maybe String
+    , caseSensitive : Maybe Bool
+    , contextLines : Maybe Int
+    , maxResults : Maybe Int
+    }
+
+
+{-| A single search match.
+-}
+type alias SearchMatch =
+    { path : String
+    , line : Int
+    , content : String
+    }
+
+
+{-| Output from the search operation.
+-}
+type alias SearchOutput =
+    { matches : Array SearchMatch
+    , truncated : Bool
+    }
+
+
+{-| Search for a pattern in files using ripgrep.
+
+Falls back to a basic grep if ripgrep is not available.
+-}
+search :
+    ChildProcess.Permission
+    -> WorkspaceRoot
+    -> SearchInput
+    -> Task FileError SearchOutput
+search cpPermission workspaceRoot input =
+    let
+        searchPath =
+            Maybe.withDefault "." input.path
+
+        maxResults =
+            Maybe.withDefault 100 input.maxResults
+    in
+    when Validation.validatePath workspaceRoot searchPath is
+        Err validationError ->
+            Task.fail (ValidationFailed validationError)
+
+        Ok validPath ->
+            searchWithRipgrep cpPermission workspaceRoot validPath input maxResults
+                |> Task.onError
+                    (\error ->
+                        -- Only fall back to grep if ripgrep is not available
+                        -- (indicated by "not available" in the error message)
+                        when error is
+                            SearchFailed { reason } ->
+                                if String.contains "not available" reason then
+                                    searchWithGrep cpPermission workspaceRoot validPath input maxResults
+                                else
+                                    Task.fail error
+
+                            _ ->
+                                Task.fail error
+                    )
+
+
+searchWithRipgrep :
+    ChildProcess.Permission
+    -> WorkspaceRoot
+    -> ValidPath
+    -> SearchInput
+    -> Int
+    -> Task FileError SearchOutput
+searchWithRipgrep cpPermission workspaceRoot validPath input maxResults =
+    let
+        searchPath =
+            Validation.toString validPath
+
+        baseArgs =
+            [ "--line-number"
+            , "--no-heading"
+            , "--with-filename"
+            , "--max-count"
+            , String.fromInt maxResults
+            ]
+
+        caseArgs =
+            if Maybe.withDefault True input.caseSensitive then
+                []
+            else
+                [ "--ignore-case" ]
+
+        contextArgs =
+            when input.contextLines is
+                Just n ->
+                    [ "--context", String.fromInt n ]
+
+                Nothing ->
+                    []
+
+        globArgs =
+            when input.glob is
+                Just g ->
+                    [ "--glob", g ]
+
+                Nothing ->
+                    []
+
+        args =
+            Array.flatten
+                [ baseArgs
+                , caseArgs
+                , contextArgs
+                , globArgs
+                , [ input.pattern, searchPath ]
+                ]
+
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.SetWorkingDirectory (Path.toPosixString (Validation.workspaceRootPath workspaceRoot))
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 1024 * 1024
+            , runDuration = ChildProcess.Milliseconds 60000
+            }
+    in
+    ChildProcess.run cpPermission "rg" args options
+        |> Task.map (parseRipgrepOutput maxResults)
+        |> Task.onError (handleSearchError "ripgrep")
+
+
+searchWithGrep :
+    ChildProcess.Permission
+    -> WorkspaceRoot
+    -> ValidPath
+    -> SearchInput
+    -> Int
+    -> Task FileError SearchOutput
+searchWithGrep cpPermission workspaceRoot validPath input maxResults =
+    let
+        searchPath =
+            Validation.toString validPath
+
+        baseArgs =
+            [ "-r"
+            , "-n"
+            , "-H"
+            ]
+
+        caseArgs =
+            if Maybe.withDefault True input.caseSensitive then
+                []
+            else
+                [ "-i" ]
+
+        args =
+            Array.flatten
+                [ baseArgs
+                , caseArgs
+                , [ input.pattern, searchPath ]
+                ]
+
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.SetWorkingDirectory (Path.toPosixString (Validation.workspaceRootPath workspaceRoot))
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 1024 * 1024
+            , runDuration = ChildProcess.Milliseconds 60000
+            }
+    in
+    ChildProcess.run cpPermission "grep" args options
+        |> Task.map (parseGrepOutput maxResults)
+        |> Task.onError (handleSearchError "grep")
+
+
+{-| Handle search command errors.
+
+Both ripgrep and grep exit with code 1 when no matches are found.
+This is not an error - it just means there were no results.
+We distinguish between:
+- Exit code 1 with empty stdout = no matches (return empty result)
+- Exit code 2+ or InitError = actual error
+-}
+handleSearchError : String -> ChildProcess.FailedRun -> Task FileError SearchOutput
+handleSearchError toolName failedRun =
+    when failedRun is
+        ChildProcess.ProgramError { exitCode, stdout, stderr } ->
+            -- Exit code 1 means "no matches found" for both grep and ripgrep
+            -- Exit code 2+ means actual error (invalid regex, permission denied, etc.)
+            if exitCode == 1 then
+                -- No matches found - return empty result
+                Task.succeed { matches = [], truncated = False }
+            else
+                -- Actual error - try to extract error message from stderr
+                let
+                    stderrStr =
+                        stderr
+                            |> Bytes.toString
+                            |> Maybe.withDefault ""
+                            |> String.trim
+
+                    errorMsg =
+                        if String.isEmpty stderrStr then
+                            toolName ++ " failed with exit code " ++ String.fromInt exitCode
+                        else
+                            stderrStr
+                in
+                Task.fail (SearchFailed { reason = errorMsg })
+
+        ChildProcess.InitError { errorCode } ->
+            -- Command not found or couldn't start
+            Task.fail (SearchFailed { reason = toolName ++ " not available: " ++ errorCode })
+
+
+parseRipgrepOutput : Int -> ChildProcess.SuccessfulRun -> SearchOutput
+parseRipgrepOutput maxResults result =
+    let
+        output =
+            result.stdout
+                |> Bytes.toString
+                |> Maybe.withDefault ""
+
+        lines =
+            output
+                |> String.split "\n"
+                |> Array.keepIf (\s -> not (String.isEmpty s))
+
+        matches =
+            lines
+                |> Array.mapAndKeepJust parseSearchLine
+                |> Array.takeFirst maxResults
+
+        truncated =
+            Array.length lines > maxResults
+    in
+    { matches = matches
+    , truncated = truncated
+    }
+
+
+parseGrepOutput : Int -> ChildProcess.SuccessfulRun -> SearchOutput
+parseGrepOutput maxResults result =
+    -- Grep output format is same as ripgrep: file:line:content
+    parseRipgrepOutput maxResults result
+
+
+parseSearchLine : String -> Maybe SearchMatch
+parseSearchLine line =
+    -- Format: filepath:linenum:content
+    let
+        parts =
+            String.split ":" line
+    in
+    when { first = Array.first parts, second = Array.get 1 parts } is
+        { first = Just path, second = Just lineStr } ->
+            when String.toInt lineStr is
+                Nothing ->
+                    Nothing
+
+                Just lineNum ->
+                    let
+                        -- Content is everything after the second colon
+                        content =
+                            parts
+                                |> Array.dropFirst 2
+                                |> String.join ":"
+                    in
+                    Just
+                        { path = path
+                        , line = lineNum
+                        , content = content
+                        }
+
+        _ ->
+            Nothing

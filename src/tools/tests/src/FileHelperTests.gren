@@ -1,0 +1,153 @@
+module FileHelperTests exposing (suite)
+
+{-| Unit tests for pure helper functions in Tools.File.
+
+These test the helper functions that don't require file system access:
+- countOccurrences: counting substring occurrences for patch validation
+- parseSearchLine: parsing ripgrep/grep output lines
+-}
+
+import Expect
+import Test exposing (Test, describe, test)
+import Tools.File exposing (SearchMatch, countOccurrences, parseSearchLine)
+
+
+suite : Test
+suite =
+    describe "File Helper Functions"
+        [ countOccurrencesTests
+        , parseSearchLineTests
+        ]
+
+
+
+-- COUNT OCCURRENCES TESTS
+
+
+countOccurrencesTests : Test
+countOccurrencesTests =
+    describe "countOccurrences"
+        [ test "counts single occurrence" <|
+            \_ ->
+                countOccurrences "foo" "hello foo world"
+                    |> Expect.equal 1
+        , test "counts multiple occurrences" <|
+            \_ ->
+                countOccurrences "a" "banana"
+                    |> Expect.equal 3
+        , test "returns 0 for empty needle" <|
+            \_ ->
+                countOccurrences "" "hello world"
+                    |> Expect.equal 0
+        , test "returns 0 when needle not found" <|
+            \_ ->
+                countOccurrences "xyz" "hello world"
+                    |> Expect.equal 0
+        , test "returns 0 for empty haystack" <|
+            \_ ->
+                countOccurrences "foo" ""
+                    |> Expect.equal 0
+        , test "handles overlapping patterns correctly" <|
+            \_ ->
+                -- String.split doesn't count overlapping matches
+                -- "aaa" split by "aa" gives ["", "a"], so count is 1
+                countOccurrences "aa" "aaa"
+                    |> Expect.equal 1
+        , test "handles needle longer than haystack" <|
+            \_ ->
+                countOccurrences "hello world" "hi"
+                    |> Expect.equal 0
+        , test "is case sensitive" <|
+            \_ ->
+                countOccurrences "FOO" "foo FOO Foo"
+                    |> Expect.equal 1
+        , test "handles multiline content" <|
+            \_ ->
+                countOccurrences "line" "first line\nsecond line\nthird line"
+                    |> Expect.equal 3
+        , test "handles special characters" <|
+            \_ ->
+                countOccurrences "[test]" "value = [test] + [test]"
+                    |> Expect.equal 2
+        ]
+
+
+
+-- PARSE SEARCH LINE TESTS
+
+
+parseSearchLineTests : Test
+parseSearchLineTests =
+    describe "parseSearchLine"
+        [ test "parses standard ripgrep format" <|
+            \_ ->
+                parseSearchLine "/path/to/file.txt:42:matching content here"
+                    |> Expect.equal
+                        (Just
+                            { path = "/path/to/file.txt"
+                            , line = 42
+                            , content = "matching content here"
+                            }
+                        )
+        , test "handles colons in content" <|
+            \_ ->
+                parseSearchLine "/path/file.txt:10:key: value: nested"
+                    |> Expect.equal
+                        (Just
+                            { path = "/path/file.txt"
+                            , line = 10
+                            , content = "key: value: nested"
+                            }
+                        )
+        , test "handles empty content" <|
+            \_ ->
+                parseSearchLine "/path/file.txt:5:"
+                    |> Expect.equal
+                        (Just
+                            { path = "/path/file.txt"
+                            , line = 5
+                            , content = ""
+                            }
+                        )
+        , test "returns Nothing for missing line number" <|
+            \_ ->
+                parseSearchLine "/path/file.txt"
+                    |> Expect.equal Nothing
+        , test "returns Nothing for non-numeric line number" <|
+            \_ ->
+                parseSearchLine "/path/file.txt:abc:content"
+                    |> Expect.equal Nothing
+        , test "returns Nothing for empty string" <|
+            \_ ->
+                parseSearchLine ""
+                    |> Expect.equal Nothing
+        , test "handles relative paths" <|
+            \_ ->
+                parseSearchLine "src/main.gren:100:import Module"
+                    |> Expect.equal
+                        (Just
+                            { path = "src/main.gren"
+                            , line = 100
+                            , content = "import Module"
+                            }
+                        )
+        , test "Windows-style paths parse incorrectly (expected)" <|
+            \_ ->
+                -- Windows paths with "C:" are not supported since the colon
+                -- is used as a delimiter. This is expected behavior as Gren
+                -- targets POSIX systems primarily.
+                -- "C:/Users/test/file.txt:10:content" parses as:
+                -- path="C", line=fails to parse "/Users/test/file.txt"
+                parseSearchLine "C:/Users/test/file.txt:10:content"
+                    |> Expect.equal Nothing
+        , test "handles line number at boundary" <|
+            \_ ->
+                parseSearchLine "/file.txt:1:first line"
+                    |> Expect.equal
+                        (Just
+                            { path = "/file.txt"
+                            , line = 1
+                            , content = "first line"
+                            }
+                        )
+        ]

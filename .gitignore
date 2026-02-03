@@ -1,0 +1,9 @@
+# Gren
+.gren
+gren_packages
+
+# Build output
+build/
+
+# Node
+node_modules/
