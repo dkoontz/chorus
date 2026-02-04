@@ -1,0 +1,13 @@
+{
+  "name": "chorus-agent-executor",
+  "version": "0.1.0",
+  "description": "Agent executor for Chorus with provider abstraction",
+  "scripts": {
+    "build": "gren make Main --output=build/agent-executor-tmp && tail -n +2 build/agent-executor-tmp > build/agent-executor.js && rm build/agent-executor-tmp",
+    "clean": "rm -rf build .gren tests/.gren",
+    "test": "cd tests && gren run Main",
+    "test:all": "npm test"
+  },
+  "keywords": ["gren", "chorus", "agent-executor"],
+  "license": "MIT"
+}

@@ -1,0 +1,478 @@
+module Agent.Executor exposing
+    ( Model(..)
+    , Msg(..)
+    , ToolExecutionResult
+    , ExecutorError(..)
+    , executorErrorToString
+    , Config
+    , init
+    , update
+    , subscriptions
+    , executeToolCall
+    )
+
+{-| Agent executor that manages the conversation loop.
+
+The executor uses the Provider interface to communicate with LLMs,
+making it independent of any specific LLM service.
+
+## Conversation Flow
+
+1. Load agent spec from markdown file
+2. Create or resume session via provider
+3. Send initial message
+4. While response has pending tool calls:
+   a. Execute each tool call
+   b. Submit tool results
+   c. Process next response
+5. Return final response text
+6. Save session ID for resumption
+-}
+
+import Agent.Spec as Spec exposing (AgentSpec)
+import Bytes
+import ChildProcess
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import Json.Decode as Decode
+import Json.Encode as Encode
+import Provider
+    exposing
+        ( Provider
+        , ProviderError
+        , Response
+        , Session
+        , SessionId
+        , ToolCall
+        , ToolResult
+        )
+import Task exposing (Task)
+
+
+-- TYPES
+
+
+{-| Configuration for the executor.
+-}
+type alias Config msg =
+    { provider : Provider msg
+    , workspaceRoot : String
+    , fileToolsPath : String  -- Path to file-tools binary
+    }
+
+
+{-| Executor state.
+-}
+type Model
+    = Loading
+    | WaitingForSession
+        { agentSpec : AgentSpec
+        }
+    | Active
+        { session : Session
+        , pendingToolCalls : Array ToolCall
+        , collectedResults : Array ToolResult
+        }
+    | Complete
+        { session : Session
+        , finalResponse : String
+        }
+    | Failed
+        { error : ExecutorError
+        }
+
+
+{-| Errors that can occur during execution.
+-}
+type ExecutorError
+    = SpecParseError Spec.ParseError
+    | ProviderFailed ProviderError
+    | ToolExecutionFailed { tool : String, reason : String }
+    | SessionSaveFailed { reason : String }
+    | NoInitialMessage
+
+
+{-| Convert an executor error to a human-readable string.
+-}
+executorErrorToString : ExecutorError -> String
+executorErrorToString error =
+    when error is
+        SpecParseError parseError ->
+            Spec.parseErrorToString parseError
+
+        ProviderFailed providerError ->
+            Provider.providerErrorToString providerError
+
+        ToolExecutionFailed { tool, reason } ->
+            "Tool '" ++ tool ++ "' failed: " ++ reason
+
+        SessionSaveFailed { reason } ->
+            "Failed to save session: " ++ reason
+
+        NoInitialMessage ->
+            "No initial message provided"
+
+
+{-| Result of a tool execution.
+-}
+type alias ToolExecutionResult =
+    { toolCall : ToolCall
+    , result : Result String String
+    }
+
+
+{-| Messages for the executor.
+-}
+type Msg
+    = -- Agent spec loading
+      AgentSpecLoaded (Result Spec.ParseError AgentSpec)
+      -- Session management
+    | SessionCreated (Result ProviderError Session)
+    | SessionResumed (Result ProviderError (Maybe Session))
+      -- Conversation
+    | MessageSent (Result ProviderError Response)
+    | ToolResultsSubmitted (Result ProviderError Response)
+      -- Tool execution
+    | ToolExecuted ToolExecutionResult
+      -- Session persistence
+    | SessionSaved (Result String {})
+    | SessionIdLoaded (Result String String)
+
+
+
+-- INITIALIZATION
+
+
+{-| Initialize the executor by loading the agent spec.
+-}
+init :
+    FileSystem.Permission
+    -> Path
+    -> Task Spec.ParseError AgentSpec
+init fsPermission agentSpecPath =
+    Spec.parse fsPermission agentSpecPath
+
+
+
+-- UPDATE
+
+
+{-| Update the executor state based on messages.
+-}
+update :
+    Msg
+    -> Model
+    -> Config msg
+    -> { model : Model, cmd : Cmd msg, toMsg : Msg -> msg }
+    -> { model : Model, cmd : Cmd msg }
+update msg model config wrapper =
+    when msg is
+        AgentSpecLoaded result ->
+            when result is
+                Err parseError ->
+                    { model = Failed { error = SpecParseError parseError }
+                    , cmd = Cmd.none
+                    }
+
+                Ok agentSpec ->
+                    { model = WaitingForSession { agentSpec = agentSpec }
+                    , cmd =
+                        config.provider.createSession
+                            agentSpec
+                            config.workspaceRoot
+                            (\r -> wrapper.toMsg (SessionCreated r))
+                    }
+
+        SessionCreated result ->
+            when result is
+                Err providerError ->
+                    { model = Failed { error = ProviderFailed providerError }
+                    , cmd = Cmd.none
+                    }
+
+                Ok session ->
+                    { model =
+                        Active
+                            { session = session
+                            , pendingToolCalls = []
+                            , collectedResults = []
+                            }
+                    , cmd = Cmd.none
+                    }
+
+        SessionResumed result ->
+            when { result = result, model = model } is
+                { result = Err providerError } ->
+                    { model = Failed { error = ProviderFailed providerError }
+                    , cmd = Cmd.none
+                    }
+
+                { result = Ok (Just session) } ->
+                    { model =
+                        Active
+                            { session = session
+                            , pendingToolCalls = []
+                            , collectedResults = []
+                            }
+                    , cmd = Cmd.none
+                    }
+
+                { result = Ok Nothing, model = WaitingForSession { agentSpec } } ->
+                    -- Session not found, create new one
+                    { model = model
+                    , cmd =
+                        config.provider.createSession
+                            agentSpec
+                            config.workspaceRoot
+                            (\r -> wrapper.toMsg (SessionCreated r))
+                    }
+
+                _ ->
+                    { model = model
+                    , cmd = Cmd.none
+                    }
+
+        MessageSent result ->
+            handleResponse result model config wrapper
+
+        ToolResultsSubmitted result ->
+            handleResponse result model config wrapper
+
+        ToolExecuted { toolCall, result } ->
+            when model is
+                Active state ->
+                    let
+                        toolResult =
+                            when result is
+                                Ok output ->
+                                    { toolCallId = toolCall.id
+                                    , output = output
+                                    , isError = False
+                                    }
+
+                                Err errorMsg ->
+                                    { toolCallId = toolCall.id
+                                    , output = errorMsg
+                                    , isError = True
+                                    }
+
+                        newResults =
+                            Array.pushLast toolResult state.collectedResults
+
+                        remainingTools =
+                            state.pendingToolCalls
+                                |> Array.keepIf (\tc -> tc.id /= toolCall.id)
+                    in
+                    if Array.isEmpty remainingTools then
+                        -- All tools executed, submit results
+                        { model =
+                            Active
+                                { state
+                                    | pendingToolCalls = []
+                                    , collectedResults = []
+                                }
+                        , cmd =
+                            config.provider.submitToolResults
+                                state.session
+                                newResults
+                                (\r -> wrapper.toMsg (ToolResultsSubmitted r))
+                        }
+                    else
+                        { model =
+                            Active
+                                { state
+                                    | pendingToolCalls = remainingTools
+                                    , collectedResults = newResults
+                                }
+                        , cmd = Cmd.none
+                        }
+
+                _ ->
+                    { model = model
+                    , cmd = Cmd.none
+                    }
+
+        SessionSaved result ->
+            -- Session save is fire-and-forget, don't change state
+            { model = model
+            , cmd = Cmd.none
+            }
+
+        SessionIdLoaded result ->
+            when { result = result, model = model } is
+                { result = Ok sessionId, model = WaitingForSession _ } ->
+                    { model = model
+                    , cmd =
+                        config.provider.resumeSession
+                            sessionId
+                            (\r -> wrapper.toMsg (SessionResumed r))
+                    }
+
+                _ ->
+                    -- No saved session or not in right state
+                    { model = model
+                    , cmd = Cmd.none
+                    }
+
+
+{-| Handle a response from the provider.
+-}
+handleResponse :
+    Result ProviderError Response
+    -> Model
+    -> Config msg
+    -> { model : Model, cmd : Cmd msg, toMsg : Msg -> msg }
+    -> { model : Model, cmd : Cmd msg }
+handleResponse result model config wrapper =
+    when result is
+        Err providerError ->
+            { model = Failed { error = ProviderFailed providerError }
+            , cmd = Cmd.none
+            }
+
+        Ok response ->
+            when model is
+                Active state ->
+                    if response.isComplete then
+                        { model =
+                            Complete
+                                { session = state.session
+                                , finalResponse = response.text
+                                }
+                        , cmd = Cmd.none
+                        }
+                    else
+                        -- Has pending tool calls
+                        { model =
+                            Active
+                                { state
+                                    | pendingToolCalls = response.toolCalls
+                                    , collectedResults = []
+                                }
+                        , cmd = Cmd.none
+                        -- Tool execution would be triggered externally
+                        }
+
+                _ ->
+                    { model = model
+                    , cmd = Cmd.none
+                    }
+
+
+
+-- SUBSCRIPTIONS
+
+
+{-| Subscriptions for the executor.
+
+Currently none, but could be extended for timeouts, etc.
+-}
+subscriptions : Model -> Sub msg
+subscriptions _ =
+    Sub.none
+
+
+
+-- TOOL EXECUTION
+
+
+{-| Execute a tool call by invoking the file-tools binary.
+-}
+executeToolCall :
+    ChildProcess.Permission
+    -> String  -- file-tools path
+    -> String  -- workspace root
+    -> ToolCall
+    -> Task String String
+executeToolCall cpPermission fileToolsPath workspaceRoot toolCall =
+    let
+        -- Convert tool call to file-tools JSON input format
+        inputJson =
+            Encode.object
+                [ { key = "tool", value = Encode.string toolCall.name }
+                , { key = "input", value = toolCall.input }
+                ]
+                |> Encode.encode 0
+
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.InheritWorkingDirectory
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 1024 * 1024
+            , runDuration = ChildProcess.Milliseconds 60000
+            }
+    in
+    ChildProcess.run cpPermission fileToolsPath [ workspaceRoot, inputJson ] options
+        |> Task.mapError
+            (\runError ->
+                when runError is
+                    ChildProcess.ProgramError { exitCode, stderr } ->
+                        "Tool exited with code "
+                            ++ String.fromInt exitCode
+                            ++ ": "
+                            ++ (stderr |> Bytes.toString |> Maybe.withDefault "unknown error")
+
+                    ChildProcess.InitError { errorCode } ->
+                        "Failed to start tool: " ++ errorCode
+            )
+        |> Task.map
+            (\result ->
+                result.stdout
+                    |> Bytes.toString
+                    |> Maybe.withDefault "{}"
+            )
+
+
+
+-- SESSION PERSISTENCE
+
+
+{-| Path to the session file in a workspace.
+-}
+sessionFilePath : String -> Path
+sessionFilePath workspaceRoot =
+    Path.fromPosixString (workspaceRoot ++ "/.session")
+
+
+{-| Save a session ID to the workspace.
+-}
+saveSessionId :
+    FileSystem.Permission
+    -> String
+    -> SessionId
+    -> Task String {}
+saveSessionId fsPermission workspaceRoot sessionId =
+    let
+        path =
+            sessionFilePath workspaceRoot
+
+        bytes =
+            Bytes.fromString sessionId
+    in
+    FileSystem.writeFile fsPermission bytes path
+        |> Task.mapError (\e -> FileSystem.errorToString e)
+        |> Task.map (\_ -> {})
+
+
+{-| Load a session ID from the workspace.
+-}
+loadSessionId :
+    FileSystem.Permission
+    -> String
+    -> Task String String
+loadSessionId fsPermission workspaceRoot =
+    let
+        path =
+            sessionFilePath workspaceRoot
+    in
+    FileSystem.readFile fsPermission path
+        |> Task.mapError (\e -> FileSystem.errorToString e)
+        |> Task.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        Task.fail "Could not decode session file"
+
+                    Just sessionId ->
+                        Task.succeed (String.trim sessionId)
+            )

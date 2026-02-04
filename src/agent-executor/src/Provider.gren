@@ -1,0 +1,147 @@
+module Provider exposing
+    ( -- Session types
+      Session
+    , SessionId
+      -- Response types
+    , Response
+    , ToolCall
+    , ToolResult
+      -- Error types
+    , ProviderError(..)
+    , providerErrorToString
+      -- Provider interface
+    , Provider
+      -- Re-export AgentSpec from Agent.Spec for convenience
+    , AgentSpec
+    )
+
+{-| Provider interface for LLM communication.
+
+This module defines the abstract interface that all LLM providers must implement.
+The executor uses this interface without knowing which provider is active.
+-}
+
+import Agent.Spec exposing (AgentSpec)
+import Json.Decode
+
+
+-- SESSION TYPES
+
+
+{-| A unique identifier for a conversation session.
+-}
+type alias SessionId =
+    String
+
+
+{-| A session represents an active conversation with an LLM.
+-}
+type alias Session =
+    { id : SessionId
+    , agentSpec : AgentSpec
+    }
+
+
+
+-- RESPONSE TYPES
+
+
+{-| A response from the LLM.
+-}
+type alias Response =
+    { text : String
+    , toolCalls : Array ToolCall
+    , isComplete : Bool  -- True if no pending tool calls
+    }
+
+
+{-| A request from the LLM to invoke a tool.
+-}
+type alias ToolCall =
+    { id : String
+    , name : String
+    , input : Json.Decode.Value
+    }
+
+
+{-| The result of invoking a tool.
+-}
+type alias ToolResult =
+    { toolCallId : String
+    , output : String
+    , isError : Bool
+    }
+
+
+
+-- ERROR TYPES
+
+
+{-| Errors that can occur when communicating with a provider.
+-}
+type ProviderError
+    = AuthenticationError { message : String }
+    | RateLimitError { message : String }
+    | NetworkError { message : String }
+    | InvalidResponseError { message : String }
+    | SessionNotFound { sessionId : String }
+    | ProviderNotAvailable { provider : String, reason : String }
+
+
+{-| Convert a provider error to a human-readable string.
+-}
+providerErrorToString : ProviderError -> String
+providerErrorToString error =
+    when error is
+        AuthenticationError { message } ->
+            "Authentication failed: " ++ message
+
+        RateLimitError { message } ->
+            "Rate limit exceeded: " ++ message
+
+        NetworkError { message } ->
+            "Network error: " ++ message
+
+        InvalidResponseError { message } ->
+            "Invalid response from provider: " ++ message
+
+        SessionNotFound { sessionId } ->
+            "Session not found: " ++ sessionId
+
+        ProviderNotAvailable { provider, reason } ->
+            "Provider '" ++ provider ++ "' not available: " ++ reason
+
+
+
+-- PROVIDER INTERFACE
+
+
+{-| The provider interface that all LLM providers must implement.
+
+Each function returns a Task that can fail with a ProviderError.
+-}
+type alias Provider msg =
+    { -- Create a new session for an agent
+      createSession :
+            AgentSpec
+            -> String  -- workspace root
+            -> (Result ProviderError Session -> msg)
+            -> Cmd msg
+    , -- Send a message in a session
+      sendMessage :
+            Session
+            -> String  -- message
+            -> (Result ProviderError Response -> msg)
+            -> Cmd msg
+    , -- Submit tool results and get the next response
+      submitToolResults :
+            Session
+            -> Array ToolResult
+            -> (Result ProviderError Response -> msg)
+            -> Cmd msg
+    , -- Resume an existing session
+      resumeSession :
+            SessionId
+            -> (Result ProviderError (Maybe Session) -> msg)
+            -> Cmd msg
+    }

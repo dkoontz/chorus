@@ -1,0 +1,22 @@
+{
+  "name": "chorus-sdk-bridge",
+  "version": "0.1.0",
+  "description": "TypeScript SDK bridge for Chorus agent executor",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "test": "node --test dist/*.test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-code": "^0.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": ["chorus", "claude-code", "sdk-bridge"],
+  "license": "MIT"
+}

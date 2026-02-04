@@ -72,7 +72,8 @@ Each provider would implement the same interface (`createSession`, `sendMessage`
 
 | File | Purpose |
 |------|---------|
-| `gren.json` | Project config (platform: node, dependencies: gren-lang/core, gren-lang/node) |
+| `package.json` | NPM scripts for clean/build/test orchestration |
+| `gren.json` | Gren project config (platform: node, dependencies) |
 | `src/Main.gren` | CLI entry point, argument parsing, initialization |
 | `src/Agent/Spec.gren` | Parse agent specs from markdown files |
 | `src/Agent/Executor.gren` | Orchestration logic, conversation loop (uses Provider interface) |
@@ -80,11 +81,11 @@ Each provider would implement the same interface (`createSession`, `sendMessage`
 | `src/Provider/ClaudeCode.gren` | **Claude Code provider** - implements Provider using Task ports |
 | `src/Provider/Ports.gren` | Task port definitions for Claude Code SDK bridge |
 
-**TypeScript side (`src/sdk-bridge/`):**
+**TypeScript SDK Bridge (`src/agent-executor/sdk-bridge/`):**
 
 | File | Purpose |
 |------|---------|
-| `package.json` | Dependencies including `@anthropic-ai/claude-code` |
+| `package.json` | Dependencies including `@anthropic-ai/claude-code`, build/test scripts |
 | `tsconfig.json` | TypeScript configuration |
 | `src/index.ts` | Main bridge module, exports for Gren ports |
 | `src/client.ts` | ClaudeSDKClient wrapper with session management |
@@ -470,7 +471,30 @@ The executor logic remains the same regardless of which provider is used. The pr
 
 ## Dependencies
 
-### Gren (src/agent-executor/gren.json)
+### Agent Executor (src/agent-executor/package.json)
+
+The executor project uses npm scripts to orchestrate Gren and TypeScript builds:
+
+```json
+{
+  "name": "chorus-agent-executor",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "build/agent-executor.js",
+  "scripts": {
+    "clean": "rm -rf build && npm run clean --prefix sdk-bridge",
+    "build:gren": "gren make src/Main.gren --output=build/agent-executor.js",
+    "build:bridge": "npm run build --prefix sdk-bridge",
+    "build": "npm run build:gren && npm run build:bridge",
+    "test:gren": "cd tests && gren make src/Main.gren --output=build/tests.js && node build/tests.js",
+    "test:bridge": "npm run test --prefix sdk-bridge",
+    "test": "npm run test:gren && npm run test:bridge",
+    "start": "node build/agent-executor.js"
+  }
+}
+```
+
+### Gren Configuration (src/agent-executor/gren.json)
 ```json
 {
   "type": "application",
@@ -489,7 +513,7 @@ The executor logic remains the same regardless of which provider is used. The pr
 }
 ```
 
-### TypeScript (src/sdk-bridge/package.json)
+### SDK Bridge (src/agent-executor/sdk-bridge/package.json)
 ```json
 {
   "name": "chorus-sdk-bridge",
@@ -497,8 +521,9 @@ The executor logic remains the same regardless of which provider is used. The pr
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
+    "clean": "rm -rf dist",
     "build": "tsc",
-    "clean": "rm -rf dist"
+    "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^0.x.x"
@@ -510,7 +535,16 @@ The executor logic remains the same regardless of which provider is used. The pr
 }
 ```
 
-Note: The exact claude-code SDK version should be determined when starting implementation.
+Note: The SDK bridge is a subdirectory of agent-executor (not a separate top-level directory). The exact claude-code SDK version should be determined when starting implementation.
+
+### NPM Scripts Summary
+
+| Script | Description |
+|--------|-------------|
+| `npm run clean` | Remove all build artifacts (Gren and TypeScript) |
+| `npm run build` | Build both Gren executor and TypeScript bridge |
+| `npm run test` | Run all tests (Gren unit tests and TypeScript tests) |
+| `npm start` | Run the built executor |
 
 ## Implementation Notes
 

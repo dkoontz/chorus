@@ -4,6 +4,7 @@ gren_packages
 
 # Build output
 build/
+dist/
 
 # Node
 node_modules/

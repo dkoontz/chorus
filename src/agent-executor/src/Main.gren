@@ -1,0 +1,219 @@
+module Main exposing (main)
+
+{-| CLI entry point for the agent executor.
+
+Usage:
+    agent-executor <agent_spec> <workspace_root> [session_id]
+
+Arguments:
+    agent_spec      Path to agent markdown file (e.g., agents/developer.md)
+    workspace_root  Directory for file operations
+    session_id      Optional: resume an existing session
+
+The executor reads initial parameters from stdin as JSON:
+    {
+      "TASK_FILE": "tasks/feature-a.md",
+      "STATUS_FILE": "workspaces/feature-a/status.md",
+      "REPORT_FILE": "workspaces/feature-a/reports/developer-1.md"
+    }
+
+Example:
+    echo '{"TASK_FILE":"tasks/example.md"}' | agent-executor agents/developer.md ./workspace
+-}
+
+import Agent.Spec as Spec exposing (AgentSpec)
+import Bytes
+import ChildProcess
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import Init
+import Json.Decode as Decode
+import Json.Encode as Encode
+import Node
+import Stream
+import Task exposing (Task)
+
+
+-- MAIN
+
+
+main : Node.SimpleProgram Model
+main =
+    Node.defineSimpleProgram init
+
+
+
+-- MODEL
+
+
+type alias Model =
+    { status : Status
+    }
+
+
+type Status
+    = Running
+    | Completed String
+    | Failed String
+
+
+type alias ExecutorConfig =
+    { workspaceRoot : String
+    , agentSpecPath : Path
+    }
+
+
+type alias Parameters =
+    { taskFile : String
+    , statusFile : String
+    , reportFile : String
+    , reviewReport : Maybe String
+    , qaReport : Maybe String
+    }
+
+
+
+-- INIT
+
+
+init : Node.Environment -> Init.Task (Cmd msg)
+init env =
+    when parseArgs env.args is
+        Err errorMsg ->
+            outputErrorAndExit env errorMsg
+
+        Ok config ->
+            Init.await FileSystem.initialize <|
+                \fsPermission ->
+                    Init.await ChildProcess.initialize <|
+                        \cpPermission ->
+                            runExecutor env fsPermission cpPermission config
+
+
+parseArgs : Array String -> Result String ExecutorConfig
+parseArgs args =
+    -- Args: [node, script, agent_spec, workspace_root, ?session_id]
+    when args is
+        [ _, _, agentSpecStr, workspaceRoot ] ->
+            Ok
+                { workspaceRoot = workspaceRoot
+                , agentSpecPath = Path.fromPosixString agentSpecStr
+                }
+
+        [ _, _, agentSpecStr, workspaceRoot, _ ] ->
+            -- Session ID is handled separately
+            Ok
+                { workspaceRoot = workspaceRoot
+                , agentSpecPath = Path.fromPosixString agentSpecStr
+                }
+
+        _ ->
+            Err "Usage: agent-executor <agent_spec> <workspace_root> [session_id]"
+
+
+{-| Get the file-tools binary path.
+
+Looks for file-tools in the same directory as the executor binary.
+Falls back to just "file-tools" (which will be found via PATH).
+-}
+getFileToolsPath : Array String -> String
+getFileToolsPath args =
+    -- args[1] is the path to the current script (process.argv[1])
+    when Array.get 1 args is
+        Just scriptPath ->
+            let
+                scriptDir =
+                    Path.fromPosixString scriptPath
+                        |> Path.parentPath
+                        |> Maybe.map Path.toPosixString
+                        |> Maybe.withDefault ""
+            in
+            if String.isEmpty scriptDir then
+                "file-tools"
+            else
+                scriptDir ++ "/file-tools"
+
+        Nothing ->
+            "file-tools"
+
+
+outputErrorAndExit : Node.Environment -> String -> Init.Task (Cmd msg)
+outputErrorAndExit env errorMsg =
+    let
+        errorJson =
+            Encode.object
+                [ { key = "error", value = Encode.string errorMsg }
+                ]
+                |> Encode.encode 0
+    in
+    Stream.writeLineAsBytes errorJson env.stderr
+        |> Task.onError (\_ -> Task.succeed env.stderr)
+        |> Task.andThen (\_ -> Node.setExitCode 1)
+        |> Node.endSimpleProgram
+
+
+runExecutor :
+    Node.Environment
+    -> FileSystem.Permission
+    -> ChildProcess.Permission
+    -> ExecutorConfig
+    -> Init.Task (Cmd msg)
+runExecutor env fsPermission cpPermission config =
+    let
+        fileToolsPath =
+            getFileToolsPath env.args
+    in
+    Spec.parse fsPermission config.agentSpecPath
+        |> Task.mapError Spec.parseErrorToString
+        |> Task.andThen
+            (\agentSpec ->
+                -- For now, just output the parsed spec as confirmation
+                -- The full conversation loop will be implemented when SDK is integrated
+                let
+                    output =
+                        Encode.object
+                            [ { key = "status", value = Encode.string "ready" }
+                            , { key = "agent_name", value = Encode.string agentSpec.name }
+                            , { key = "workspace", value = Encode.string config.workspaceRoot }
+                            , { key = "file_tools_path", value = Encode.string fileToolsPath }
+                            , { key = "message"
+                              , value =
+                                    Encode.string
+                                        ("Agent executor initialized. "
+                                            ++ "Claude Code SDK integration pending. "
+                                            ++ "Agent: "
+                                            ++ agentSpec.name
+                                        )
+                              }
+                            ]
+                            |> Encode.encode 0
+                in
+                printLine env output
+            )
+        |> Task.onError
+            (\error ->
+                outputError env error
+            )
+        |> Node.endSimpleProgram
+
+
+outputError : Node.Environment -> String -> Task x {}
+outputError env errorMsg =
+    let
+        errorJson =
+            Encode.object
+                [ { key = "error", value = Encode.string errorMsg }
+                ]
+                |> Encode.encode 0
+    in
+    Stream.writeLineAsBytes errorJson env.stderr
+        |> Task.onError (\_ -> Task.succeed env.stderr)
+        |> Task.andThen (\_ -> Node.setExitCode 1)
+        |> Task.map (\_ -> {})
+
+
+printLine : Node.Environment -> String -> Task x {}
+printLine env line =
+    Stream.writeLineAsBytes line env.stdout
+        |> Task.onError (\_ -> Task.succeed env.stdout)
+        |> Task.map (\_ -> {})

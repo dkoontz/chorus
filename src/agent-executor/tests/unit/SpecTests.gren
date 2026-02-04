@@ -1,0 +1,229 @@
+module SpecTests exposing (suite)
+
+{-| Unit tests for Agent.Spec module.
+-}
+
+import Agent.Spec as Spec
+import Expect
+import Test exposing (Test, describe, test)
+
+
+suite : Test
+suite =
+    describe "Agent.Spec"
+        [ parseFromStringTests
+        ]
+
+
+parseFromStringTests : Test
+parseFromStringTests =
+    describe "parseFromString"
+        [ test "extracts name from title" <|
+            \_ ->
+                let
+                    input =
+                        """
+# Developer Agent
+
+You are a developer agent.
+
+## Parameters
+Some parameters here.
+"""
+                in
+                when Spec.parseFromString input is
+                    Ok spec ->
+                        Expect.equal spec.name "Developer Agent"
+
+                    Err err ->
+                        Expect.fail (Spec.parseErrorToString err)
+
+        , test "extracts system prompt before first section" <|
+            \_ ->
+                let
+                    input =
+                        """
+# Test Agent
+
+This is the system prompt.
+It spans multiple lines.
+
+## First Section
+Content after section.
+"""
+                in
+                when Spec.parseFromString input is
+                    Ok spec ->
+                        Expect.equal spec.systemPrompt "This is the system prompt.\nIt spans multiple lines."
+
+                    Err err ->
+                        Expect.fail (Spec.parseErrorToString err)
+
+        , test "handles no sections (uses all content after title)" <|
+            \_ ->
+                let
+                    input =
+                        """
+# Simple Agent
+
+Just a simple system prompt with no sections.
+"""
+                in
+                when Spec.parseFromString input is
+                    Ok spec ->
+                        Expect.equal spec.systemPrompt "Just a simple system prompt with no sections."
+
+                    Err err ->
+                        Expect.fail (Spec.parseErrorToString err)
+
+        , test "fails on missing title" <|
+            \_ ->
+                let
+                    input =
+                        """
+No title here, just content.
+
+## Section
+More content.
+"""
+                in
+                when Spec.parseFromString input is
+                    Ok _ ->
+                        Expect.fail "Expected MissingTitle error"
+
+                    Err err ->
+                        when err is
+                            Spec.MissingTitle _ ->
+                                Expect.pass
+
+                            _ ->
+                                Expect.fail ("Expected MissingTitle, got: " ++ Spec.parseErrorToString err)
+
+        , test "fails on empty system prompt" <|
+            \_ ->
+                let
+                    input =
+                        """
+# Agent With No Content
+
+## Parameters
+Goes straight to section.
+"""
+                in
+                when Spec.parseFromString input is
+                    Ok _ ->
+                        Expect.fail "Expected EmptySystemPrompt error"
+
+                    Err err ->
+                        when err is
+                            Spec.EmptySystemPrompt _ ->
+                                Expect.pass
+
+                            _ ->
+                                Expect.fail ("Expected EmptySystemPrompt, got: " ++ Spec.parseErrorToString err)
+
+        , test "handles content with only whitespace before section" <|
+            \_ ->
+                let
+                    input =
+                        """
+# Agent With Whitespace
+
+
+
+
+## Parameters
+"""
+                in
+                when Spec.parseFromString input is
+                    Ok _ ->
+                        Expect.fail "Expected EmptySystemPrompt error for whitespace-only content"
+
+                    Err err ->
+                        when err is
+                            Spec.EmptySystemPrompt _ ->
+                                Expect.pass
+
+                            _ ->
+                                Expect.fail ("Expected EmptySystemPrompt, got: " ++ Spec.parseErrorToString err)
+
+        , test "preserves multi-line formatting in system prompt" <|
+            \_ ->
+                let
+                    input =
+                        """
+# Format Test Agent
+
+Line one.
+
+Line three (after blank).
+
+- Bullet one
+- Bullet two
+
+## Section
+"""
+                in
+                when Spec.parseFromString input is
+                    Ok spec ->
+                        let
+                            expected =
+                                "Line one.\n\nLine three (after blank).\n\n- Bullet one\n- Bullet two"
+                        in
+                        Expect.equal spec.systemPrompt expected
+
+                    Err err ->
+                        Expect.fail (Spec.parseErrorToString err)
+
+        , test "handles title with extra spaces" <|
+            \_ ->
+                let
+                    input =
+                        """
+#   Spaced Title Agent
+
+Content here.
+"""
+                in
+                when Spec.parseFromString input is
+                    Ok spec ->
+                        Expect.equal spec.name "Spaced Title Agent"
+
+                    Err err ->
+                        Expect.fail (Spec.parseErrorToString err)
+
+        , test "parses real developer agent format" <|
+            \_ ->
+                let
+                    input =
+                        """
+# Developer Agent
+
+You are a developer agent responsible for implementing technical requirements while ensuring code quality.
+
+## Parameters
+
+The orchestrator will provide these parameters when invoking you:
+- `TASK_FILE`: Path to the task specification
+- `STATUS_FILE`: Path to the status file
+
+## Your Workflow
+
+1. Read the task specification
+2. Implement the changes
+3. Write your report
+"""
+                in
+                when Spec.parseFromString input is
+                    Ok spec ->
+                        Expect.all
+                            [ \s -> Expect.equal s.name "Developer Agent"
+                            , \s ->
+                                Expect.equal s.systemPrompt
+                                    "You are a developer agent responsible for implementing technical requirements while ensuring code quality."
+                            ]
+                            spec
+
+                    Err err ->
+                        Expect.fail (Spec.parseErrorToString err)
+        ]

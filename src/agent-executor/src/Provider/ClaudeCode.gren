@@ -1,0 +1,316 @@
+module Provider.ClaudeCode exposing
+    ( provider
+    , Msg(..)
+    , handlePortResponse
+    )
+
+{-| Claude Code provider implementation.
+
+This provider uses the Claude Code SDK through Task ports to the TypeScript
+SDK bridge. It implements the Provider interface for LLM communication.
+-}
+
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+import Provider
+    exposing
+        ( AgentSpec
+        , Provider
+        , ProviderError(..)
+        , Response
+        , Session
+        , SessionId
+        , ToolCall
+        , ToolResult
+        )
+import Provider.Ports as Ports
+import Task
+
+
+-- PROVIDER
+
+
+{-| The Claude Code provider.
+
+This implements the Provider interface using Task ports to the SDK bridge.
+-}
+provider : Provider Msg
+provider =
+    { createSession = createSession
+    , sendMessage = sendMessage
+    , submitToolResults = submitToolResults
+    , resumeSession = resumeSession
+    }
+
+
+
+-- MESSAGES
+
+
+{-| Messages for handling port responses.
+-}
+type Msg
+    = CreateSessionResult (Result ProviderError Session)
+    | SendMessageResult (Result ProviderError Response)
+    | SubmitToolResultsResult (Result ProviderError Response)
+    | ResumeSessionResult (Result ProviderError (Maybe Session))
+
+
+
+-- PROVIDER OPERATIONS
+
+
+createSession :
+    AgentSpec
+    -> String
+    -> (Result ProviderError Session -> msg)
+    -> Cmd msg
+createSession agentSpec workspaceRoot toMsg =
+    Ports.createSession
+        { agentSpec =
+            { name = agentSpec.name
+            , systemPrompt = agentSpec.systemPrompt
+            }
+        , workspaceRoot = workspaceRoot
+        }
+        |> Task.attempt
+            (\result ->
+                when result is
+                    Err jsonError ->
+                        toMsg (Err (parsePortError jsonError))
+
+                    Ok jsonStr ->
+                        toMsg (parseCreateSessionResponse jsonStr agentSpec)
+            )
+
+
+sendMessage :
+    Session
+    -> String
+    -> (Result ProviderError Response -> msg)
+    -> Cmd msg
+sendMessage session message toMsg =
+    Ports.sendMessage
+        { sessionId = session.id
+        , message = message
+        }
+        |> Task.attempt
+            (\result ->
+                when result is
+                    Err jsonError ->
+                        toMsg (Err (parsePortError jsonError))
+
+                    Ok jsonStr ->
+                        toMsg (parseSendMessageResponse jsonStr)
+            )
+
+
+submitToolResults :
+    Session
+    -> Array ToolResult
+    -> (Result ProviderError Response -> msg)
+    -> Cmd msg
+submitToolResults session results toMsg =
+    let
+        portResults =
+            Array.map
+                (\r ->
+                    { toolCallId = r.toolCallId
+                    , output = r.output
+                    , isError = r.isError
+                    }
+                )
+                results
+    in
+    Ports.submitToolResults
+        { sessionId = session.id
+        , results = portResults
+        }
+        |> Task.attempt
+            (\result ->
+                when result is
+                    Err jsonError ->
+                        toMsg (Err (parsePortError jsonError))
+
+                    Ok jsonStr ->
+                        toMsg (parseSendMessageResponse jsonStr)
+            )
+
+
+resumeSession :
+    SessionId
+    -> (Result ProviderError (Maybe Session) -> msg)
+    -> Cmd msg
+resumeSession sessionId toMsg =
+    Ports.resumeSession
+        { sessionId = sessionId
+        }
+        |> Task.attempt
+            (\result ->
+                when result is
+                    Err jsonError ->
+                        toMsg (Err (parsePortError jsonError))
+
+                    Ok jsonStr ->
+                        toMsg (parseResumeSessionResponse jsonStr sessionId)
+            )
+
+
+
+-- RESPONSE PARSING
+
+
+parsePortError : Decode.Value -> ProviderError
+parsePortError jsonError =
+    let
+        -- Decode both the error message and the structured error code
+        errorDecoder =
+            Decode.map2
+                (\msg code ->
+                    { message = msg
+                    , code = code
+                    }
+                )
+                (Decode.field "error" Decode.string)
+                (Decode.maybe (Decode.field "code" Decode.string))
+
+        errorResult =
+            Decode.decodeValue errorDecoder jsonError
+    in
+    when errorResult is
+        Ok { message, code } ->
+            -- Use the explicit error code when available
+            when code is
+                Just "auth" ->
+                    AuthenticationError { message = message }
+
+                Just "rate_limit" ->
+                    RateLimitError { message = message }
+
+                Just "network" ->
+                    NetworkError { message = message }
+
+                Just "session_not_found" ->
+                    -- Extract session ID from message if possible
+                    SessionNotFound { sessionId = extractSessionId message }
+
+                Just "invalid_response" ->
+                    InvalidResponseError { message = message }
+
+                _ ->
+                    -- Unknown or missing code falls back to InvalidResponseError
+                    InvalidResponseError { message = message }
+
+        Err _ ->
+            InvalidResponseError
+                { message = "Unknown error from provider port" }
+
+
+{-| Extract session ID from an error message like "Session not found: sess_abc123"
+-}
+extractSessionId : String -> String
+extractSessionId message =
+    if String.contains ": " message then
+        message
+            |> String.split ": "
+            |> Array.last
+            |> Maybe.withDefault "unknown"
+    else
+        "unknown"
+
+
+parseCreateSessionResponse : String -> AgentSpec -> Result ProviderError Session
+parseCreateSessionResponse jsonStr agentSpec =
+    let
+        decoder =
+            Decode.field "sessionId" Decode.string
+    in
+    when Decode.decodeString decoder jsonStr is
+        Err decodeError ->
+            Err (InvalidResponseError { message = Decode.errorToString decodeError })
+
+        Ok sessionId ->
+            Ok
+                { id = sessionId
+                , agentSpec = agentSpec
+                }
+
+
+parseSendMessageResponse : String -> Result ProviderError Response
+parseSendMessageResponse jsonStr =
+    let
+        toolCallDecoder =
+            Decode.map3
+                (\id name input ->
+                    { id = id
+                    , name = name
+                    , input = input
+                    }
+                )
+                (Decode.field "id" Decode.string)
+                (Decode.field "name" Decode.string)
+                (Decode.field "input" Decode.value)
+
+        responseDecoder =
+            Decode.map3
+                (\text toolCalls isComplete ->
+                    { text = text
+                    , toolCalls = toolCalls
+                    , isComplete = isComplete
+                    }
+                )
+                (Decode.field "response" Decode.string)
+                (Decode.field "toolCalls" (Decode.array toolCallDecoder))
+                (Decode.field "isComplete" Decode.bool)
+    in
+    when Decode.decodeString responseDecoder jsonStr is
+        Err decodeError ->
+            Err (InvalidResponseError { message = Decode.errorToString decodeError })
+
+        Ok response ->
+            Ok response
+
+
+parseResumeSessionResponse : String -> SessionId -> Result ProviderError (Maybe Session)
+parseResumeSessionResponse jsonStr sessionId =
+    let
+        decoder =
+            Decode.map2
+                (\exists agentName ->
+                    { exists = exists
+                    , agentName = agentName
+                    }
+                )
+                (Decode.field "exists" Decode.bool)
+                (Decode.maybe (Decode.field "agentName" Decode.string))
+    in
+    when Decode.decodeString decoder jsonStr is
+        Err decodeError ->
+            Err (InvalidResponseError { message = Decode.errorToString decodeError })
+
+        Ok result ->
+            if result.exists then
+                Ok
+                    (Just
+                        { id = sessionId
+                        , agentSpec =
+                            { name = Maybe.withDefault "Unknown" result.agentName
+                            , systemPrompt = ""  -- Not stored on resume
+                            }
+                        }
+                    )
+            else
+                Ok Nothing
+
+
+
+-- PORT RESPONSE HANDLING
+
+
+{-| Handle responses from provider ports.
+
+This is used to convert port responses into provider messages.
+-}
+handlePortResponse : Msg -> Result ProviderError a -> Result ProviderError a
+handlePortResponse _ result =
+    result
