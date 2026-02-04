@@ -65,6 +65,9 @@ type alias Config msg =
 -}
 type Model
     = Loading
+    | Validating
+        { agentSpec : AgentSpec
+        }
     | WaitingForSession
         { agentSpec : AgentSpec
         }
@@ -126,6 +129,8 @@ type alias ToolExecutionResult =
 type Msg
     = -- Agent spec loading
       AgentSpecLoaded (Result Spec.ParseError AgentSpec)
+      -- Environment validation
+    | EnvironmentValidated (Result ProviderError {})
       -- Session management
     | SessionCreated (Result ProviderError Session)
     | SessionResumed (Result ProviderError (Maybe Session))
@@ -175,12 +180,34 @@ update msg model config wrapper =
                     }
 
                 Ok agentSpec ->
+                    -- First validate the environment before creating a session
+                    { model = Validating { agentSpec = agentSpec }
+                    , cmd =
+                        config.provider.validateEnvironment
+                            (\r -> wrapper.toMsg (EnvironmentValidated r))
+                    }
+
+        EnvironmentValidated result ->
+            when { result = result, model = model } is
+                { result = Err providerError } ->
+                    { model = Failed { error = ProviderFailed providerError }
+                    , cmd = Cmd.none
+                    }
+
+                { result = Ok _, model = Validating { agentSpec } } ->
+                    -- Validation passed, now create the session
                     { model = WaitingForSession { agentSpec = agentSpec }
                     , cmd =
                         config.provider.createSession
                             agentSpec
                             config.workspaceRoot
                             (\r -> wrapper.toMsg (SessionCreated r))
+                    }
+
+                _ ->
+                    -- Not in expected state, ignore
+                    { model = model
+                    , cmd = Cmd.none
                     }
 
         SessionCreated result ->

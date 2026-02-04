@@ -1,15 +1,16 @@
 module Provider.ClaudeCode exposing
     ( provider
-    , Msg(..)
-    , handlePortResponse
+    , Config
     )
 
 {-| Claude Code provider implementation.
 
-This provider uses the Claude Code SDK through Task ports to the TypeScript
-SDK bridge. It implements the Provider interface for LLM communication.
+This provider spawns the Claude CLI directly to communicate with Claude.
+It implements the Provider interface for LLM communication.
 -}
 
+import Bytes
+import ChildProcess
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import Provider
@@ -23,8 +24,19 @@ import Provider
         , ToolCall
         , ToolResult
         )
-import Provider.Ports as Ports
 import Task
+
+
+-- CONFIGURATION
+
+
+{-| Configuration for the Claude Code provider.
+-}
+type alias Config =
+    { childProcessPermission : ChildProcess.Permission
+    , fileToolsPath : String
+    }
+
 
 
 -- PROVIDER
@@ -32,285 +44,532 @@ import Task
 
 {-| The Claude Code provider.
 
-This implements the Provider interface using Task ports to the SDK bridge.
+This implements the Provider interface by spawning the claude CLI.
 -}
-provider : Provider Msg
-provider =
-    { createSession = createSession
-    , sendMessage = sendMessage
-    , submitToolResults = submitToolResults
-    , resumeSession = resumeSession
+provider : Config -> Provider msg
+provider config =
+    { validateEnvironment = validateEnvironment config
+    , createSession = createSession config
+    , sendMessage = sendMessage config
+    , submitToolResults = submitToolResults config
+    , resumeSession = resumeSession config
     }
 
 
 
--- MESSAGES
+-- ENVIRONMENT VALIDATION
 
 
-{-| Messages for handling port responses.
+{-| Validate that required prerequisites are available.
+
+Checks:
+- claude CLI is installed and accessible
+- file-tools binary exists at configured path
 -}
-type Msg
-    = CreateSessionResult (Result ProviderError Session)
-    | SendMessageResult (Result ProviderError Response)
-    | SubmitToolResultsResult (Result ProviderError Response)
-    | ResumeSessionResult (Result ProviderError (Maybe Session))
+validateEnvironment :
+    Config
+    -> (Result ProviderError {} -> msg)
+    -> Cmd msg
+validateEnvironment config toMsg =
+    -- Check claude CLI by running "claude --version"
+    let
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.InheritWorkingDirectory
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 1024
+            , runDuration = ChildProcess.Milliseconds 5000
+            }
+    in
+    ChildProcess.run config.childProcessPermission "claude" [ "--version" ] options
+        |> Task.andThen
+            (\_ ->
+                -- Claude CLI found, now check file-tools
+                ChildProcess.run config.childProcessPermission config.fileToolsPath [ "--help" ] options
+                    |> Task.map (\_ -> {})
+            )
+        |> Task.mapError
+            (\runError ->
+                when runError is
+                    ChildProcess.InitError { errorCode } ->
+                        if String.contains "ENOENT" errorCode then
+                            EnvironmentError
+                                { message = "claude CLI not found in PATH. Install from https://claude.ai/code"
+                                }
+                        else
+                            EnvironmentError
+                                { message = "Failed to run claude CLI: " ++ errorCode
+                                }
+
+                    ChildProcess.ProgramError { exitCode, stderr } ->
+                        let
+                            stderrStr =
+                                stderr |> Bytes.toString |> Maybe.withDefault ""
+                        in
+                        EnvironmentError
+                            { message = "claude CLI check failed (exit " ++ String.fromInt exitCode ++ "): " ++ stderrStr
+                            }
+            )
+        |> Task.attempt toMsg
 
 
 
--- PROVIDER OPERATIONS
+-- SESSION OPERATIONS
 
 
+{-| Create a new session by invoking the claude CLI.
+
+The session ID is extracted from the system.init message in the response.
+-}
 createSession :
-    AgentSpec
+    Config
+    -> AgentSpec
     -> String
     -> (Result ProviderError Session -> msg)
     -> Cmd msg
-createSession agentSpec workspaceRoot toMsg =
-    Ports.createSession
-        { agentSpec =
-            { name = agentSpec.name
-            , systemPrompt = agentSpec.systemPrompt
+createSession config agentSpec workspaceRoot toMsg =
+    -- For session creation, we send an initial "hello" message to establish the session
+    -- The CLI will return a session_id in the system.init message
+    let
+        args =
+            buildCliArgs
+                { systemPrompt = Just agentSpec.systemPrompt
+                , resumeSessionId = Nothing
+                , workspaceRoot = workspaceRoot
+                , fileToolsPath = config.fileToolsPath
+                , message = "Session initialized. Awaiting instructions."
+                }
+
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.InheritWorkingDirectory
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 1024 * 1024  -- 1MB
+            , runDuration = ChildProcess.Milliseconds 120000  -- 2 minutes
             }
-        , workspaceRoot = workspaceRoot
-        }
-        |> Task.attempt
+    in
+    ChildProcess.run config.childProcessPermission "claude" args options
+        |> Task.mapError cliErrorToProviderError
+        |> Task.andThen
             (\result ->
-                when result is
-                    Err jsonError ->
-                        toMsg (Err (parsePortError jsonError))
+                let
+                    output =
+                        result.stdout |> Bytes.toString |> Maybe.withDefault ""
+                in
+                when parseSessionId output is
+                    Just sessionId ->
+                        Task.succeed
+                            { id = sessionId
+                            , agentSpec = agentSpec
+                            }
 
-                    Ok jsonStr ->
-                        toMsg (parseCreateSessionResponse jsonStr agentSpec)
+                    Nothing ->
+                        Task.fail (InvalidResponseError { message = "Could not extract session ID from CLI output" })
             )
+        |> Task.attempt toMsg
 
 
+{-| Send a message in an existing session.
+-}
 sendMessage :
-    Session
+    Config
+    -> Session
     -> String
     -> (Result ProviderError Response -> msg)
     -> Cmd msg
-sendMessage session message toMsg =
-    Ports.sendMessage
-        { sessionId = session.id
-        , message = message
-        }
-        |> Task.attempt
+sendMessage config session message toMsg =
+    let
+        args =
+            buildCliArgs
+                { systemPrompt = Nothing
+                , resumeSessionId = Just session.id
+                , workspaceRoot = ""  -- Not needed for resume
+                , fileToolsPath = config.fileToolsPath
+                , message = message
+                }
+
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.InheritWorkingDirectory
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 10 * 1024 * 1024  -- 10MB
+            , runDuration = ChildProcess.Milliseconds 600000  -- 10 minutes for longer tasks
+            }
+    in
+    ChildProcess.run config.childProcessPermission "claude" args options
+        |> Task.mapError cliErrorToProviderError
+        |> Task.andThen
             (\result ->
-                when result is
-                    Err jsonError ->
-                        toMsg (Err (parsePortError jsonError))
+                let
+                    output =
+                        result.stdout |> Bytes.toString |> Maybe.withDefault ""
+                in
+                when parseCliResponse output is
+                    Ok response ->
+                        Task.succeed response
 
-                    Ok jsonStr ->
-                        toMsg (parseSendMessageResponse jsonStr)
+                    Err errMsg ->
+                        Task.fail (InvalidResponseError { message = errMsg })
             )
+        |> Task.attempt toMsg
 
 
+{-| Submit tool results - with CLI, tools are executed internally.
+
+The Claude CLI handles tool execution internally, so this function
+should not normally be called. It's provided for interface compatibility.
+-}
 submitToolResults :
-    Session
+    Config
+    -> Session
     -> Array ToolResult
     -> (Result ProviderError Response -> msg)
     -> Cmd msg
-submitToolResults session results toMsg =
-    let
-        portResults =
-            Array.map
-                (\r ->
-                    { toolCallId = r.toolCallId
-                    , output = r.output
-                    , isError = r.isError
-                    }
-                )
-                results
-    in
-    Ports.submitToolResults
-        { sessionId = session.id
-        , results = portResults
-        }
-        |> Task.attempt
-            (\result ->
-                when result is
-                    Err jsonError ->
-                        toMsg (Err (parsePortError jsonError))
-
-                    Ok jsonStr ->
-                        toMsg (parseSendMessageResponse jsonStr)
-            )
+submitToolResults config session results toMsg =
+    -- The CLI handles tool execution internally, so we don't need to submit results.
+    -- This function exists for interface compatibility.
+    -- If called, we return an error explaining the situation.
+    Task.fail
+        (InvalidResponseError
+            { message = "Tool results are handled internally by the claude CLI. This function should not be called."
+            }
+        )
+        |> Task.attempt toMsg
 
 
+{-| Resume an existing session.
+-}
 resumeSession :
-    SessionId
+    Config
+    -> SessionId
     -> (Result ProviderError (Maybe Session) -> msg)
     -> Cmd msg
-resumeSession sessionId toMsg =
-    Ports.resumeSession
-        { sessionId = sessionId
-        }
-        |> Task.attempt
-            (\result ->
-                when result is
-                    Err jsonError ->
-                        toMsg (Err (parsePortError jsonError))
+resumeSession config sessionId toMsg =
+    -- We can't easily verify if a session exists without making a call.
+    -- For now, we assume the session exists and let sendMessage handle any errors.
+    Task.succeed
+        (Just
+            { id = sessionId
+            , agentSpec =
+                { name = "Resumed"
+                , systemPrompt = ""  -- Not available on resume
+                }
+            }
+        )
+        |> Task.attempt toMsg
 
-                    Ok jsonStr ->
-                        toMsg (parseResumeSessionResponse jsonStr sessionId)
-            )
+
+
+-- CLI ARGUMENT BUILDING
+
+
+{-| Arguments for building CLI command.
+-}
+type alias CliArgs =
+    { systemPrompt : Maybe String
+    , resumeSessionId : Maybe String
+    , workspaceRoot : String
+    , fileToolsPath : String
+    , message : String
+    }
+
+
+{-| Build command line arguments for the claude CLI.
+-}
+buildCliArgs : CliArgs -> Array String
+buildCliArgs args =
+    let
+        baseArgs =
+            [ "-p"  -- Non-interactive mode
+            , "--output-format", "json"  -- Use batch JSON for simpler parsing
+            ]
+
+        sessionArgs =
+            when args.resumeSessionId is
+                Just sessionId ->
+                    [ "--resume", sessionId ]
+
+                Nothing ->
+                    []
+
+        promptArgs =
+            when args.systemPrompt is
+                Just prompt ->
+                    [ "--system-prompt", prompt ]
+
+                Nothing ->
+                    []
+
+        toolArgs =
+            [ "--tools", "Bash"
+            , "--allowedTools", "Bash(file-tools *)"
+            , "--permission-mode", "bypassPermissions"
+            ]
+
+        dirArgs =
+            if String.isEmpty args.workspaceRoot then
+                []
+            else
+                [ "--add-dir", args.workspaceRoot ]
+
+        messageArg =
+            [ args.message ]
+    in
+    Array.flatten
+        [ baseArgs
+        , sessionArgs
+        , promptArgs
+        , toolArgs
+        , dirArgs
+        , messageArg
+        ]
 
 
 
 -- RESPONSE PARSING
 
 
-parsePortError : Decode.Value -> ProviderError
-parsePortError jsonError =
+{-| Extract session ID from CLI output.
+
+Looks for the session_id in the JSON result message.
+-}
+parseSessionId : String -> Maybe String
+parseSessionId output =
     let
-        -- Decode both the error message and the structured error code
-        errorDecoder =
-            Decode.map2
-                (\msg code ->
-                    { message = msg
-                    , code = code
-                    }
-                )
-                (Decode.field "error" Decode.string)
-                (Decode.maybe (Decode.field "code" Decode.string))
-
-        errorResult =
-            Decode.decodeValue errorDecoder jsonError
+        decoder =
+            Decode.field "session_id" Decode.string
     in
-    when errorResult is
-        Ok { message, code } ->
-            -- Use the explicit error code when available
-            when code is
-                Just "auth" ->
-                    AuthenticationError { message = message }
-
-                Just "rate_limit" ->
-                    RateLimitError { message = message }
-
-                Just "network" ->
-                    NetworkError { message = message }
-
-                Just "session_not_found" ->
-                    -- Extract session ID from message if possible
-                    SessionNotFound { sessionId = extractSessionId message }
-
-                Just "invalid_response" ->
-                    InvalidResponseError { message = message }
-
-                _ ->
-                    -- Unknown or missing code falls back to InvalidResponseError
-                    InvalidResponseError { message = message }
+    when Decode.decodeString decoder output is
+        Ok sessionId ->
+            Just sessionId
 
         Err _ ->
-            InvalidResponseError
-                { message = "Unknown error from provider port" }
+            -- Try parsing as NDJSON (stream format) and look for system.init
+            output
+                |> String.lines
+                |> Array.filterMap
+                    (\line ->
+                        when Decode.decodeString systemInitDecoder line is
+                            Ok sid ->
+                                Just sid
 
-
-{-| Extract session ID from an error message like "Session not found: sess_abc123"
--}
-extractSessionId : String -> String
-extractSessionId message =
-    if String.contains ": " message then
-        message
-            |> String.split ": "
-            |> Array.last
-            |> Maybe.withDefault "unknown"
-    else
-        "unknown"
-
-
-parseCreateSessionResponse : String -> AgentSpec -> Result ProviderError Session
-parseCreateSessionResponse jsonStr agentSpec =
-    let
-        decoder =
-            Decode.field "sessionId" Decode.string
-    in
-    when Decode.decodeString decoder jsonStr is
-        Err decodeError ->
-            Err (InvalidResponseError { message = Decode.errorToString decodeError })
-
-        Ok sessionId ->
-            Ok
-                { id = sessionId
-                , agentSpec = agentSpec
-                }
-
-
-parseSendMessageResponse : String -> Result ProviderError Response
-parseSendMessageResponse jsonStr =
-    let
-        toolCallDecoder =
-            Decode.map3
-                (\id name input ->
-                    { id = id
-                    , name = name
-                    , input = input
-                    }
-                )
-                (Decode.field "id" Decode.string)
-                (Decode.field "name" Decode.string)
-                (Decode.field "input" Decode.value)
-
-        responseDecoder =
-            Decode.map3
-                (\text toolCalls isComplete ->
-                    { text = text
-                    , toolCalls = toolCalls
-                    , isComplete = isComplete
-                    }
-                )
-                (Decode.field "response" Decode.string)
-                (Decode.field "toolCalls" (Decode.array toolCallDecoder))
-                (Decode.field "isComplete" Decode.bool)
-    in
-    when Decode.decodeString responseDecoder jsonStr is
-        Err decodeError ->
-            Err (InvalidResponseError { message = Decode.errorToString decodeError })
-
-        Ok response ->
-            Ok response
-
-
-parseResumeSessionResponse : String -> SessionId -> Result ProviderError (Maybe Session)
-parseResumeSessionResponse jsonStr sessionId =
-    let
-        decoder =
-            Decode.map2
-                (\exists agentName ->
-                    { exists = exists
-                    , agentName = agentName
-                    }
-                )
-                (Decode.field "exists" Decode.bool)
-                (Decode.maybe (Decode.field "agentName" Decode.string))
-    in
-    when Decode.decodeString decoder jsonStr is
-        Err decodeError ->
-            Err (InvalidResponseError { message = Decode.errorToString decodeError })
-
-        Ok result ->
-            if result.exists then
-                Ok
-                    (Just
-                        { id = sessionId
-                        , agentSpec =
-                            { name = Maybe.withDefault "Unknown" result.agentName
-                            , systemPrompt = ""  -- Not stored on resume
-                            }
-                        }
+                            Err _ ->
+                                Nothing
                     )
-            else
-                Ok Nothing
+                |> Array.first
 
 
-
--- PORT RESPONSE HANDLING
-
-
-{-| Handle responses from provider ports.
-
-This is used to convert port responses into provider messages.
+{-| Decoder for system.init message session_id.
 -}
-handlePortResponse : Msg -> Result ProviderError a -> Result ProviderError a
-handlePortResponse _ result =
-    result
+systemInitDecoder : Decoder String
+systemInitDecoder =
+    Decode.map2
+        (\msgType subtype ->
+            { msgType = msgType
+            , subtype = subtype
+            }
+        )
+        (Decode.field "type" Decode.string)
+        (Decode.maybe (Decode.field "subtype" Decode.string))
+        |> Decode.andThen
+            (\info ->
+                if info.msgType == "system" && info.subtype == Just "init" then
+                    Decode.field "session_id" Decode.string
+                else
+                    Decode.fail "Not a system.init message"
+            )
+
+
+{-| Parse CLI response into Response type.
+-}
+parseCliResponse : String -> Result String Response
+parseCliResponse output =
+    let
+        -- For batch JSON output, parse the result message
+        resultDecoder =
+            Decode.map4
+                (\msgType isError result sessionId ->
+                    { msgType = msgType
+                    , isError = isError
+                    , result = result
+                    , sessionId = sessionId
+                    }
+                )
+                (Decode.field "type" Decode.string)
+                (Decode.field "is_error" Decode.bool)
+                (Decode.field "result" Decode.string)
+                (Decode.field "session_id" Decode.string)
+    in
+    when Decode.decodeString resultDecoder output is
+        Ok parsed ->
+            if parsed.isError then
+                Err ("CLI returned error: " ++ parsed.result)
+            else
+                Ok
+                    { text = parsed.result
+                    , toolCalls = []  -- Tools are executed internally by CLI
+                    , isComplete = True  -- CLI completes tool execution before returning
+                    }
+
+        Err decodeError ->
+            -- Try parsing as stream-json format
+            parseStreamJsonResponse output
+
+
+{-| Parse streaming JSON (NDJSON) response.
+-}
+parseStreamJsonResponse : String -> Result String Response
+parseStreamJsonResponse output =
+    let
+        lines =
+            String.lines output
+
+        -- Find the result message (last message of type "result")
+        resultLine =
+            lines
+                |> Array.reverse
+                |> Array.filterMap
+                    (\line ->
+                        let
+                            typeDecoder =
+                                Decode.field "type" Decode.string
+                        in
+                        when Decode.decodeString typeDecoder line is
+                            Ok "result" ->
+                                Just line
+
+                            _ ->
+                                Nothing
+                    )
+                |> Array.first
+    in
+    when resultLine is
+        Nothing ->
+            -- No result message found, try to extract text from assistant messages
+            extractAssistantText lines
+
+        Just line ->
+            let
+                resultDecoder =
+                    Decode.map2
+                        (\isError result ->
+                            { isError = isError
+                            , result = result
+                            }
+                        )
+                        (Decode.field "is_error" Decode.bool)
+                        (Decode.field "result" Decode.string)
+            in
+            when Decode.decodeString resultDecoder line is
+                Ok parsed ->
+                    if parsed.isError then
+                        Err ("CLI returned error: " ++ parsed.result)
+                    else
+                        Ok
+                            { text = parsed.result
+                            , toolCalls = []
+                            , isComplete = True
+                            }
+
+                Err _ ->
+                    Err "Could not parse result message"
+
+
+{-| Extract text from assistant messages when no result message is found.
+-}
+extractAssistantText : Array String -> Result String Response
+extractAssistantText lines =
+    let
+        textContentDecoder =
+            Decode.map2
+                (\contentType text ->
+                    { contentType = contentType
+                    , text = text
+                    }
+                )
+                (Decode.field "type" Decode.string)
+                (Decode.field "text" Decode.string)
+
+        contentDecoder =
+            Decode.field "message"
+                (Decode.field "content"
+                    (Decode.array textContentDecoder)
+                )
+
+        assistantDecoder =
+            Decode.field "type" Decode.string
+                |> Decode.andThen
+                    (\msgType ->
+                        if msgType == "assistant" then
+                            contentDecoder
+                        else
+                            Decode.fail "Not an assistant message"
+                    )
+
+        extractedTexts =
+            lines
+                |> Array.filterMap
+                    (\line ->
+                        when Decode.decodeString assistantDecoder line is
+                            Ok contents ->
+                                contents
+                                    |> Array.filterMap
+                                        (\c ->
+                                            if c.contentType == "text" then
+                                                Just c.text
+                                            else
+                                                Nothing
+                                        )
+                                    |> String.join "\n"
+                                    |> Just
+
+                            Err _ ->
+                                Nothing
+                    )
+    in
+    if Array.isEmpty extractedTexts then
+        Err "No assistant response found in CLI output"
+    else
+        Ok
+            { text = String.join "\n" extractedTexts
+            , toolCalls = []
+            , isComplete = True
+            }
+
+
+
+-- ERROR HANDLING
+
+
+{-| Convert CLI execution errors to ProviderError.
+-}
+cliErrorToProviderError : ChildProcess.RunError -> ProviderError
+cliErrorToProviderError runError =
+    when runError is
+        ChildProcess.InitError { errorCode } ->
+            if String.contains "ENOENT" errorCode then
+                EnvironmentError
+                    { message = "claude CLI not found. Install from https://claude.ai/code"
+                    }
+            else
+                NetworkError
+                    { message = "Failed to start claude CLI: " ++ errorCode
+                    }
+
+        ChildProcess.ProgramError { exitCode, stderr } ->
+            let
+                stderrStr =
+                    stderr |> Bytes.toString |> Maybe.withDefault ""
+            in
+            if String.contains "auth" (String.toLower stderrStr) || String.contains "unauthorized" (String.toLower stderrStr) then
+                AuthenticationError
+                    { message = stderrStr
+                    }
+            else if String.contains "rate limit" (String.toLower stderrStr) then
+                RateLimitError
+                    { message = stderrStr
+                    }
+            else
+                InvalidResponseError
+                    { message = "CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                    }

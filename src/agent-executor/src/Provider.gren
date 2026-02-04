@@ -13,6 +13,8 @@ module Provider exposing
     , Provider
       -- Re-export AgentSpec from Agent.Spec for convenience
     , AgentSpec
+      -- Validation result
+    , ValidationResult
     )
 
 {-| Provider interface for LLM communication.
@@ -86,6 +88,13 @@ type ProviderError
     | InvalidResponseError { message : String }
     | SessionNotFound { sessionId : String }
     | ProviderNotAvailable { provider : String, reason : String }
+    | EnvironmentError { message : String }
+
+
+{-| Result of environment validation.
+-}
+type alias ValidationResult =
+    Result ProviderError {}
 
 
 {-| Convert a provider error to a human-readable string.
@@ -111,6 +120,9 @@ providerErrorToString error =
         ProviderNotAvailable { provider, reason } ->
             "Provider '" ++ provider ++ "' not available: " ++ reason
 
+        EnvironmentError { message } ->
+            "Environment error: " ++ message
+
 
 
 -- PROVIDER INTERFACE
@@ -121,7 +133,11 @@ providerErrorToString error =
 Each function returns a Task that can fail with a ProviderError.
 -}
 type alias Provider msg =
-    { -- Create a new session for an agent
+    { -- Validate that the environment has required prerequisites
+      validateEnvironment :
+            (Result ProviderError {} -> msg)
+            -> Cmd msg
+    , -- Create a new session for an agent
       createSession :
             AgentSpec
             -> String  -- workspace root
