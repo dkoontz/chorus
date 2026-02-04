@@ -13,10 +13,10 @@ import Bytes
 import ChildProcess
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
+import Agent.Spec exposing (AgentSpec)
 import Provider
     exposing
-        ( AgentSpec
-        , Provider
+        ( Provider
         , ProviderError(..)
         , Response
         , Session
@@ -71,7 +71,8 @@ validateEnvironment :
     -> (Result ProviderError {} -> msg)
     -> Cmd msg
 validateEnvironment config toMsg =
-    -- Check claude CLI by running "claude --version"
+    -- Check claude CLI by running "claude --version" with stdin redirected
+    -- We use bash -c to redirect stdin from /dev/null to prevent hanging
     let
         options =
             { shell = ChildProcess.NoShell
@@ -80,12 +81,18 @@ validateEnvironment config toMsg =
             , maximumBytesWrittenToStreams = 1024
             , runDuration = ChildProcess.Milliseconds 5000
             }
+
+        claudeCmd =
+            "claude --version </dev/null"
+
+        fileToolsCmd =
+            config.fileToolsPath ++ " --help </dev/null"
     in
-    ChildProcess.run config.childProcessPermission "claude" [ "--version" ] options
+    ChildProcess.run config.childProcessPermission "bash" [ "-c", claudeCmd ] options
         |> Task.andThen
             (\_ ->
                 -- Claude CLI found, now check file-tools
-                ChildProcess.run config.childProcessPermission config.fileToolsPath [ "--help" ] options
+                ChildProcess.run config.childProcessPermission "bash" [ "-c", fileToolsCmd ] options
                     |> Task.map (\_ -> {})
             )
         |> Task.mapError
@@ -131,14 +138,22 @@ createSession config agentSpec workspaceRoot toMsg =
     -- For session creation, we send an initial "hello" message to establish the session
     -- The CLI will return a session_id in the system.init message
     let
+        cliArgs =
+            { systemPrompt = Just agentSpec.systemPrompt
+            , resumeSessionId = Nothing
+            , workspaceRoot = workspaceRoot
+            , fileToolsPath = config.fileToolsPath
+            , message = "Session initialized. Awaiting instructions."
+            }
+
+        -- Build shell command with stdin redirected from /dev/null
+        -- This is necessary because Gren's ChildProcess.run uses execFile which
+        -- inherits stdin, causing the claude CLI to hang waiting for input
+        shellCommand =
+            buildShellCommand cliArgs
+
         args =
-            buildCliArgs
-                { systemPrompt = Just agentSpec.systemPrompt
-                , resumeSessionId = Nothing
-                , workspaceRoot = workspaceRoot
-                , fileToolsPath = config.fileToolsPath
-                , message = "Session initialized. Awaiting instructions."
-                }
+            [ "-c", shellCommand ]
 
         options =
             { shell = ChildProcess.NoShell
@@ -148,8 +163,8 @@ createSession config agentSpec workspaceRoot toMsg =
             , runDuration = ChildProcess.Milliseconds 120000  -- 2 minutes
             }
     in
-    ChildProcess.run config.childProcessPermission "claude" args options
-        |> Task.mapError cliErrorToProviderError
+    ChildProcess.run config.childProcessPermission "bash" args options
+        |> Task.mapError (cliErrorToProviderError (buildCliArgs cliArgs))
         |> Task.andThen
             (\result ->
                 let
@@ -179,14 +194,20 @@ sendMessage :
     -> Cmd msg
 sendMessage config session message toMsg =
     let
+        cliArgs =
+            { systemPrompt = Nothing
+            , resumeSessionId = Just session.id
+            , workspaceRoot = ""  -- Not needed for resume
+            , fileToolsPath = config.fileToolsPath
+            , message = message
+            }
+
+        -- Build shell command with stdin redirected from /dev/null
+        shellCommand =
+            buildShellCommand cliArgs
+
         args =
-            buildCliArgs
-                { systemPrompt = Nothing
-                , resumeSessionId = Just session.id
-                , workspaceRoot = ""  -- Not needed for resume
-                , fileToolsPath = config.fileToolsPath
-                , message = message
-                }
+            [ "-c", shellCommand ]
 
         options =
             { shell = ChildProcess.NoShell
@@ -196,8 +217,8 @@ sendMessage config session message toMsg =
             , runDuration = ChildProcess.Milliseconds 600000  -- 10 minutes for longer tasks
             }
     in
-    ChildProcess.run config.childProcessPermission "claude" args options
-        |> Task.mapError cliErrorToProviderError
+    ChildProcess.run config.childProcessPermission "bash" args options
+        |> Task.mapError (cliErrorToProviderError (buildCliArgs cliArgs))
         |> Task.andThen
             (\result ->
                 let
@@ -312,8 +333,9 @@ buildCliArgs args =
             else
                 [ "--add-dir", args.workspaceRoot ]
 
+        -- Use "--" to separate options from the message argument
         messageArg =
-            [ args.message ]
+            [ "--", args.message ]
     in
     Array.flatten
         [ baseArgs
@@ -323,6 +345,60 @@ buildCliArgs args =
         , dirArgs
         , messageArg
         ]
+
+
+{-| Build a shell command string for the claude CLI.
+
+This builds a command that redirects stdin from /dev/null to prevent
+the CLI from hanging when waiting for input. Arguments are properly
+escaped for shell execution.
+-}
+buildShellCommand : CliArgs -> String
+buildShellCommand args =
+    let
+        -- Escape a string for use in single quotes
+        -- Single quotes prevent all expansion except for single quotes themselves
+        -- To include a single quote, we: end the single-quoted string, add an escaped single quote, start a new single-quoted string
+        escapeForShell : String -> String
+        escapeForShell str =
+            "'" ++ String.replace "'" "'\\''" str ++ "'"
+
+        baseArgs =
+            "claude -p --output-format json"
+
+        sessionArgs =
+            when args.resumeSessionId is
+                Just sessionId ->
+                    " --resume " ++ escapeForShell sessionId
+
+                Nothing ->
+                    ""
+
+        promptArgs =
+            when args.systemPrompt is
+                Just prompt ->
+                    " --system-prompt " ++ escapeForShell prompt
+
+                Nothing ->
+                    ""
+
+        toolArgs =
+            " --tools Bash --allowedTools " ++ escapeForShell "Bash(file-tools *)" ++ " --permission-mode bypassPermissions"
+
+        dirArgs =
+            if String.isEmpty args.workspaceRoot then
+                ""
+            else
+                " --add-dir " ++ escapeForShell args.workspaceRoot
+
+        messageArg =
+            " -- " ++ escapeForShell args.message
+
+        -- Redirect stdin from /dev/null to prevent hanging
+        stdinRedirect =
+            " </dev/null"
+    in
+    baseArgs ++ sessionArgs ++ promptArgs ++ toolArgs ++ dirArgs ++ messageArg ++ stdinRedirect
 
 
 
@@ -347,7 +423,7 @@ parseSessionId output =
             -- Try parsing as NDJSON (stream format) and look for system.init
             output
                 |> String.lines
-                |> Array.filterMap
+                |> Array.mapAndKeepJust
                     (\line ->
                         when Decode.decodeString systemInitDecoder line is
                             Ok sid ->
@@ -428,7 +504,7 @@ parseStreamJsonResponse output =
         resultLine =
             lines
                 |> Array.reverse
-                |> Array.filterMap
+                |> Array.mapAndKeepJust
                     (\line ->
                         let
                             typeDecoder =
@@ -508,12 +584,12 @@ extractAssistantText lines =
 
         extractedTexts =
             lines
-                |> Array.filterMap
+                |> Array.mapAndKeepJust
                     (\line ->
                         when Decode.decodeString assistantDecoder line is
                             Ok contents ->
                                 contents
-                                    |> Array.filterMap
+                                    |> Array.mapAndKeepJust
                                         (\c ->
                                             if c.contentType == "text" then
                                                 Just c.text
@@ -542,9 +618,15 @@ extractAssistantText lines =
 
 
 {-| Convert CLI execution errors to ProviderError.
+
+The args parameter is included in error messages for debugging.
 -}
-cliErrorToProviderError : ChildProcess.RunError -> ProviderError
-cliErrorToProviderError runError =
+cliErrorToProviderError : Array String -> ChildProcess.FailedRun -> ProviderError
+cliErrorToProviderError args runError =
+    let
+        argsDebug =
+            "CLI args: claude " ++ String.join " " args
+    in
     when runError is
         ChildProcess.InitError { errorCode } ->
             if String.contains "ENOENT" errorCode then
@@ -553,7 +635,7 @@ cliErrorToProviderError runError =
                     }
             else
                 NetworkError
-                    { message = "Failed to start claude CLI: " ++ errorCode
+                    { message = "Failed to start claude CLI: " ++ errorCode ++ " | " ++ argsDebug
                     }
 
         ChildProcess.ProgramError { exitCode, stderr } ->
@@ -563,13 +645,13 @@ cliErrorToProviderError runError =
             in
             if String.contains "auth" (String.toLower stderrStr) || String.contains "unauthorized" (String.toLower stderrStr) then
                 AuthenticationError
-                    { message = stderrStr
+                    { message = stderrStr ++ " | " ++ argsDebug
                     }
             else if String.contains "rate limit" (String.toLower stderrStr) then
                 RateLimitError
-                    { message = stderrStr
+                    { message = stderrStr ++ " | " ++ argsDebug
                     }
             else
                 InvalidResponseError
-                    { message = "CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                    { message = "CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr ++ " | " ++ argsDebug
                     }

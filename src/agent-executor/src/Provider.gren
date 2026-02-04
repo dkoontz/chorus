@@ -11,8 +11,6 @@ module Provider exposing
     , providerErrorToString
       -- Provider interface
     , Provider
-      -- Re-export AgentSpec from Agent.Spec for convenience
-    , AgentSpec
       -- Validation result
     , ValidationResult
     )
