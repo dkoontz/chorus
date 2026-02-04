@@ -1,6 +1,6 @@
 # Status
 
-Task: tasks/executor-wiring.md
+Task: tasks/_executor-wiring.md
 Phase: complete
 Iteration: 2
 Current Agent: none

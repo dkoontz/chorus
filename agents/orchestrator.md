@@ -79,6 +79,7 @@ Where `[planning]` is optional - only invoked if the user describes a new task.
 
 ### Phase: `complete`
 - Write final status update
+- Rename the task file from `tasks/{task-name}.md` to `tasks/_{task-name}.md` (prefix with underscore)
 - Report success to the user
 
 ## Invoking Sub-Agents
@@ -240,6 +241,14 @@ Last Updated: [ISO timestamp]
 - If stuck in a loop (same issue recurring), escalate to user with details
 - Always pass file paths as parameters to sub-agents - never assume paths
 - Use iteration numbers in all report filenames to preserve history
+
+## Task File Naming Convention
+
+Task files in the `tasks/` directory follow this naming convention:
+- **Active tasks**: `tasks/{task-name}.md` - tasks that still need work
+- **Completed tasks**: `tasks/_{task-name}.md` - tasks that are done (prefixed with underscore)
+
+When a task reaches the `complete` phase, rename the task file to add the underscore prefix. This makes it easy to see which tasks are still pending by listing the directory.
 
 ## Starting the Workflow
 
