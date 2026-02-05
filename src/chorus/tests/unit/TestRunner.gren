@@ -1,0 +1,131 @@
+module TestRunner exposing (main)
+
+{-| Unit test runner for Chorus.
+-}
+
+import Init
+import Node
+import Stream
+import Task
+import RegistryTests
+import QueueTests
+
+
+main : Node.SimpleProgram a
+main =
+    Node.defineSimpleProgram init
+
+
+init : Node.Environment -> Init.Task (Cmd a)
+init env =
+    let
+        allTests =
+            Array.flatten
+                [ RegistryTests.tests
+                , QueueTests.tests
+                ]
+
+        total =
+            Array.length allTests
+    in
+    Stream.writeLineAsBytes ("Running " ++ String.fromInt total ++ " tests...\n") env.stdout
+        |> Task.onError (\_ -> Task.succeed env.stdout)
+        |> Task.andThen (\_ -> runAllTests env allTests)
+        |> Node.endSimpleProgram
+
+
+runAllTests : Node.Environment -> Array Test -> Task.Task Never {}
+runAllTests env tests =
+    tests
+        |> Array.foldl
+            (\test acc ->
+                acc
+                    |> Task.andThen
+                        (\results ->
+                            runTest test
+                                |> Task.map (\result -> Array.pushLast result results)
+                        )
+            )
+            (Task.succeed [])
+        |> Task.andThen (reportResults env)
+
+
+reportResults : Node.Environment -> Array TestResult -> Task.Task Never {}
+reportResults env results =
+    let
+        passed =
+            Array.keepIf .passed results
+                |> Array.length
+
+        failed =
+            Array.keepIf (\r -> not r.passed) results
+                |> Array.length
+
+        failedTests =
+            Array.keepIf (\r -> not r.passed) results
+
+        summary =
+            String.fromInt passed
+                ++ " passed, "
+                ++ String.fromInt failed
+                ++ " failed"
+
+        failureDetails =
+            failedTests
+                |> Array.map
+                    (\r ->
+                        "  FAIL: "
+                            ++ r.name
+                            ++ "\n    "
+                            ++ r.message
+                    )
+                |> String.join "\n"
+
+        output =
+            if failed > 0 then
+                "\n" ++ failureDetails ++ "\n\n" ++ summary ++ "\n"
+            else
+                summary ++ "\n"
+    in
+    Stream.writeLineAsBytes output env.stdout
+        |> Task.onError (\_ -> Task.succeed env.stdout)
+        |> Task.andThen
+            (\_ ->
+                if failed > 0 then
+                    Node.setExitCode 1
+                else
+                    Task.succeed {}
+            )
+
+
+type alias TestResult =
+    { name : String
+    , passed : Bool
+    , message : String
+    }
+
+
+type alias Test =
+    { name : String
+    , run : Task.Task String {}
+    }
+
+
+runTest : Test -> Task.Task Never TestResult
+runTest test =
+    test.run
+        |> Task.map
+            (\_ ->
+                { name = test.name
+                , passed = True
+                , message = ""
+                }
+            )
+        |> Task.onError
+            (\err ->
+                Task.succeed
+                    { name = test.name
+                    , passed = False
+                    , message = err
+                    }
+            )

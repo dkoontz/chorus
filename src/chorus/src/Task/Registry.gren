@@ -1,0 +1,427 @@
+module Task.Registry exposing
+    ( Registry
+    , Task
+    , TaskStatus(..)
+    , SourceInfo
+    , Error(..)
+    , init
+    , createTask
+    , getTask
+    , updateTask
+    , updateStatus
+    , listTasks
+    , getActiveTasks
+    , getRecentTasks
+    , recordEvent
+    , encodeTask
+    , taskDecoder
+    )
+
+{-| Task Registry - manages task lifecycle and persistence.
+
+Tasks are the central unit of work in Chorus. Each user request becomes a task
+that can be tracked, queued, and displayed in a UI.
+
+The registry stores tasks in a file-based structure:
+
+    {registryRoot}/
+    ├── registry.json           -- index of all tasks
+    └── {task-id}/              -- per-task directory
+        ├── task.json           -- task state
+        ├── queue.json          -- pending messages
+        └── history.json        -- event log
+
+-}
+
+import Bytes
+import Crypto exposing (SecureContext)
+import Dict exposing (Dict)
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+import Task as GrenTask
+import Time
+
+
+-- TYPES
+
+
+{-| The registry handle. Contains configuration and secure context for operations.
+-}
+type Registry
+    = Registry
+        { fsPermission : FileSystem.Permission
+        , secureContext : SecureContext
+        , registryRoot : Path
+        , workspacesRoot : Path
+        }
+
+
+{-| A task in the registry.
+-}
+type alias Task =
+    { id : String
+    , title : String
+    , status : TaskStatus
+    , createdAt : Time.Posix
+    , updatedAt : Time.Posix
+    , sessionId : Maybe String
+    , source : SourceInfo
+    , agentWorkspace : String
+    }
+
+
+{-| Task lifecycle status.
+-}
+type TaskStatus
+    = Pending       -- created but session not started
+    | Active        -- session is currently processing
+    | Waiting       -- session idle, ready for more input
+    | Completed     -- finished successfully
+    | Failed String -- finished with error message
+
+
+{-| Information about where the task originated.
+-}
+type alias SourceInfo =
+    { sourceType : String
+    , userId : String
+    , conversationId : Maybe String
+    }
+
+
+{-| Event recorded in task history.
+-}
+type alias Event =
+    { timestamp : Time.Posix
+    , eventType : String
+    , data : Dict String String
+    }
+
+
+{-| Registry operation errors.
+-}
+type Error
+    = FileSystemError String
+    | JsonDecodeError String
+    | TaskNotFound String
+    | RegistryCorrupt String
+
+
+
+-- INITIALIZATION
+
+
+{-| Initialize a registry, creating directories if needed.
+-}
+init :
+    FileSystem.Permission
+    -> SecureContext
+    -> { registryRoot : String, workspacesRoot : String }
+    -> GrenTask.Task Error Registry
+init fsPermission secureContext config =
+    let
+        registryPath =
+            Path.fromPosixString config.registryRoot
+
+        workspacesPath =
+            Path.fromPosixString config.workspacesRoot
+
+        registry =
+            Registry
+                { fsPermission = fsPermission
+                , secureContext = secureContext
+                , registryRoot = registryPath
+                , workspacesRoot = workspacesPath
+                }
+    in
+    ensureDirectoryExists fsPermission registryPath
+        |> GrenTask.andThen (\_ -> ensureDirectoryExists fsPermission workspacesPath)
+        |> GrenTask.andThen (\_ -> ensureRegistryIndex fsPermission registryPath)
+        |> GrenTask.map (\_ -> registry)
+
+
+{-| Ensure a directory exists, creating it if necessary.
+-}
+ensureDirectoryExists : FileSystem.Permission -> Path -> GrenTask.Task Error {}
+ensureDirectoryExists fsPermission path =
+    FileSystem.makeDirectory fsPermission { recursive = True } path
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.map (\_ -> {})
+
+
+{-| Ensure registry.json exists with valid structure.
+-}
+ensureRegistryIndex : FileSystem.Permission -> Path -> GrenTask.Task Error {}
+ensureRegistryIndex fsPermission registryRoot =
+    let
+        indexPath =
+            Path.append registryRoot (Path.fromPosixString "registry.json")
+
+        emptyIndex =
+            Encode.object
+                [ { key = "version", value = Encode.int 1 }
+                , { key = "tasks", value = Encode.array encodeTaskSummary [] }
+                ]
+                |> Encode.encode 2
+
+        -- Placeholder encoder for task summaries in the index
+        encodeTaskSummary task =
+            Encode.object
+                [ { key = "id", value = Encode.string task.id }
+                ]
+    in
+    -- Try to access the file - if it succeeds, file exists; if it fails with ENOENT, create it
+    FileSystem.checkAccess fsPermission [] indexPath
+        |> GrenTask.andThen (\_ -> GrenTask.succeed {})
+        |> GrenTask.onError
+            (\err ->
+                if FileSystem.errorIsNoSuchFileOrDirectory err then
+                    writeFileAtomic fsPermission indexPath emptyIndex
+                        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+                else
+                    GrenTask.fail (FileSystemError (FileSystem.errorToString err))
+            )
+
+
+
+-- TASK OPERATIONS
+
+
+{-| Create a new task.
+-}
+createTask :
+    Registry
+    -> { title : String, source : SourceInfo }
+    -> GrenTask.Task Error Task
+createTask (Registry config) { title, source } =
+    -- TODO: Implement
+    -- 1. Generate UUID
+    -- 2. Create task directory
+    -- 3. Create workspace directory
+    -- 4. Write task.json, queue.json, history.json
+    -- 5. Update registry.json index
+    GrenTask.fail (FileSystemError "Not implemented")
+
+
+{-| Get a task by ID.
+-}
+getTask : Registry -> String -> GrenTask.Task Error (Maybe Task)
+getTask (Registry config) taskId =
+    -- TODO: Implement - read task.json from task directory
+    GrenTask.fail (FileSystemError "Not implemented")
+
+
+{-| Update a task.
+-}
+updateTask :
+    Registry
+    -> String
+    -> (Task -> Task)
+    -> GrenTask.Task Error Task
+updateTask registry taskId updateFn =
+    -- TODO: Implement
+    GrenTask.fail (FileSystemError "Not implemented")
+
+
+{-| Update just the task status.
+-}
+updateStatus :
+    Registry
+    -> String
+    -> TaskStatus
+    -> GrenTask.Task Error Task
+updateStatus registry taskId newStatus =
+    updateTask registry taskId (\task -> { task | status = newStatus })
+
+
+{-| List all tasks, optionally filtered by status.
+-}
+listTasks : Registry -> Maybe TaskStatus -> GrenTask.Task Error (Array Task)
+listTasks (Registry config) maybeStatus =
+    -- TODO: Implement - read registry.json, load each task
+    GrenTask.fail (FileSystemError "Not implemented")
+
+
+{-| Get currently active tasks.
+-}
+getActiveTasks : Registry -> GrenTask.Task Error (Array Task)
+getActiveTasks registry =
+    listTasks registry (Just Active)
+
+
+{-| Get recent tasks ordered by updatedAt.
+-}
+getRecentTasks : Registry -> Int -> GrenTask.Task Error (Array Task)
+getRecentTasks registry limit =
+    -- TODO: Implement - list all, sort by updatedAt, take limit
+    GrenTask.fail (FileSystemError "Not implemented")
+
+
+{-| Record an event to the task's history.
+-}
+recordEvent :
+    Registry
+    -> String
+    -> { eventType : String, data : Dict String String }
+    -> GrenTask.Task Error {}
+recordEvent (Registry config) taskId event =
+    -- TODO: Implement - append to history.json
+    GrenTask.fail (FileSystemError "Not implemented")
+
+
+
+-- JSON ENCODING/DECODING
+
+
+{-| Encode a task to JSON.
+-}
+encodeTask : Task -> Encode.Value
+encodeTask task =
+    Encode.object
+        [ { key = "id", value = Encode.string task.id }
+        , { key = "title", value = Encode.string task.title }
+        , { key = "status", value = encodeStatus task.status }
+        , { key = "createdAt", value = Encode.int (Time.posixToMillis task.createdAt) }
+        , { key = "updatedAt", value = Encode.int (Time.posixToMillis task.updatedAt) }
+        , { key = "sessionId", value = encodeMaybe Encode.string task.sessionId }
+        , { key = "source", value = encodeSourceInfo task.source }
+        , { key = "agentWorkspace", value = Encode.string task.agentWorkspace }
+        ]
+
+
+encodeStatus : TaskStatus -> Encode.Value
+encodeStatus status =
+    when status is
+        Pending ->
+            Encode.object
+                [ { key = "type", value = Encode.string "pending" }
+                ]
+
+        Active ->
+            Encode.object
+                [ { key = "type", value = Encode.string "active" }
+                ]
+
+        Waiting ->
+            Encode.object
+                [ { key = "type", value = Encode.string "waiting" }
+                ]
+
+        Completed ->
+            Encode.object
+                [ { key = "type", value = Encode.string "completed" }
+                ]
+
+        Failed message ->
+            Encode.object
+                [ { key = "type", value = Encode.string "failed" }
+                , { key = "message", value = Encode.string message }
+                ]
+
+
+encodeSourceInfo : SourceInfo -> Encode.Value
+encodeSourceInfo source =
+    Encode.object
+        [ { key = "sourceType", value = Encode.string source.sourceType }
+        , { key = "userId", value = Encode.string source.userId }
+        , { key = "conversationId", value = encodeMaybe Encode.string source.conversationId }
+        ]
+
+
+encodeMaybe : (a -> Encode.Value) -> Maybe a -> Encode.Value
+encodeMaybe encoder maybeValue =
+    when maybeValue is
+        Just value ->
+            encoder value
+
+        Nothing ->
+            Encode.null
+
+
+{-| Decode a task from JSON.
+-}
+taskDecoder : Decoder Task
+taskDecoder =
+    Decode.map8
+        (\id title status createdAt updatedAt sessionId source agentWorkspace ->
+            { id = id
+            , title = title
+            , status = status
+            , createdAt = createdAt
+            , updatedAt = updatedAt
+            , sessionId = sessionId
+            , source = source
+            , agentWorkspace = agentWorkspace
+            }
+        )
+        (Decode.field "id" Decode.string)
+        (Decode.field "title" Decode.string)
+        (Decode.field "status" statusDecoder)
+        (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "sessionId" (Decode.maybe Decode.string))
+        (Decode.field "source" sourceInfoDecoder)
+        (Decode.field "agentWorkspace" Decode.string)
+
+
+statusDecoder : Decoder TaskStatus
+statusDecoder =
+    Decode.field "type" Decode.string
+        |> Decode.andThen
+            (\statusType ->
+                when statusType is
+                    "pending" ->
+                        Decode.succeed Pending
+
+                    "active" ->
+                        Decode.succeed Active
+
+                    "waiting" ->
+                        Decode.succeed Waiting
+
+                    "completed" ->
+                        Decode.succeed Completed
+
+                    "failed" ->
+                        Decode.field "message" Decode.string
+                            |> Decode.map Failed
+
+                    _ ->
+                        Decode.fail ("Unknown status type: " ++ statusType)
+            )
+
+
+sourceInfoDecoder : Decoder SourceInfo
+sourceInfoDecoder =
+    Decode.map3
+        (\sourceType userId conversationId ->
+            { sourceType = sourceType
+            , userId = userId
+            , conversationId = conversationId
+            }
+        )
+        (Decode.field "sourceType" Decode.string)
+        (Decode.field "userId" Decode.string)
+        (Decode.field "conversationId" (Decode.maybe Decode.string))
+
+
+
+-- FILE HELPERS
+
+
+{-| Write a file atomically (write to temp, then rename).
+-}
+writeFileAtomic : FileSystem.Permission -> Path -> String -> GrenTask.Task FileSystem.Error {}
+writeFileAtomic fsPermission path content =
+    let
+        tempPath =
+            Path.fromPosixString (Path.toPosixString path ++ ".tmp")
+
+        bytes =
+            Bytes.fromString content
+    in
+    FileSystem.writeFile fsPermission bytes tempPath
+        |> GrenTask.andThen (\_ -> FileSystem.move fsPermission tempPath path)
+        |> GrenTask.map (\_ -> {})

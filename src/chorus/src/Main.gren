@@ -1,0 +1,36 @@
+module Main exposing (main)
+
+{-| Chorus - Secure multi-agent orchestration system.
+
+This is the main entry point for the Chorus application. It coordinates:
+- Message sources (terminal, XMPP, etc.)
+- Triage agent (classifies incoming messages)
+- Task registry (manages task lifecycle)
+- Session management (runs orchestrator agents)
+
+-}
+
+import Init
+import Node
+import Stream
+import Task
+import Task.Registry as Registry
+import Task.Queue as Queue
+
+
+main : Node.SimpleProgram a
+main =
+    Node.defineSimpleProgram init
+
+
+init : Node.Environment -> Init.Task (Cmd a)
+init env =
+    -- TODO: Implement main application
+    -- 1. Initialize FileSystem and Crypto permissions
+    -- 2. Load configuration
+    -- 3. Initialize task registry
+    -- 4. Start message source (terminal for now)
+    -- 5. Enter main loop
+    Stream.writeLineAsBytes "Chorus - not yet implemented" env.stdout
+        |> Task.onError (\_ -> Task.succeed env.stdout)
+        |> Node.endSimpleProgram

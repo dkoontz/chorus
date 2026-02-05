@@ -1,0 +1,278 @@
+module Task.Queue exposing
+    ( QueuedMessage
+    , enqueue
+    , dequeue
+    , peek
+    , isEmpty
+    , length
+    , encodeQueue
+    , queueDecoder
+    )
+
+{-| Message queue for tasks.
+
+Each task has a queue of pending messages that arrived while the task's
+session was busy processing. Messages are processed in FIFO order.
+
+Queue is stored in `{taskDir}/queue.json`:
+
+    {
+      "messages": [
+        {
+          "id": "msg-uuid",
+          "content": "User message text",
+          "receivedAt": 1707048600000
+        }
+      ]
+    }
+
+-}
+
+import Bytes
+import Crypto exposing (SecureContext)
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+import Task as GrenTask
+import Time
+
+
+-- TYPES
+
+
+{-| A message waiting to be processed.
+-}
+type alias QueuedMessage =
+    { id : String
+    , content : String
+    , receivedAt : Time.Posix
+    }
+
+
+{-| Internal queue structure.
+-}
+type alias Queue =
+    { messages : Array QueuedMessage
+    }
+
+
+{-| Queue operation errors.
+-}
+type Error
+    = FileSystemError String
+    | JsonDecodeError String
+    | TaskNotFound String
+
+
+
+-- OPERATIONS
+
+
+{-| Add a message to a task's queue.
+-}
+enqueue :
+    FileSystem.Permission
+    -> SecureContext
+    -> Path
+    -> String
+    -> String
+    -> GrenTask.Task Error QueuedMessage
+enqueue fsPermission secureContext taskDir taskId content =
+    let
+        queuePath =
+            Path.append taskDir (Path.fromPosixString "queue.json")
+    in
+    Crypto.randomUuidV4 secureContext
+        |> GrenTask.mapError (\_ -> FileSystemError "Failed to generate UUID")
+        |> GrenTask.andThen
+            (\msgId ->
+                GrenTask.map2
+                    (\queue now ->
+                        { queue = queue
+                        , message =
+                            { id = msgId
+                            , content = content
+                            , receivedAt = now
+                            }
+                        }
+                    )
+                    (readQueue fsPermission queuePath)
+                    Time.now
+            )
+        |> GrenTask.andThen
+            (\{ queue, message } ->
+                let
+                    updatedQueue =
+                        { queue | messages = Array.pushLast message queue.messages }
+                in
+                writeQueue fsPermission queuePath updatedQueue
+                    |> GrenTask.map (\_ -> message)
+            )
+
+
+{-| Remove and return the next message from a task's queue.
+-}
+dequeue :
+    FileSystem.Permission
+    -> Path
+    -> GrenTask.Task Error (Maybe QueuedMessage)
+dequeue fsPermission taskDir =
+    let
+        queuePath =
+            Path.append taskDir (Path.fromPosixString "queue.json")
+    in
+    readQueue fsPermission queuePath
+        |> GrenTask.andThen
+            (\queue ->
+                when Array.first queue.messages is
+                    Nothing ->
+                        GrenTask.succeed Nothing
+
+                    Just message ->
+                        let
+                            updatedQueue =
+                                { queue | messages = Array.dropFirst 1 queue.messages }
+                        in
+                        writeQueue fsPermission queuePath updatedQueue
+                            |> GrenTask.map (\_ -> Just message)
+            )
+
+
+{-| Look at the next message without removing it.
+-}
+peek :
+    FileSystem.Permission
+    -> Path
+    -> GrenTask.Task Error (Maybe QueuedMessage)
+peek fsPermission taskDir =
+    let
+        queuePath =
+            Path.append taskDir (Path.fromPosixString "queue.json")
+    in
+    readQueue fsPermission queuePath
+        |> GrenTask.map (\queue -> Array.first queue.messages)
+
+
+{-| Check if a task's queue is empty.
+-}
+isEmpty :
+    FileSystem.Permission
+    -> Path
+    -> GrenTask.Task Error Bool
+isEmpty fsPermission taskDir =
+    let
+        queuePath =
+            Path.append taskDir (Path.fromPosixString "queue.json")
+    in
+    readQueue fsPermission queuePath
+        |> GrenTask.map (\queue -> Array.isEmpty queue.messages)
+
+
+{-| Count messages in a task's queue.
+-}
+length :
+    FileSystem.Permission
+    -> Path
+    -> GrenTask.Task Error Int
+length fsPermission taskDir =
+    let
+        queuePath =
+            Path.append taskDir (Path.fromPosixString "queue.json")
+    in
+    readQueue fsPermission queuePath
+        |> GrenTask.map (\queue -> Array.length queue.messages)
+
+
+
+-- FILE OPERATIONS
+
+
+{-| Read queue from disk.
+-}
+readQueue : FileSystem.Permission -> Path -> GrenTask.Task Error Queue
+readQueue fsPermission path =
+    FileSystem.readFile fsPermission path
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        GrenTask.fail (JsonDecodeError "Could not decode file as UTF-8")
+
+                    Just content ->
+                        when Decode.decodeString queueDecoder content is
+                            Ok queue ->
+                                GrenTask.succeed queue
+
+                            Err err ->
+                                GrenTask.fail (JsonDecodeError (Decode.errorToString err))
+            )
+
+
+{-| Write queue to disk atomically.
+-}
+writeQueue : FileSystem.Permission -> Path -> Queue -> GrenTask.Task Error {}
+writeQueue fsPermission path queue =
+    let
+        content =
+            encodeQueue queue
+                |> Encode.encode 2
+
+        tempPath =
+            Path.fromPosixString (Path.toPosixString path ++ ".tmp")
+
+        bytes =
+            Bytes.fromString content
+    in
+    FileSystem.writeFile fsPermission bytes tempPath
+        |> GrenTask.andThen (\_ -> FileSystem.move fsPermission tempPath path)
+        |> GrenTask.map (\_ -> {})
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+
+
+
+-- JSON ENCODING/DECODING
+
+
+{-| Encode a queue to JSON.
+-}
+encodeQueue : Queue -> Encode.Value
+encodeQueue queue =
+    Encode.object
+        [ { key = "messages"
+          , value = Encode.array encodeMessage queue.messages
+          }
+        ]
+
+
+encodeMessage : QueuedMessage -> Encode.Value
+encodeMessage msg =
+    Encode.object
+        [ { key = "id", value = Encode.string msg.id }
+        , { key = "content", value = Encode.string msg.content }
+        , { key = "receivedAt", value = Encode.int (Time.posixToMillis msg.receivedAt) }
+        ]
+
+
+{-| Decode a queue from JSON.
+-}
+queueDecoder : Decoder Queue
+queueDecoder =
+    Decode.map
+        (\messages -> { messages = messages })
+        (Decode.field "messages" (Decode.array messageDecoder))
+
+
+messageDecoder : Decoder QueuedMessage
+messageDecoder =
+    Decode.map3
+        (\id content receivedAt ->
+            { id = id
+            , content = content
+            , receivedAt = receivedAt
+            }
+        )
+        (Decode.field "id" Decode.string)
+        (Decode.field "content" Decode.string)
+        (Decode.field "receivedAt" (Decode.map Time.millisToPosix Decode.int))

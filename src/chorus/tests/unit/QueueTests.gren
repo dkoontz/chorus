@@ -1,0 +1,145 @@
+module QueueTests exposing (tests)
+
+{-| Unit tests for Task.Queue module.
+-}
+
+import Json.Decode as Decode
+import Json.Encode as Encode
+import Task
+import Task.Queue as Queue exposing (QueuedMessage)
+import Time
+
+
+tests : Array { name : String, run : Task.Task String {} }
+tests =
+    [ testEmptyQueueEncodeDecode
+    , testQueueWithMessagesEncodeDecode
+    , testMessageOrder
+    ]
+
+
+-- TEST HELPERS
+
+
+expectEqual : a -> a -> Task.Task String {}
+expectEqual expected actual =
+    if expected == actual then
+        Task.succeed {}
+    else
+        Task.fail
+            ("Expected: "
+                ++ Debug.toString expected
+                ++ "\nActual: "
+                ++ Debug.toString actual
+            )
+
+
+-- TESTS
+
+
+testEmptyQueueEncodeDecode : { name : String, run : Task.Task String {} }
+testEmptyQueueEncodeDecode =
+    { name = "Empty queue encodes and decodes"
+    , run =
+        let
+            queue =
+                { messages = [] }
+
+            encoded =
+                Queue.encodeQueue queue
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Queue.queueDecoder json
+        in
+        when decoded is
+            Ok decodedQueue ->
+                expectEqual 0 (Array.length decodedQueue.messages)
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testQueueWithMessagesEncodeDecode : { name : String, run : Task.Task String {} }
+testQueueWithMessagesEncodeDecode =
+    { name = "Queue with messages encodes and decodes"
+    , run =
+        let
+            queue =
+                { messages =
+                    [ { id = "msg-1"
+                      , content = "First message"
+                      , receivedAt = Time.millisToPosix 1707048600000
+                      }
+                    , { id = "msg-2"
+                      , content = "Second message"
+                      , receivedAt = Time.millisToPosix 1707048601000
+                      }
+                    ]
+                }
+
+            encoded =
+                Queue.encodeQueue queue
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Queue.queueDecoder json
+        in
+        when decoded is
+            Ok decodedQueue ->
+                if Array.length decodedQueue.messages == 2 then
+                    when Array.first decodedQueue.messages is
+                        Just firstMsg ->
+                            if firstMsg.id == "msg-1" && firstMsg.content == "First message" then
+                                Task.succeed {}
+                            else
+                                Task.fail "First message content mismatch"
+
+                        Nothing ->
+                            Task.fail "Expected messages but got empty array"
+                else
+                    Task.fail ("Expected 2 messages, got " ++ String.fromInt (Array.length decodedQueue.messages))
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testMessageOrder : { name : String, run : Task.Task String {} }
+testMessageOrder =
+    { name = "Messages maintain FIFO order after encode/decode"
+    , run =
+        let
+            queue =
+                { messages =
+                    [ { id = "first", content = "1", receivedAt = Time.millisToPosix 1000 }
+                    , { id = "second", content = "2", receivedAt = Time.millisToPosix 2000 }
+                    , { id = "third", content = "3", receivedAt = Time.millisToPosix 3000 }
+                    ]
+                }
+
+            encoded =
+                Queue.encodeQueue queue
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Queue.queueDecoder json
+        in
+        when decoded is
+            Ok decodedQueue ->
+                let
+                    ids =
+                        Array.map .id decodedQueue.messages
+                in
+                expectEqual [ "first", "second", "third" ] ids
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }

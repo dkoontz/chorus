@@ -1,0 +1,177 @@
+module RegistryTests exposing (tests)
+
+{-| Unit tests for Task.Registry module.
+-}
+
+import Json.Decode as Decode
+import Json.Encode as Encode
+import Task
+import Task.Registry as Registry exposing (Task, TaskStatus(..), SourceInfo)
+import Time
+
+
+tests : Array { name : String, run : Task.Task String {} }
+tests =
+    [ testTaskEncodeDecode
+    , testStatusPending
+    , testStatusActive
+    , testStatusFailed
+    , testSourceInfoEncodeDecode
+    ]
+
+
+-- TEST HELPERS
+
+
+expectEqual : a -> a -> Task.Task String {}
+expectEqual expected actual =
+    if expected == actual then
+        Task.succeed {}
+    else
+        Task.fail
+            ("Expected: "
+                ++ Debug.toString expected
+                ++ "\nActual: "
+                ++ Debug.toString actual
+            )
+
+
+-- TESTS
+
+
+testTaskEncodeDecode : { name : String, run : Task.Task String {} }
+testTaskEncodeDecode =
+    { name = "Task encodes and decodes correctly"
+    , run =
+        let
+            task =
+                { id = "test-id-123"
+                , title = "Test Task"
+                , status = Pending
+                , createdAt = Time.millisToPosix 1707048600000
+                , updatedAt = Time.millisToPosix 1707048600000
+                , sessionId = Nothing
+                , source =
+                    { sourceType = "terminal"
+                    , userId = "testuser"
+                    , conversationId = Nothing
+                    }
+                , agentWorkspace = "/tmp/workspace"
+                }
+
+            encoded =
+                Registry.encodeTask task
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Registry.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                expectEqual task decodedTask
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testStatusPending : { name : String, run : Task.Task String {} }
+testStatusPending =
+    { name = "Pending status encodes and decodes"
+    , run =
+        testStatusRoundTrip Pending
+    }
+
+
+testStatusActive : { name : String, run : Task.Task String {} }
+testStatusActive =
+    { name = "Active status encodes and decodes"
+    , run =
+        testStatusRoundTrip Active
+    }
+
+
+testStatusFailed : { name : String, run : Task.Task String {} }
+testStatusFailed =
+    { name = "Failed status encodes and decodes with message"
+    , run =
+        testStatusRoundTrip (Failed "Something went wrong")
+    }
+
+
+testStatusRoundTrip : TaskStatus -> Task.Task String {}
+testStatusRoundTrip status =
+    let
+        task =
+            { id = "test"
+            , title = "Test"
+            , status = status
+            , createdAt = Time.millisToPosix 0
+            , updatedAt = Time.millisToPosix 0
+            , sessionId = Nothing
+            , source =
+                { sourceType = "test"
+                , userId = "test"
+                , conversationId = Nothing
+                }
+            , agentWorkspace = "/tmp"
+            }
+
+        encoded =
+            Registry.encodeTask task
+
+        json =
+            Encode.encode 0 encoded
+
+        decoded =
+            Decode.decodeString Registry.taskDecoder json
+    in
+    when decoded is
+        Ok decodedTask ->
+            expectEqual status decodedTask.status
+
+        Err err ->
+            Task.fail ("Decode failed: " ++ Decode.errorToString err)
+
+
+testSourceInfoEncodeDecode : { name : String, run : Task.Task String {} }
+testSourceInfoEncodeDecode =
+    { name = "SourceInfo with conversationId encodes and decodes"
+    , run =
+        let
+            task =
+                { id = "test"
+                , title = "Test"
+                , status = Pending
+                , createdAt = Time.millisToPosix 0
+                , updatedAt = Time.millisToPosix 0
+                , sessionId = Just "session-123"
+                , source =
+                    { sourceType = "xmpp"
+                    , userId = "user@example.com"
+                    , conversationId = Just "thread-456"
+                    }
+                , agentWorkspace = "/tmp"
+                }
+
+            encoded =
+                Registry.encodeTask task
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Registry.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                if decodedTask.sessionId == Just "session-123" && decodedTask.source.conversationId == Just "thread-456" then
+                    Task.succeed {}
+                else
+                    Task.fail "sessionId or conversationId mismatch"
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
