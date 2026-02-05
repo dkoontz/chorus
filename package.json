@@ -1,0 +1,22 @@
+{
+  "name": "chorus-workspace",
+  "version": "0.1.0",
+  "description": "Chorus multi-agent orchestration system - workspace root",
+  "private": true,
+  "scripts": {
+    "build:ui": "cd src/chorus-ui && gren make Main --output=build/app.js",
+    "build:tools": "cd src/tools && gren make Main --output=build/file-tools-tmp && tail -n +2 build/file-tools-tmp > build/file-tools.js && bun build --compile build/file-tools.js --outfile build/file-tools && rm build/file-tools-tmp",
+    "build:agent-executor": "cd src/agent-executor && gren make Main --output=build/agent-executor-tmp && tail -n +2 build/agent-executor-tmp > build/agent-executor.js && rm build/agent-executor-tmp",
+    "build:chorus": "cd src/chorus && gren make Main --output=build/chorus.js",
+    "build:copy-ui": "cp src/chorus-ui/build/app.js src/chorus/static/ && cp src/chorus-ui/static/index.html src/chorus/static/ && cp src/chorus-ui/static/styles.css src/chorus/static/",
+    "build:app": "npm run build:ui && npm run build:tools && npm run build:agent-executor && npm run build:chorus && npm run build:copy-ui",
+    "build:docker": "docker build -t chorus .",
+    "build:all": "npm run build:app && npm run build:docker",
+    "test:unit": "cd src/chorus && npm run test:unit",
+    "test:integration": "cd src/chorus && npm run test:integration",
+    "test": "npm run test:unit && npm run test:integration",
+    "docker:run": "docker run -p 8080:8080 -v ./docker-data:/app/data chorus",
+    "docker:compose": "docker compose up",
+    "clean": "rm -rf src/*/build src/*/.gren src/*/gren_packages"
+  }
+}

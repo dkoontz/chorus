@@ -11,8 +11,10 @@ The server exposes:
 
 -}
 
+import Bytes
 import Crypto exposing (SecureContext)
 import Debug
+import Dict exposing (Dict)
 import FileSystem
 import FileSystem.Path as Path exposing (Path)
 import HttpServer
@@ -23,6 +25,7 @@ import Node
 import Stream
 import Task as GrenTask
 import Task.Registry as Registry
+import Time
 import Web.Api as Api
 import Web.Router as Router
 import Web.Server as Server
@@ -69,7 +72,23 @@ type alias Config =
     , registryRoot : String
     , workspacesRoot : String
     , staticRoot : String
+    , logLevel : LogLevel
     }
+
+
+{-| Log level for controlling output verbosity.
+
+    - LogError: Only errors
+    - LogWarn: Warnings and errors
+    - LogInfo: Normal operation (default)
+    - LogDebug: Verbose output including request details
+
+-}
+type LogLevel
+    = LogError
+    | LogWarn
+    | LogInfo
+    | LogDebug
 
 
 type Status
@@ -80,12 +99,78 @@ type Status
 
 defaultConfig : Config
 defaultConfig =
-    { host = "localhost"
+    { host = "0.0.0.0"
     , port_ = 8080
     , registryRoot = "./data/registry"
     , workspacesRoot = "./data/workspaces"
     , staticRoot = "./static"
+    , logLevel = LogInfo
     }
+
+
+{-| Create configuration from environment variables.
+
+    Supported environment variables:
+    - CHORUS_HOST: Server host (default: 0.0.0.0)
+    - CHORUS_PORT: Server port (default: 8080)
+    - CHORUS_DATA_DIR: Base data directory (default: ./data)
+    - CHORUS_STATIC_DIR: Static files directory (default: ./static)
+    - CHORUS_LOG_LEVEL: Log level - error, warn, info, debug (default: info)
+
+-}
+configFromEnv : Dict String String -> Config -> Config
+configFromEnv envVars config =
+    let
+        host =
+            Dict.get "CHORUS_HOST" envVars
+                |> Maybe.withDefault config.host
+
+        port_ =
+            Dict.get "CHORUS_PORT" envVars
+                |> Maybe.andThen String.toInt
+                |> Maybe.withDefault config.port_
+
+        dataDir =
+            Dict.get "CHORUS_DATA_DIR" envVars
+                |> Maybe.withDefault "./data"
+
+        staticRoot =
+            Dict.get "CHORUS_STATIC_DIR" envVars
+                |> Maybe.withDefault config.staticRoot
+
+        logLevel =
+            Dict.get "CHORUS_LOG_LEVEL" envVars
+                |> Maybe.andThen parseLogLevel
+                |> Maybe.withDefault config.logLevel
+    in
+    { host = host
+    , port_ = port_
+    , registryRoot = dataDir ++ "/registry"
+    , workspacesRoot = dataDir ++ "/workspaces"
+    , staticRoot = staticRoot
+    , logLevel = logLevel
+    }
+
+
+{-| Parse a log level string.
+-}
+parseLogLevel : String -> Maybe LogLevel
+parseLogLevel str =
+    when String.toLower str is
+        "error" ->
+            Just LogError
+
+        "warn" ->
+            Just LogWarn
+
+        "info" ->
+            Just LogInfo
+
+        "debug" ->
+            Just LogDebug
+
+        _ ->
+            Nothing
 
 
 
@@ -109,44 +194,45 @@ init : Node.Environment -> Init.Task { model : Model, command : Cmd Msg }
 init env =
     Init.await FileSystem.initialize <| \fsPermission ->
         Init.awaitTask getSecureContext <| \secureContext ->
-            Init.await HttpServer.initialize <| \httpPermission ->
-                let
-                    config =
-                        defaultConfig
+            Init.awaitTask Node.getEnvironmentVariables <| \envVars ->
+                Init.await HttpServer.initialize <| \httpPermission ->
+                    let
+                        config =
+                            configFromEnv envVars defaultConfig
 
-                    model =
-                        { env = env
-                        , server = Nothing
-                        , registry = Nothing
-                        , fsPermission = fsPermission
-                        , secureContext = secureContext
-                        , config = config
-                        , status = Initializing
-                        , pendingResponses = []
+                        model =
+                            { env = env
+                            , server = Nothing
+                            , registry = Nothing
+                            , fsPermission = fsPermission
+                            , secureContext = secureContext
+                            , config = config
+                            , status = Initializing
+                            , pendingResponses = []
+                            }
+                    in
+                    Node.startProgram
+                        { model = model
+                        , command =
+                            Cmd.batch
+                                [ -- Initialize the HTTP server
+                                  Server.createServer httpPermission
+                                    { host = config.host
+                                    , port_ = config.port_
+                                    }
+                                    |> GrenTask.attempt GotServer
+
+                                , -- Initialize the task registry
+                                  Registry.init fsPermission secureContext
+                                    { registryRoot = config.registryRoot
+                                    , workspacesRoot = config.workspacesRoot
+                                    }
+                                    |> GrenTask.attempt GotRegistry
+
+                                , -- Log startup
+                                  logInfoInit env config ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.port_)
+                                ]
                         }
-                in
-                Node.startProgram
-                    { model = model
-                    , command =
-                        Cmd.batch
-                            [ -- Initialize the HTTP server
-                              Server.createServer httpPermission
-                                { host = config.host
-                                , port_ = config.port_
-                                }
-                                |> GrenTask.attempt GotServer
-
-                            , -- Initialize the task registry
-                              Registry.init fsPermission secureContext
-                                { registryRoot = config.registryRoot
-                                , workspacesRoot = config.workspacesRoot
-                                }
-                                |> GrenTask.attempt GotRegistry
-
-                            , -- Log startup
-                              writeLog env ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.port_)
-                            ]
-                    }
 
 
 
@@ -160,12 +246,12 @@ update msg model =
             when result is
                 Ok server ->
                     { model = { model | server = Just server }
-                    , command = writeLog model.env "HTTP server started"
+                    , command = logInfo model "HTTP server started"
                     }
 
                 Err err ->
                     { model = { model | status = Error (Server.errorToString err) }
-                    , command = writeLog model.env ("Server error: " ++ Server.errorToString err)
+                    , command = logError model ("Server error: " ++ Server.errorToString err)
                     }
 
         GotRegistry result ->
@@ -176,12 +262,12 @@ update msg model =
                             | registry = Just registry
                             , status = Running
                         }
-                    , command = writeLog model.env "Task registry initialized"
+                    , command = logInfo model "Task registry initialized"
                     }
 
                 Err err ->
                     { model = { model | status = Error (registryErrorToString err) }
-                    , command = writeLog model.env ("Registry error: " ++ registryErrorToString err)
+                    , command = logError model ("Registry error: " ++ registryErrorToString err)
                     }
 
         GotRequest { request, response } ->
@@ -200,12 +286,30 @@ update msg model =
 
                 route =
                     Router.parseRoute method path
+
+                -- Debug: log request body for API routes
+                debugCmd =
+                    when route is
+                        Router.StaticFile _ ->
+                            Cmd.none
+
+                        Router.NotFound ->
+                            Cmd.none
+
+                        _ ->
+                            let
+                                bodyStr =
+                                    Bytes.toString request.body
+                                        |> Maybe.withDefault "<binary data>"
+                            in
+                            logDebug model ("Request body: " ++ bodyStr)
             in
             { model = model
             , command =
                 Cmd.batch
-                    [ writeLog model.env
+                    [ logInfo model
                         (HttpServer.methodToString method ++ " " ++ path ++ " -> " ++ Router.routeToString route)
+                    , debugCmd
                     , handleRoute model route request response
                     ]
             }
@@ -438,17 +542,241 @@ subscriptions model =
 
 
 
--- HELPERS
+-- LOGGING
 
 
-{-| Write a log message to stdout.
+{-| Log at INFO level during init (before model exists).
 -}
-writeLog : Node.Environment -> String -> Cmd Msg
-writeLog env message =
-    Stream.writeLineAsBytes ("[Chorus] " ++ message) env.stdout
-        |> GrenTask.onError (\_ -> GrenTask.succeed env.stdout)
-        |> GrenTask.map (\_ -> NoOp)
-        |> GrenTask.perform identity
+logInfoInit : Node.Environment -> Config -> String -> Cmd Msg
+logInfoInit env config message =
+    writeLogAtLevelInit env config LogInfo "INFO" message
+
+
+{-| Write a log message during init phase.
+-}
+writeLogAtLevelInit : Node.Environment -> Config -> LogLevel -> String -> String -> Cmd Msg
+writeLogAtLevelInit env config msgLevel levelStr message =
+    if shouldLog config.logLevel msgLevel then
+        Time.now
+            |> GrenTask.andThen
+                (\now ->
+                    let
+                        timestamp =
+                            formatTimestamp now
+
+                        line =
+                            "[Chorus " ++ timestamp ++ "] [" ++ levelStr ++ "] " ++ message
+                    in
+                    Stream.writeLineAsBytes line env.stdout
+                )
+            |> GrenTask.onError (\_ -> GrenTask.succeed env.stdout)
+            |> GrenTask.map (\_ -> NoOp)
+            |> GrenTask.perform identity
+    else
+        Cmd.none
+
+
+{-| Log at ERROR level.
+-}
+logError : Model -> String -> Cmd Msg
+logError model message =
+    writeLogAtLevel model LogError "ERROR" message
+
+
+{-| Log at WARN level.
+-}
+logWarn : Model -> String -> Cmd Msg
+logWarn model message =
+    writeLogAtLevel model LogWarn "WARN" message
+
+
+{-| Log at INFO level.
+-}
+logInfo : Model -> String -> Cmd Msg
+logInfo model message =
+    writeLogAtLevel model LogInfo "INFO" message
+
+
+{-| Log at DEBUG level.
+-}
+logDebug : Model -> String -> Cmd Msg
+logDebug model message =
+    writeLogAtLevel model LogDebug "DEBUG" message
+
+
+{-| Write a log message if the configured level allows it.
+-}
+writeLogAtLevel : Model -> LogLevel -> String -> String -> Cmd Msg
+writeLogAtLevel model msgLevel levelStr message =
+    if shouldLog model.config.logLevel msgLevel then
+        Time.now
+            |> GrenTask.andThen
+                (\now ->
+                    let
+                        timestamp =
+                            formatTimestamp now
+
+                        line =
+                            "[Chorus " ++ timestamp ++ "] [" ++ levelStr ++ "] " ++ message
+                    in
+                    Stream.writeLineAsBytes line model.env.stdout
+                )
+            |> GrenTask.onError (\_ -> GrenTask.succeed model.env.stdout)
+            |> GrenTask.map (\_ -> NoOp)
+            |> GrenTask.perform identity
+    else
+        Cmd.none
+
+
+{-| Check if a message at the given level should be logged.
+-}
+shouldLog : LogLevel -> LogLevel -> Bool
+shouldLog configLevel msgLevel =
+    logLevelToInt msgLevel >= logLevelToInt configLevel
+
+
+{-| Convert log level to integer for comparison.
+-}
+logLevelToInt : LogLevel -> Int
+logLevelToInt level =
+    when level is
+        LogDebug ->
+            0
+
+        LogInfo ->
+            1
+
+        LogWarn ->
+            2
+
+        LogError ->
+            3
+
+
+{-| Format a timestamp as ISO 8601.
+
+    Uses a simplified algorithm to avoid importing additional modules.
+
+-}
+formatTimestamp : Time.Posix -> String
+formatTimestamp time =
+    let
+        millis =
+            Time.posixToMillis time
+
+        totalSeconds =
+            millis // 1000
+
+        -- Use integer division and subtraction to compute remainder
+        -- since modBy isn't directly available
+        seconds =
+            totalSeconds - ((totalSeconds // 60) * 60)
+
+        totalMinutes =
+            totalSeconds // 60
+
+        minutes =
+            totalMinutes - ((totalMinutes // 60) * 60)
+
+        totalHours =
+            totalMinutes // 60
+
+        hours =
+            totalHours - ((totalHours // 24) * 24)
+
+        -- Days since epoch (1970-01-01)
+        days =
+            totalHours // 24
+
+        -- Calculate year, month, day from days since epoch
+        { year, month, day } =
+            daysToDate days
+    in
+    String.fromInt year
+        ++ "-"
+        ++ padZero month
+        ++ "-"
+        ++ padZero day
+        ++ "T"
+        ++ padZero hours
+        ++ ":"
+        ++ padZero minutes
+        ++ ":"
+        ++ padZero seconds
+        ++ "Z"
+
+
+{-| Pad a number with leading zero if needed.
+-}
+padZero : Int -> String
+padZero n =
+    if n < 10 then
+        "0" ++ String.fromInt n
+
+    else
+        String.fromInt n
+
+
+{-| Convert days since Unix epoch to year, month, day.
+-}
+daysToDate : Int -> { year : Int, month : Int, day : Int }
+daysToDate totalDays =
+    let
+        -- Algorithm to convert days since epoch to date
+        -- Based on the algorithm from Howard Hinnant
+        z =
+            totalDays + 719468
+
+        era =
+            (if z >= 0 then
+                z
+
+             else
+                z - 146096
+            )
+                // 146097
+
+        doe =
+            z - (era * 146097)
+
+        yoe =
+            (doe - (doe // 1460) + (doe // 36524) - (doe // 146096)) // 365
+
+        y =
+            yoe + (era * 400)
+
+        doy =
+            doe - ((365 * yoe) + (yoe // 4) - (yoe // 100))
+
+        mp =
+            ((5 * doy) + 2) // 153
+
+        d =
+            doy - (((153 * mp) + 2) // 5) + 1
+
+        m =
+            mp
+                + (if mp < 10 then
+                    3
+
+                   else
+                    -9
+                  )
+
+        year =
+            y
+                + (if m <= 2 then
+                    1
+
+                   else
+                    0
+                  )
+    in
+    { year = year, month = m, day = d }
+
+
+
+-- HELPERS
 
 
 {-| Convert registry error to string.

@@ -1,0 +1,40 @@
+# Development workflow directories (not part of deployed app)
+agents/
+tasks/
+workspaces/
+
+# Build artifacts and caches
+.git/
+.gren/
+gren_packages/
+node_modules/
+**/build/
+**/.gren/
+**/gren_packages/
+**/node_modules/
+
+# Application runtime data (mounted at runtime, not baked in)
+build/data/
+src/chorus/data/
+
+# Documentation
+*.md
+docs/
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local configuration
+.env
+.env.*
+
+# Claude configuration
+.claude/

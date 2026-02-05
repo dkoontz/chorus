@@ -102,8 +102,8 @@ Write your report to `REPORT_FILE` using this format:
 
 List each test scenario added to the integration test suite:
 
-| Test Name | File | Validates |
-|-----------|------|-----------|
+| Test Name          | File              | Validates               |
+| ------------------ | ----------------- | ----------------------- |
 | [Descriptive name] | `file-patch.json` | [What this test proves] |
 
 If no tests were added, explain why.
@@ -151,10 +151,10 @@ Each file contains scenarios for one tool (e.g., `file-read.json`, `file-write.j
 
 #### TestSuite (root object)
 
-| Field       | Type            | Required | Description                        |
-| ----------- | --------------- | -------- | ---------------------------------- |
-| `name`      | string          | yes      | Name of the tool being tested      |
-| `scenarios` | array<Scenario> | yes      | List of test scenarios             |
+| Field       | Type            | Required | Description                   |
+| ----------- | --------------- | -------- | ----------------------------- |
+| `name`      | string          | yes      | Name of the tool being tested |
+| `scenarios` | array<Scenario> | yes      | List of test scenarios        |
 
 #### Scenario
 
@@ -167,21 +167,21 @@ Each file contains scenarios for one tool (e.g., `file-read.json`, `file-write.j
 
 #### Setup
 
-| Field   | Type                   | Required | Description                              |
-| ------- | ---------------------- | -------- | ---------------------------------------- |
-| `files` | object<string, string> | no       | Map of file paths to their contents      |
+| Field   | Type                   | Required | Description                         |
+| ------- | ---------------------- | -------- | ----------------------------------- |
+| `files` | object<string, string> | no       | Map of file paths to their contents |
 
 #### Expect
 
-| Field             | Type                   | Required | Description                                       |
-| ----------------- | ---------------------- | -------- | ------------------------------------------------- |
-| `status`          | `"success"` | `"error"` | yes      | Expected status based on presence of `error` field |
-| `output`          | object<string, any>    | no       | Exact field value matches in response             |
-| `output_contains` | object<string, string> | no       | Substring matches in response fields              |
-| `error_contains`  | string                 | no       | Substring that must appear in error message       |
-| `files_exist`     | array<string>          | no       | Paths that must exist after tool runs             |
-| `files_not_exist` | array<string>          | no       | Paths that must not exist after tool runs         |
-| `file_content`    | object<string, string> | no       | Map of paths to their expected contents           |
+| Field             | Type                   | Required  | Description                                 |
+| ----------------- | ---------------------- | --------- | ------------------------------------------- |
+| `status`          | `"success"`            | `"error"` | yes                                         | Expected status based on presence of `error` field |
+| `output`          | object<string, any>    | no        | Exact field value matches in response       |
+| `output_contains` | object<string, string> | no        | Substring matches in response fields        |
+| `error_contains`  | string                 | no        | Substring that must appear in error message |
+| `files_exist`     | array<string>          | no        | Paths that must exist after tool runs       |
+| `files_not_exist` | array<string>          | no        | Paths that must not exist after tool runs   |
+| `file_content`    | object<string, string> | no        | Map of paths to their expected contents     |
 
 ### Example
 
@@ -236,3 +236,7 @@ Run all tests (unit + integration):
 ```bash
 npm run test:all
 ```
+
+## Testing in a browser
+
+For tests that require viewing a webpage use your built-in Chrome tool to navigate to the website and test the feature(s).
