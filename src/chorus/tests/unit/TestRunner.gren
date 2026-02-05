@@ -9,6 +9,7 @@ import Stream
 import Task
 import RegistryTests
 import QueueTests
+import SpecTests
 
 
 main : Node.SimpleProgram a
@@ -23,6 +24,7 @@ init env =
             Array.flatten
                 [ RegistryTests.tests
                 , QueueTests.tests
+                , SpecTests.tests
                 ]
 
         total =

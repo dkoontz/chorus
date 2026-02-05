@@ -36,29 +36,28 @@ docker exec -it chorus-chorus-1 claude --version
 
 Credentials are persisted in `./docker-data/.claude/` and survive container restarts.
 
-## Debugging
+## Environment Variables
 
-Set `CHORUS_LOG_LEVEL` to control log verbosity:
+Environment variables are managed via `.env` in the project root (gitignored, template at `.env.example`).
 
-- `error` - Only errors
-- `warn` - Warnings and errors
-- `info` - Normal operation (default)
-- `debug` - Verbose output including request bodies, file operations
+A PreToolUse hook (`.claude/hooks/source-env.sh`) sources `.env` before every Bash command. This means changes to `.env` take effect immediately without restarting the session. Docker Compose also reads `.env` natively.
+
+To change a variable mid-session, edit `.env` directly:
 
 ```bash
-# Run with debug logging
-docker run -p 8080:8080 -e CHORUS_LOG_LEVEL=debug -v ./docker-data:/app/data chorus
-
-# View container logs
-docker logs <container-id>
-docker logs -f <container-id>  # Follow logs
+# Example: switch to debug logging
+echo "CHORUS_LOG_LEVEL=debug" > .env
 ```
+
+Available variables:
+
+- `CHORUS_LOG_LEVEL` - Log verbosity: `error`, `warn`, `info` (default), `debug`
 
 Log format: `[Chorus YYYY-MM-DDTHH:MM:SSZ] [LEVEL] message`
 
 ## Build Scripts
 
-- `npm run build:app` - Build all components (UI, tools, agent-executor, chorus)
+- `npm run build:app` - Build all components (UI, tools, chorus)
 - `npm run build:docker` - Build Docker image
 - `npm run build:all` - Build app + Docker image
 
@@ -72,10 +71,9 @@ npm run test:integration  # Integration tests only
 
 ## Project Structure
 
-- `src/chorus/` - Main Chorus application (Gren)
+- `src/chorus/` - Main Chorus application (Gren), includes agent executor modules
 - `src/chorus-ui/` - Web UI (Gren)
 - `src/tools/` - File tools
-- `src/agent-executor/` - Agent executor
 - `docker-data/` - Persistent data directory (Docker volume mount)
 
 ## Key Constraints

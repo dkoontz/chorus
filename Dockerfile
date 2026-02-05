@@ -31,13 +31,7 @@ RUN gren make Main --output=build/file-tools-tmp && \
     bun build --compile build/file-tools.js --outfile build/file-tools && \
     rm build/file-tools-tmp build/file-tools.js
 
-# Build agent-executor (Node.js)
-WORKDIR /app/src/agent-executor
-RUN gren make Main --output=build/agent-executor-tmp && \
-    tail -n +2 build/agent-executor-tmp > build/agent-executor.js && \
-    rm build/agent-executor-tmp
-
-# Build chorus (main app)
+# Build chorus (main app - includes integrated agent executor)
 WORKDIR /app/src/chorus
 RUN gren make Main --output=build/chorus.js
 
@@ -69,7 +63,6 @@ RUN npm install -g @anthropic-ai/claude-code
 # Copy compiled artifacts from build stage
 COPY --from=builder /app/src/chorus/build/chorus.js /app/build/chorus.js
 COPY --from=builder /app/src/chorus/static/ /app/static/
-COPY --from=builder /app/src/agent-executor/build/agent-executor.js /app/build/agent-executor.js
 COPY --from=builder /app/src/tools/build/file-tools /app/build/file-tools
 
 # Set environment variables

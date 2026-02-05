@@ -12,6 +12,7 @@ The server exposes:
 -}
 
 import Bytes
+import ChildProcess
 import Crypto exposing (SecureContext)
 import Debug
 import Dict exposing (Dict)
@@ -53,6 +54,7 @@ type alias Model =
     , server : Maybe HttpServer.Server
     , registry : Maybe Registry.Registry
     , fsPermission : FileSystem.Permission
+    , cpPermission : ChildProcess.Permission
     , secureContext : SecureContext
     , config : Config
     , status : Status
@@ -157,50 +159,52 @@ type Msg
 init : Node.Environment -> Init.Task { model : Model, command : Cmd Msg }
 init env =
     Init.await FileSystem.initialize <| \fsPermission ->
-        Init.awaitTask getSecureContext <| \secureContext ->
-            Init.awaitTask Node.getEnvironmentVariables <| \envVars ->
-                Init.await HttpServer.initialize <| \httpPermission ->
-                    let
-                        config =
-                            configFromEnv envVars defaultConfig
+        Init.await ChildProcess.initialize <| \cpPermission ->
+            Init.awaitTask getSecureContext <| \secureContext ->
+                Init.awaitTask Node.getEnvironmentVariables <| \envVars ->
+                    Init.await HttpServer.initialize <| \httpPermission ->
+                        let
+                            config =
+                                configFromEnv envVars defaultConfig
 
-                        logger =
-                            Logging.makeLogger env.stdout config.logLevel
+                            logger =
+                                Logging.makeLogger env.stdout config.logLevel
 
-                        model =
-                            { env = env
-                            , server = Nothing
-                            , registry = Nothing
-                            , fsPermission = fsPermission
-                            , secureContext = secureContext
-                            , config = config
-                            , status = Initializing
-                            , pendingResponses = []
-                            , logger = logger
+                            model =
+                                { env = env
+                                , server = Nothing
+                                , registry = Nothing
+                                , fsPermission = fsPermission
+                                , cpPermission = cpPermission
+                                , secureContext = secureContext
+                                , config = config
+                                , status = Initializing
+                                , pendingResponses = []
+                                , logger = logger
+                                }
+                        in
+                        Node.startProgram
+                            { model = model
+                            , command =
+                                Cmd.batch
+                                    [ -- Initialize the HTTP server
+                                      Server.createServer httpPermission
+                                        { host = config.host
+                                        , port_ = config.port_
+                                        }
+                                        |> GrenTask.attempt GotServer
+
+                                    , -- Initialize the task registry
+                                      Registry.init fsPermission secureContext
+                                        { registryRoot = config.registryRoot
+                                        , workspacesRoot = config.workspacesRoot
+                                        }
+                                        |> GrenTask.attempt GotRegistry
+
+                                    , -- Log startup
+                                      Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.port_) NoOp
+                                    ]
                             }
-                    in
-                    Node.startProgram
-                        { model = model
-                        , command =
-                            Cmd.batch
-                                [ -- Initialize the HTTP server
-                                  Server.createServer httpPermission
-                                    { host = config.host
-                                    , port_ = config.port_
-                                    }
-                                    |> GrenTask.attempt GotServer
-
-                                , -- Initialize the task registry
-                                  Registry.init fsPermission secureContext
-                                    { registryRoot = config.registryRoot
-                                    , workspacesRoot = config.workspacesRoot
-                                    }
-                                    |> GrenTask.attempt GotRegistry
-
-                                , -- Log startup
-                                  Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.port_) NoOp
-                                ]
-                        }
 
 
 
