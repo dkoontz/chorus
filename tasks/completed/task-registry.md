@@ -457,18 +457,18 @@ init env =
 
 ### Scenarios to Cover
 
-| Scenario | What it tests |
-|----------|---------------|
-| Create task | Directory creation, file writing, registry.json update |
-| Get task | File reading, JSON parsing |
-| Update status | File modification, atomic writes |
-| Queue enqueue/dequeue | FIFO ordering, file updates |
-| Record event | Append to history.json |
-| List by status | Filtering works correctly |
-| Recent tasks | Ordering by updatedAt |
-| Restart recovery | Load existing tasks from disk |
-| Missing task | Returns Nothing, doesn't crash |
-| Corrupt JSON | Returns Error, doesn't crash |
+| Scenario              | What it tests                                          |
+| --------------------- | ------------------------------------------------------ |
+| Create task           | Directory creation, file writing, registry.json update |
+| Get task              | File reading, JSON parsing                             |
+| Update status         | File modification, atomic writes                       |
+| Queue enqueue/dequeue | FIFO ordering, file updates                            |
+| Record event          | Append to history.json                                 |
+| List by status        | Filtering works correctly                              |
+| Recent tasks          | Ordering by updatedAt                                  |
+| Restart recovery      | Load existing tasks from disk                          |
+| Missing task          | Returns Nothing, doesn't crash                         |
+| Corrupt JSON          | Returns Error, doesn't crash                           |
 
 ## Dependencies
 
