@@ -1,0 +1,87 @@
+module Web.Server exposing
+    ( Server
+    , Config
+    , Error(..)
+    , createServer
+    , errorToString
+    )
+
+{-| HTTP Server setup for the Chorus web interface.
+
+This module wraps HttpServer initialization and provides a clean API
+for creating the web server.
+
+-}
+
+import HttpServer
+import Task exposing (Task)
+
+
+-- TYPES
+
+
+{-| An initialized HTTP server.
+-}
+type alias Server =
+    HttpServer.Server
+
+
+{-| Server configuration.
+-}
+type alias Config =
+    { host : String
+    , port_ : Int
+    }
+
+
+{-| Server creation errors.
+-}
+type Error
+    = ServerError HttpServer.ServerError
+
+
+{-| Default configuration for local development.
+-}
+defaultConfig : Config
+defaultConfig =
+    { host = "localhost"
+    , port_ = 8080
+    }
+
+
+
+-- SERVER CREATION
+
+
+{-| Create an HTTP server with the given configuration.
+
+This should be called after initializing HttpServer permission:
+
+    Init.await HttpServer.initialize <| \httpPerm ->
+        { model = { server = Nothing }
+        , command =
+            Web.Server.createServer httpPerm { host = "localhost", port_ = 8080 }
+                |> Task.attempt GotServer
+        }
+
+-}
+createServer : HttpServer.Permission -> Config -> Task Error Server
+createServer permission config =
+    HttpServer.createServer permission
+        { host = config.host
+        , port_ = config.port_
+        }
+        |> Task.mapError ServerError
+
+
+
+-- ERROR HANDLING
+
+
+{-| Convert a server error to a human-readable string.
+-}
+errorToString : Error -> String
+errorToString error =
+    when error is
+        ServerError _ ->
+            "Server error: Failed to create HTTP server"

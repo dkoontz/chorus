@@ -1,0 +1,121 @@
+module View.Dashboard exposing (view)
+
+{-| Dashboard view showing an overview of task statistics.
+-}
+
+import Api
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Time
+
+
+type alias Props =
+    { tasks : Array Api.Task
+    , loading : Bool
+    }
+
+
+view : Props -> Html msg
+view props =
+    div [ class "dashboard" ]
+        [ h2 [] [ text "Dashboard" ]
+        , if props.loading && Array.isEmpty props.tasks then
+            div [ class "loading" ] [ text "Loading..." ]
+          else
+            div [ class "stats-grid" ]
+                [ viewStatCard "Total Tasks" (String.fromInt (Array.length props.tasks)) "stat-total"
+                , viewStatCard "Pending" (String.fromInt (countByStatus Api.Pending props.tasks)) "stat-pending"
+                , viewStatCard "Active" (String.fromInt (countByStatus Api.Active props.tasks)) "stat-active"
+                , viewStatCard "Waiting" (String.fromInt (countByStatus Api.Waiting props.tasks)) "stat-waiting"
+                , viewStatCard "Completed" (String.fromInt (countByStatus Api.Completed props.tasks)) "stat-completed"
+                , viewStatCard "Failed" (String.fromInt (countFailed props.tasks)) "stat-failed"
+                ]
+        , viewRecentTasks props.tasks
+        ]
+
+
+viewStatCard : String -> String -> String -> Html msg
+viewStatCard label value className =
+    div [ class ("stat-card " ++ className) ]
+        [ div [ class "stat-value" ] [ text value ]
+        , div [ class "stat-label" ] [ text label ]
+        ]
+
+
+viewRecentTasks : Array Api.Task -> Html msg
+viewRecentTasks tasks =
+    let
+        recentTasks =
+            tasks
+                |> Array.sortBy (\t -> negate (Time.posixToMillis t.updatedAt))
+                |> Array.takeFirst 5
+    in
+    div [ class "recent-tasks" ]
+        [ h3 [] [ text "Recent Activity" ]
+        , if Array.isEmpty recentTasks then
+            p [ class "empty-state" ] [ text "No tasks yet" ]
+          else
+            ul [ class "task-list-compact" ]
+                (Array.map viewRecentTask recentTasks)
+        ]
+
+
+viewRecentTask : Api.Task -> Html msg
+viewRecentTask task =
+    li [ class "task-item-compact" ]
+        [ a [ href ("/tasks/" ++ task.id) ]
+            [ span [ class ("status-badge status-" ++ Api.statusToString task.status) ]
+                [ text (Api.statusToString task.status) ]
+            , span [ class "task-title" ] [ text task.title ]
+            ]
+        ]
+
+
+countByStatus : Api.TaskStatus -> Array Api.Task -> Int
+countByStatus status tasks =
+    Array.foldl
+        (\task count ->
+            if statusMatches task.status status then
+                count + 1
+            else
+                count
+        )
+        0
+        tasks
+
+
+countFailed : Array Api.Task -> Int
+countFailed tasks =
+    Array.foldl
+        (\task count ->
+            when task.status is
+                Api.Failed _ ->
+                    count + 1
+
+                _ ->
+                    count
+        )
+        0
+        tasks
+
+
+statusMatches : Api.TaskStatus -> Api.TaskStatus -> Bool
+statusMatches a b =
+    when { a = a, b = b } is
+        { a = Api.Pending, b = Api.Pending } ->
+            True
+
+        { a = Api.Active, b = Api.Active } ->
+            True
+
+        { a = Api.Waiting, b = Api.Waiting } ->
+            True
+
+        { a = Api.Completed, b = Api.Completed } ->
+            True
+
+        { a = Api.Failed _, b = Api.Failed _ } ->
+            True
+
+        _ ->
+            False

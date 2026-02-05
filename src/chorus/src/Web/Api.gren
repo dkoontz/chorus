@@ -1,0 +1,421 @@
+module Web.Api exposing
+    ( ApiResult(..)
+    , requestTasks
+    , requestTask
+    , requestCreateTask
+    , requestUpdateStatus
+    , requestHistory
+    , requestQueue
+    , requestEnqueue
+    , sendApiResponse
+    , CreateTaskParams
+    )
+
+{-| API request handlers for the Chorus web interface.
+
+Each endpoint produces an ApiResult that should be sent back via the Response.
+
+-}
+
+import Bytes
+import Crypto exposing (SecureContext)
+import Dict exposing (Dict)
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import HttpServer exposing (Request)
+import HttpServer.Response as Response exposing (Response)
+import Json.Decode as Decode
+import Json.Encode as Encode
+import Task as GrenTask exposing (Task)
+import Task.Queue as Queue
+import Task.Registry as Registry
+import Time
+import Web.Router exposing (Route(..))
+
+
+-- TYPES
+
+
+{-| Context needed for API operations.
+-}
+type alias ApiContext =
+    { registry : Registry.Registry
+    , fsPermission : FileSystem.Permission
+    , secureContext : SecureContext
+    , registryRoot : Path
+    }
+
+
+{-| Result of an API operation.
+-}
+type ApiResult
+    = ApiSuccess { statusCode : Int, body : String }
+    | ApiError { statusCode : Int, code : String, message : String }
+
+
+{-| Parameters for creating a task.
+-}
+type alias CreateTaskParams =
+    { title : String
+    , source : Registry.SourceInfo
+    }
+
+
+
+-- API HANDLERS - Return Tasks that produce ApiResult
+
+
+{-| GET /api/tasks - List all tasks.
+-}
+requestTasks : ApiContext -> Maybe String -> (ApiResult -> msg) -> Cmd msg
+requestTasks ctx maybeStatus toMsg =
+    let
+        statusFilter =
+            maybeStatus
+                |> Maybe.andThen parseStatus
+    in
+    Registry.listTasks ctx.registry statusFilter
+        |> GrenTask.andThen
+            (\tasks ->
+                Time.now
+                    |> GrenTask.map
+                        (\now ->
+                            let
+                                tasksJson =
+                                    Encode.array Registry.encodeTask tasks
+
+                                body =
+                                    wrapResponse tasksJson now
+                            in
+                            ApiSuccess { statusCode = 200, body = body }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = registryErrorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| GET /api/tasks/:id - Get a single task.
+-}
+requestTask : ApiContext -> String -> (ApiResult -> msg) -> Cmd msg
+requestTask ctx taskId toMsg =
+    Registry.getTask ctx.registry taskId
+        |> GrenTask.andThen
+            (\maybeTask ->
+                when maybeTask is
+                    Nothing ->
+                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ taskId })
+
+                    Just task ->
+                        Time.now
+                            |> GrenTask.map
+                                (\now ->
+                                    let
+                                        body =
+                                            wrapResponse (Registry.encodeTask task) now
+                                    in
+                                    ApiSuccess { statusCode = 200, body = body }
+                                )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = registryErrorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| POST /api/tasks - Create a new task.
+-}
+requestCreateTask : ApiContext -> CreateTaskParams -> (ApiResult -> msg) -> Cmd msg
+requestCreateTask ctx params toMsg =
+    Registry.createTask ctx.registry
+        { title = params.title
+        , source = params.source
+        }
+        |> GrenTask.andThen
+            (\task ->
+                Time.now
+                    |> GrenTask.map
+                        (\now ->
+                            let
+                                body =
+                                    wrapResponse (Registry.encodeTask task) now
+                            in
+                            ApiSuccess { statusCode = 201, body = body }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = registryErrorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| PUT /api/tasks/:id/status - Update task status.
+-}
+requestUpdateStatus : ApiContext -> String -> Registry.TaskStatus -> (ApiResult -> msg) -> Cmd msg
+requestUpdateStatus ctx taskId status toMsg =
+    Registry.updateStatus ctx.registry taskId status
+        |> GrenTask.andThen
+            (\task ->
+                Time.now
+                    |> GrenTask.map
+                        (\now ->
+                            let
+                                body =
+                                    wrapResponse (Registry.encodeTask task) now
+                            in
+                            ApiSuccess { statusCode = 200, body = body }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                let
+                    { statusCode, message } =
+                        when err is
+                            Registry.TaskNotFound _ ->
+                                { statusCode = 404, message = "Task not found: " ++ taskId }
+
+                            _ ->
+                                { statusCode = 500, message = registryErrorToString err }
+                in
+                GrenTask.succeed (ApiError { statusCode = statusCode, code = "REGISTRY_ERROR", message = message })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| GET /api/tasks/:id/history - Get task event history.
+-}
+requestHistory : ApiContext -> String -> (ApiResult -> msg) -> Cmd msg
+requestHistory ctx taskId toMsg =
+    let
+        historyPath =
+            Path.append
+                (Path.fromPosixString (taskId ++ "/history.json"))
+                ctx.registryRoot
+    in
+    FileSystem.readFile ctx.fsPermission historyPath
+        |> GrenTask.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        GrenTask.succeed (ApiError { statusCode = 500, code = "DECODE_ERROR", message = "Could not decode history file" })
+
+                    Just content ->
+                        Time.now
+                            |> GrenTask.map
+                                (\now ->
+                                    let
+                                        historyValue =
+                                            when Decode.decodeString Decode.value content is
+                                                Ok val ->
+                                                    val
+
+                                                Err _ ->
+                                                    Encode.null
+
+                                        body =
+                                            wrapResponse historyValue now
+                                    in
+                                    ApiSuccess { statusCode = 200, body = body }
+                                )
+            )
+        |> GrenTask.onError
+            (\_ ->
+                GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "History not found for task: " ++ taskId })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| GET /api/tasks/:id/queue - Get task message queue.
+-}
+requestQueue : ApiContext -> String -> (ApiResult -> msg) -> Cmd msg
+requestQueue ctx taskId toMsg =
+    let
+        queuePath =
+            Path.append
+                (Path.fromPosixString (taskId ++ "/queue.json"))
+                ctx.registryRoot
+    in
+    FileSystem.readFile ctx.fsPermission queuePath
+        |> GrenTask.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        GrenTask.succeed (ApiError { statusCode = 500, code = "DECODE_ERROR", message = "Could not decode queue file" })
+
+                    Just content ->
+                        Time.now
+                            |> GrenTask.map
+                                (\now ->
+                                    let
+                                        queueValue =
+                                            when Decode.decodeString Decode.value content is
+                                                Ok val ->
+                                                    val
+
+                                                Err _ ->
+                                                    Encode.null
+
+                                        body =
+                                            wrapResponse queueValue now
+                                    in
+                                    ApiSuccess { statusCode = 200, body = body }
+                                )
+            )
+        |> GrenTask.onError
+            (\_ ->
+                GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Queue not found for task: " ++ taskId })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| POST /api/tasks/:id/queue - Add message to task queue.
+-}
+requestEnqueue : ApiContext -> String -> String -> (ApiResult -> msg) -> Cmd msg
+requestEnqueue ctx taskId content toMsg =
+    let
+        taskDir =
+            Path.append (Path.fromPosixString taskId) ctx.registryRoot
+    in
+    Queue.enqueue ctx.fsPermission ctx.secureContext taskDir taskId content
+        |> GrenTask.andThen
+            (\message ->
+                Time.now
+                    |> GrenTask.map
+                        (\now ->
+                            let
+                                msgJson =
+                                    Encode.object
+                                        [ { key = "id", value = Encode.string message.id }
+                                        , { key = "content", value = Encode.string message.content }
+                                        , { key = "receivedAt", value = Encode.int (Time.posixToMillis message.receivedAt) }
+                                        ]
+
+                                body =
+                                    wrapResponse msgJson now
+                            in
+                            ApiSuccess { statusCode = 201, body = body }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "QUEUE_ERROR", message = queueErrorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+
+-- RESPONSE SENDING
+
+
+{-| Send an API response.
+-}
+sendApiResponse : Response -> ApiResult -> Cmd msg
+sendApiResponse response result =
+    when result is
+        ApiSuccess { statusCode, body } ->
+            response
+                |> Response.setStatus statusCode
+                |> Response.setHeader "Content-Type" "application/json"
+                |> Response.setBody body
+                |> Response.send
+
+        ApiError { statusCode, code, message } ->
+            let
+                errorBody =
+                    Encode.object
+                        [ { key = "error"
+                          , value =
+                                Encode.object
+                                    [ { key = "code", value = Encode.string code }
+                                    , { key = "message", value = Encode.string message }
+                                    ]
+                          }
+                        ]
+                        |> Encode.encode 0
+            in
+            response
+                |> Response.setStatus statusCode
+                |> Response.setHeader "Content-Type" "application/json"
+                |> Response.setBody errorBody
+                |> Response.send
+
+
+
+-- HELPERS
+
+
+{-| Parse a status string to TaskStatus.
+-}
+parseStatus : String -> Maybe Registry.TaskStatus
+parseStatus statusStr =
+    when statusStr is
+        "pending" ->
+            Just Registry.Pending
+
+        "active" ->
+            Just Registry.Active
+
+        "waiting" ->
+            Just Registry.Waiting
+
+        "completed" ->
+            Just Registry.Completed
+
+        "failed" ->
+            Just (Registry.Failed "")
+
+        _ ->
+            Nothing
+
+
+{-| Wrap data in standard response format.
+-}
+wrapResponse : Encode.Value -> Time.Posix -> String
+wrapResponse data timestamp =
+    Encode.object
+        [ { key = "data", value = data }
+        , { key = "meta"
+          , value =
+                Encode.object
+                    [ { key = "timestamp", value = Encode.int (Time.posixToMillis timestamp) }
+                    ]
+          }
+        ]
+        |> Encode.encode 0
+
+
+{-| Convert registry error to string.
+-}
+registryErrorToString : Registry.Error -> String
+registryErrorToString err =
+    when err is
+        Registry.FileSystemError msg ->
+            "File system error: " ++ msg
+
+        Registry.JsonDecodeError msg ->
+            "JSON decode error: " ++ msg
+
+        Registry.TaskNotFound id ->
+            "Task not found: " ++ id
+
+        Registry.RegistryCorrupt msg ->
+            "Registry corrupt: " ++ msg
+
+
+{-| Convert queue error to string.
+-}
+queueErrorToString : Queue.Error -> String
+queueErrorToString err =
+    when err is
+        Queue.FileSystemError msg ->
+            "File system error: " ++ msg
+
+        Queue.JsonDecodeError msg ->
+            "JSON decode error: " ++ msg
+
+        Queue.TaskNotFound id ->
+            "Task not found: " ++ id

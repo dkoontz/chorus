@@ -1,0 +1,189 @@
+module Web.Router exposing
+    ( Route(..)
+    , parseRoute
+    , routeToString
+    )
+
+{-| URL routing for the Chorus web interface.
+
+Parses incoming request URLs and extracts route parameters.
+
+-}
+
+import Dict exposing (Dict)
+import HttpServer exposing (Method(..))
+
+
+-- ROUTES
+
+
+{-| All routes handled by the API.
+-}
+type Route
+    = ListTasks (Maybe String)        -- GET /api/tasks?status=...
+    | GetTask String                   -- GET /api/tasks/:id
+    | CreateTask                       -- POST /api/tasks
+    | UpdateTaskStatus String          -- PUT /api/tasks/:id/status
+    | GetTaskHistory String            -- GET /api/tasks/:id/history
+    | GetTaskQueue String              -- GET /api/tasks/:id/queue
+    | EnqueueMessage String            -- POST /api/tasks/:id/queue
+    | StaticFile String                -- GET /* (for frontend assets)
+    | NotFound
+
+
+
+-- PARSING
+
+
+{-| Parse an HTTP request into a route.
+
+Takes the HTTP method and URL path, returns the matching route.
+
+-}
+parseRoute : Method -> String -> Route
+parseRoute method path =
+    let
+        -- Remove leading slash and split into segments
+        segments =
+            path
+                |> String.dropFirst 1
+                |> String.split "/"
+                |> Array.keepIf (\s -> not (String.isEmpty s))
+
+        -- Extract query string from last segment if present
+        { pathSegments, queryParams } =
+            extractQueryParams segments
+    in
+    when { method = method, segments = pathSegments } is
+        -- API routes
+        { method = GET, segments = [ "api", "tasks" ] } ->
+            ListTasks (Dict.get "status" queryParams)
+
+        { method = GET, segments = [ "api", "tasks", taskId ] } ->
+            GetTask taskId
+
+        { method = POST, segments = [ "api", "tasks" ] } ->
+            CreateTask
+
+        { method = PUT, segments = [ "api", "tasks", taskId, "status" ] } ->
+            UpdateTaskStatus taskId
+
+        { method = GET, segments = [ "api", "tasks", taskId, "history" ] } ->
+            GetTaskHistory taskId
+
+        { method = GET, segments = [ "api", "tasks", taskId, "queue" ] } ->
+            GetTaskQueue taskId
+
+        { method = POST, segments = [ "api", "tasks", taskId, "queue" ] } ->
+            EnqueueMessage taskId
+
+        -- Static files (anything not matching /api/*)
+        { method = GET, segments = segs } ->
+            if Array.first segs == Just "api" then
+                NotFound
+            else
+                StaticFile (segmentsToPath segs)
+
+        -- Fallback
+        _ ->
+            NotFound
+
+
+{-| Extract query parameters from URL segments.
+
+The last segment might contain query string like "tasks?status=pending".
+Returns cleaned segments and a dict of query params.
+
+-}
+extractQueryParams :
+    Array String
+    -> { pathSegments : Array String, queryParams : Dict String String }
+extractQueryParams segments =
+    when Array.popLast segments is
+        Nothing ->
+            { pathSegments = [], queryParams = Dict.empty }
+
+        Just { last, initial } ->
+            when String.split "?" last is
+                [ pathPart, queryString ] ->
+                    { pathSegments = Array.pushLast pathPart initial
+                    , queryParams = parseQueryString queryString
+                    }
+
+                _ ->
+                    { pathSegments = segments
+                    , queryParams = Dict.empty
+                    }
+
+
+{-| Parse a query string into key-value pairs.
+
+"status=pending&limit=10" -> { "status": "pending", "limit": "10" }
+
+-}
+parseQueryString : String -> Dict String String
+parseQueryString queryString =
+    queryString
+        |> String.split "&"
+        |> Array.foldl
+            (\pair acc ->
+                when String.split "=" pair is
+                    [ key, value ] ->
+                        Dict.set key value acc
+
+                    _ ->
+                        acc
+            )
+            Dict.empty
+
+
+{-| Convert URL segments back to a path string.
+-}
+segmentsToPath : Array String -> String
+segmentsToPath segments =
+    if Array.isEmpty segments then
+        "index.html"
+    else
+        String.join "/" segments
+
+
+
+-- DEBUG
+
+
+{-| Convert a route to a string for logging.
+-}
+routeToString : Route -> String
+routeToString route =
+    when route is
+        ListTasks maybeStatus ->
+            when maybeStatus is
+                Just status ->
+                    "ListTasks(status=" ++ status ++ ")"
+
+                Nothing ->
+                    "ListTasks"
+
+        GetTask id ->
+            "GetTask(" ++ id ++ ")"
+
+        CreateTask ->
+            "CreateTask"
+
+        UpdateTaskStatus id ->
+            "UpdateTaskStatus(" ++ id ++ ")"
+
+        GetTaskHistory id ->
+            "GetTaskHistory(" ++ id ++ ")"
+
+        GetTaskQueue id ->
+            "GetTaskQueue(" ++ id ++ ")"
+
+        EnqueueMessage id ->
+            "EnqueueMessage(" ++ id ++ ")"
+
+        StaticFile path ->
+            "StaticFile(" ++ path ++ ")"
+
+        NotFound ->
+            "NotFound"

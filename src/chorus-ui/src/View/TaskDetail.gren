@@ -1,0 +1,232 @@
+module View.TaskDetail exposing (view)
+
+{-| Task detail view showing full task information, history, and queue.
+-}
+
+import Api
+import Dict exposing (Dict)
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Html.Events exposing (onClick)
+import Time
+
+
+type alias Props msg =
+    { task : Maybe Api.Task
+    , history : Maybe Api.History
+    , queue : Maybe Api.Queue
+    , loading : Bool
+    , onStatusUpdate : String -> String -> msg
+    , onRefresh : msg
+    }
+
+
+view : Props msg -> Html msg
+view props =
+    div [ class "task-detail-page" ]
+        [ when props.task is
+            Nothing ->
+                if props.loading then
+                    div [ class "loading" ] [ text "Loading task..." ]
+                else
+                    div [ class "error" ] [ text "Task not found" ]
+
+            Just task ->
+                viewTask props task
+        ]
+
+
+viewTask : Props msg -> Api.Task -> Html msg
+viewTask props task =
+    div [ class "task-detail" ]
+        [ viewTaskHeader props task
+        , div [ class "task-detail-grid" ]
+            [ viewTaskInfo task
+            , viewTaskHistory props.history
+            , viewTaskQueue props.queue
+            ]
+        ]
+
+
+viewTaskHeader : Props msg -> Api.Task -> Html msg
+viewTaskHeader props task =
+    div [ class "task-detail-header" ]
+        [ div [ class "task-title-row" ]
+            [ a [ href "/tasks", class "back-link" ] [ text "< Back to Tasks" ]
+            , h2 [] [ text task.title ]
+            , button
+                [ class "btn btn-small btn-secondary"
+                , onClick props.onRefresh
+                ]
+                [ text "Refresh" ]
+            ]
+        , div [ class "task-meta" ]
+            [ span [ class ("status-badge status-large status-" ++ Api.statusToString task.status) ]
+                [ text (Api.statusToString task.status) ]
+            , viewStatusActions props task
+            ]
+        ]
+
+
+viewStatusActions : Props msg -> Api.Task -> Html msg
+viewStatusActions props task =
+    div [ class "status-actions" ]
+        (when task.status is
+            Api.Pending ->
+                [ button
+                    [ class "btn btn-primary"
+                    , onClick (props.onStatusUpdate task.id "active")
+                    ]
+                    [ text "Start Task" ]
+                ]
+
+            Api.Active ->
+                [ button
+                    [ class "btn btn-secondary"
+                    , onClick (props.onStatusUpdate task.id "waiting")
+                    ]
+                    [ text "Pause" ]
+                , button
+                    [ class "btn btn-success"
+                    , onClick (props.onStatusUpdate task.id "completed")
+                    ]
+                    [ text "Mark Complete" ]
+                , button
+                    [ class "btn btn-danger"
+                    , onClick (props.onStatusUpdate task.id "failed")
+                    ]
+                    [ text "Mark Failed" ]
+                ]
+
+            Api.Waiting ->
+                [ button
+                    [ class "btn btn-primary"
+                    , onClick (props.onStatusUpdate task.id "active")
+                    ]
+                    [ text "Resume" ]
+                , button
+                    [ class "btn btn-success"
+                    , onClick (props.onStatusUpdate task.id "completed")
+                    ]
+                    [ text "Mark Complete" ]
+                ]
+
+            Api.Completed ->
+                [ button
+                    [ class "btn btn-secondary"
+                    , onClick (props.onStatusUpdate task.id "pending")
+                    ]
+                    [ text "Reopen" ]
+                ]
+
+            Api.Failed _ ->
+                [ button
+                    [ class "btn btn-secondary"
+                    , onClick (props.onStatusUpdate task.id "pending")
+                    ]
+                    [ text "Retry" ]
+                ]
+        )
+
+
+viewTaskInfo : Api.Task -> Html msg
+viewTaskInfo task =
+    div [ class "task-info card" ]
+        [ h3 [] [ text "Task Information" ]
+        , dl [ class "info-list" ]
+            [ dt [] [ text "ID" ]
+            , dd [ class "monospace" ] [ text task.id ]
+            , dt [] [ text "Source" ]
+            , dd [] [ text (task.source.sourceType ++ " / " ++ task.source.userId) ]
+            , dt [] [ text "Session ID" ]
+            , dd [ class "monospace" ]
+                [ text (Maybe.withDefault "None" task.sessionId) ]
+            , dt [] [ text "Workspace" ]
+            , dd [ class "monospace truncate" ] [ text task.agentWorkspace ]
+            , dt [] [ text "Created" ]
+            , dd [] [ text (formatTimestamp task.createdAt) ]
+            , dt [] [ text "Updated" ]
+            , dd [] [ text (formatTimestamp task.updatedAt) ]
+            ]
+        ]
+
+
+viewTaskHistory : Maybe Api.History -> Html msg
+viewTaskHistory maybeHistory =
+    div [ class "task-history card" ]
+        [ h3 [] [ text "History" ]
+        , when maybeHistory is
+            Nothing ->
+                p [ class "loading-text" ] [ text "Loading history..." ]
+
+            Just history ->
+                if Array.isEmpty history.events then
+                    p [ class "empty-state" ] [ text "No events recorded" ]
+                else
+                    ul [ class "event-list" ]
+                        (Array.map viewEvent (Array.reverse history.events))
+        ]
+
+
+viewEvent : Api.Event -> Html msg
+viewEvent event =
+    li [ class "event-item" ]
+        [ div [ class "event-header" ]
+            [ span [ class "event-type" ] [ text event.eventType ]
+            , span [ class "event-time" ] [ text (formatTimestamp event.timestamp) ]
+            ]
+        , if Dict.isEmpty event.data then
+            text ""
+          else
+            div [ class "event-data" ]
+                (Dict.foldl
+                    (\key value acc ->
+                        Array.pushLast
+                            (span [ class "event-data-item" ]
+                                [ text (key ++ ": " ++ value) ]
+                            )
+                            acc
+                    )
+                    []
+                    event.data
+                )
+        ]
+
+
+viewTaskQueue : Maybe Api.Queue -> Html msg
+viewTaskQueue maybeQueue =
+    div [ class "task-queue card" ]
+        [ h3 [] [ text "Message Queue" ]
+        , when maybeQueue is
+            Nothing ->
+                p [ class "loading-text" ] [ text "Loading queue..." ]
+
+            Just queue ->
+                if Array.isEmpty queue.messages then
+                    p [ class "empty-state" ] [ text "Queue is empty" ]
+                else
+                    div []
+                        [ p [ class "queue-count" ]
+                            [ text (String.fromInt (Array.length queue.messages) ++ " message(s) pending")
+                            ]
+                        , ul [ class "queue-list" ]
+                            (Array.map viewQueuedMessage queue.messages)
+                        ]
+        ]
+
+
+viewQueuedMessage : Api.QueuedMessage -> Html msg
+viewQueuedMessage message =
+    li [ class "queue-item" ]
+        [ div [ class "queue-item-header" ]
+            [ span [ class "queue-item-id monospace" ] [ text (String.takeFirst 8 message.id) ]
+            , span [ class "queue-item-time" ] [ text (formatTimestamp message.receivedAt) ]
+            ]
+        , div [ class "queue-item-content" ] [ text message.content ]
+        ]
+
+
+formatTimestamp : Time.Posix -> String
+formatTimestamp posix =
+    -- Simple timestamp display
+    String.fromInt (Time.posixToMillis posix)

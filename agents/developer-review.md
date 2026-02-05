@@ -36,7 +36,7 @@ The orchestrator will provide these parameters when invoking you:
 - Can complex expressions be broken into simpler steps?
 
 ### 4. Style Consistency
-- Does the code match the project's existing style?
+- Does the code match the project's existing style and [coding standards](../docs/coding-standards.md)?
 - Are naming conventions followed (camelCase, snake_case, etc.)?
 - Does formatting match surrounding code?
 

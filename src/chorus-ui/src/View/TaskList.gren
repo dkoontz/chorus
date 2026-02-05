@@ -1,0 +1,181 @@
+module View.TaskList exposing (view)
+
+{-| Task list view with filtering and status updates.
+-}
+
+import Api
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Html.Events exposing (onClick, onInput)
+import Time
+
+
+type alias Props msg =
+    { tasks : Array Api.Task
+    , statusFilter : Maybe String
+    , loading : Bool
+    , onFilterChange : Maybe String -> msg
+    , onStatusUpdate : String -> String -> msg
+    }
+
+
+view : Props msg -> Html msg
+view props =
+    div [ class "task-list-page" ]
+        [ div [ class "task-list-header" ]
+            [ h2 [] [ text "Tasks" ]
+            , viewFilterDropdown props
+            ]
+        , if props.loading && Array.isEmpty props.tasks then
+            div [ class "loading" ] [ text "Loading tasks..." ]
+          else if Array.isEmpty props.tasks then
+            div [ class "empty-state" ]
+                [ p [] [ text "No tasks found" ]
+                , p [ class "hint" ] [ text "Create a new task to get started" ]
+                ]
+          else
+            viewTaskTable props
+        ]
+
+
+viewFilterDropdown : Props msg -> Html msg
+viewFilterDropdown props =
+    div [ class "filter-dropdown" ]
+        [ label [ for "status-filter" ] [ text "Filter by status:" ]
+        , select
+            [ id "status-filter"
+            , onInput
+                (\val ->
+                    if val == "all" then
+                        props.onFilterChange Nothing
+                    else
+                        props.onFilterChange (Just val)
+                )
+            ]
+            [ option
+                [ value "all"
+                , selected (props.statusFilter == Nothing)
+                ]
+                [ text "All" ]
+            , option
+                [ value "pending"
+                , selected (props.statusFilter == Just "pending")
+                ]
+                [ text "Pending" ]
+            , option
+                [ value "active"
+                , selected (props.statusFilter == Just "active")
+                ]
+                [ text "Active" ]
+            , option
+                [ value "waiting"
+                , selected (props.statusFilter == Just "waiting")
+                ]
+                [ text "Waiting" ]
+            , option
+                [ value "completed"
+                , selected (props.statusFilter == Just "completed")
+                ]
+                [ text "Completed" ]
+            , option
+                [ value "failed"
+                , selected (props.statusFilter == Just "failed")
+                ]
+                [ text "Failed" ]
+            ]
+        ]
+
+
+viewTaskTable : Props msg -> Html msg
+viewTaskTable props =
+    table [ class "task-table" ]
+        [ thead []
+            [ tr []
+                [ th [] [ text "Status" ]
+                , th [] [ text "Title" ]
+                , th [] [ text "Source" ]
+                , th [] [ text "Updated" ]
+                , th [] [ text "Actions" ]
+                ]
+            ]
+        , tbody []
+            (Array.map (viewTaskRow props) props.tasks)
+        ]
+
+
+viewTaskRow : Props msg -> Api.Task -> Html msg
+viewTaskRow props task =
+    tr [ class "task-row" ]
+        [ td []
+            [ span [ class ("status-badge status-" ++ Api.statusToString task.status) ]
+                [ text (Api.statusToString task.status) ]
+            ]
+        , td []
+            [ a [ href ("/tasks/" ++ task.id), class "task-link" ]
+                [ text task.title ]
+            ]
+        , td [ class "source-info" ]
+            [ text (task.source.sourceType ++ " / " ++ task.source.userId) ]
+        , td [ class "timestamp" ]
+            [ text (formatTimestamp task.updatedAt) ]
+        , td [ class "actions" ]
+            [ viewStatusActions props task ]
+        ]
+
+
+viewStatusActions : Props msg -> Api.Task -> Html msg
+viewStatusActions props task =
+    div [ class "action-buttons" ]
+        (when task.status is
+            Api.Pending ->
+                [ button
+                    [ class "btn btn-small btn-primary"
+                    , onClick (props.onStatusUpdate task.id "active")
+                    ]
+                    [ text "Start" ]
+                ]
+
+            Api.Active ->
+                [ button
+                    [ class "btn btn-small btn-secondary"
+                    , onClick (props.onStatusUpdate task.id "waiting")
+                    ]
+                    [ text "Pause" ]
+                , button
+                    [ class "btn btn-small btn-success"
+                    , onClick (props.onStatusUpdate task.id "completed")
+                    ]
+                    [ text "Complete" ]
+                ]
+
+            Api.Waiting ->
+                [ button
+                    [ class "btn btn-small btn-primary"
+                    , onClick (props.onStatusUpdate task.id "active")
+                    ]
+                    [ text "Resume" ]
+                ]
+
+            Api.Completed ->
+                []
+
+            Api.Failed _ ->
+                [ button
+                    [ class "btn btn-small btn-secondary"
+                    , onClick (props.onStatusUpdate task.id "pending")
+                    ]
+                    [ text "Retry" ]
+                ]
+        )
+
+
+formatTimestamp : Time.Posix -> String
+formatTimestamp posix =
+    let
+        millis =
+            Time.posixToMillis posix
+
+        -- Simple relative time (in a real app, use a proper time library)
+        -- For now, just show the timestamp
+    in
+    String.fromInt millis

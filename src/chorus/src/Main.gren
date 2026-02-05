@@ -2,35 +2,478 @@ module Main exposing (main)
 
 {-| Chorus - Secure multi-agent orchestration system.
 
-This is the main entry point for the Chorus application. It coordinates:
-- Message sources (terminal, XMPP, etc.)
-- Triage agent (classifies incoming messages)
-- Task registry (manages task lifecycle)
-- Session management (runs orchestrator agents)
+This is the main entry point for the Chorus application. It runs an HTTP
+server that provides a web interface for managing tasks.
+
+The server exposes:
+- REST API at /api/* for task operations
+- Static files at /* for the web UI
 
 -}
 
+import Crypto exposing (SecureContext)
+import Debug
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import HttpServer
+import HttpServer.Response as Response exposing (Response)
 import Init
+import Json.Decode as Decode
 import Node
 import Stream
-import Task
+import Task as GrenTask
 import Task.Registry as Registry
-import Task.Queue as Queue
+import Web.Api as Api
+import Web.Router as Router
+import Web.Server as Server
+import Web.Static as Static
 
 
-main : Node.SimpleProgram a
+-- MAIN
+
+
+main : Node.Program Model Msg
 main =
-    Node.defineSimpleProgram init
+    Node.defineProgram
+        { init = init
+        , update = update
+        , subscriptions = subscriptions
+        }
 
 
-init : Node.Environment -> Init.Task (Cmd a)
+
+-- MODEL
+
+
+type alias Model =
+    { env : Node.Environment
+    , server : Maybe HttpServer.Server
+    , registry : Maybe Registry.Registry
+    , fsPermission : FileSystem.Permission
+    , secureContext : SecureContext
+    , config : Config
+    , status : Status
+    , pendingResponses : Array PendingResponse
+    }
+
+
+type alias PendingResponse =
+    { response : Response
+    , id : Int
+    }
+
+
+type alias Config =
+    { host : String
+    , port_ : Int
+    , registryRoot : String
+    , workspacesRoot : String
+    , staticRoot : String
+    }
+
+
+type Status
+    = Initializing
+    | Running
+    | Error String
+
+
+defaultConfig : Config
+defaultConfig =
+    { host = "localhost"
+    , port_ = 8080
+    , registryRoot = "./data/registry"
+    , workspacesRoot = "./data/workspaces"
+    , staticRoot = "./static"
+    }
+
+
+
+-- MSG
+
+
+type Msg
+    = GotServer (Result Server.Error HttpServer.Server)
+    | GotRegistry (Result Registry.Error Registry.Registry)
+    | GotRequest { request : HttpServer.Request, response : Response }
+    | GotStaticFile { id : Int, response : Response, result : Static.StaticFileResult }
+    | GotApiResult { response : Response, result : Api.ApiResult }
+    | NoOp
+
+
+
+-- INIT
+
+
+init : Node.Environment -> Init.Task { model : Model, command : Cmd Msg }
 init env =
-    -- TODO: Implement main application
-    -- 1. Initialize FileSystem and Crypto permissions
-    -- 2. Load configuration
-    -- 3. Initialize task registry
-    -- 4. Start message source (terminal for now)
-    -- 5. Enter main loop
-    Stream.writeLineAsBytes "Chorus - not yet implemented" env.stdout
-        |> Task.onError (\_ -> Task.succeed env.stdout)
-        |> Node.endSimpleProgram
+    Init.await FileSystem.initialize <| \fsPermission ->
+        Init.awaitTask getSecureContext <| \secureContext ->
+            Init.await HttpServer.initialize <| \httpPermission ->
+                let
+                    config =
+                        defaultConfig
+
+                    model =
+                        { env = env
+                        , server = Nothing
+                        , registry = Nothing
+                        , fsPermission = fsPermission
+                        , secureContext = secureContext
+                        , config = config
+                        , status = Initializing
+                        , pendingResponses = []
+                        }
+                in
+                Node.startProgram
+                    { model = model
+                    , command =
+                        Cmd.batch
+                            [ -- Initialize the HTTP server
+                              Server.createServer httpPermission
+                                { host = config.host
+                                , port_ = config.port_
+                                }
+                                |> GrenTask.attempt GotServer
+
+                            , -- Initialize the task registry
+                              Registry.init fsPermission secureContext
+                                { registryRoot = config.registryRoot
+                                , workspacesRoot = config.workspacesRoot
+                                }
+                                |> GrenTask.attempt GotRegistry
+
+                            , -- Log startup
+                              writeLog env ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.port_)
+                            ]
+                    }
+
+
+
+-- UPDATE
+
+
+update : Msg -> Model -> { model : Model, command : Cmd Msg }
+update msg model =
+    when msg is
+        GotServer result ->
+            when result is
+                Ok server ->
+                    { model = { model | server = Just server }
+                    , command = writeLog model.env "HTTP server started"
+                    }
+
+                Err err ->
+                    { model = { model | status = Error (Server.errorToString err) }
+                    , command = writeLog model.env ("Server error: " ++ Server.errorToString err)
+                    }
+
+        GotRegistry result ->
+            when result is
+                Ok registry ->
+                    { model =
+                        { model
+                            | registry = Just registry
+                            , status = Running
+                        }
+                    , command = writeLog model.env "Task registry initialized"
+                    }
+
+                Err err ->
+                    { model = { model | status = Error (registryErrorToString err) }
+                    , command = writeLog model.env ("Registry error: " ++ registryErrorToString err)
+                    }
+
+        GotRequest { request, response } ->
+            let
+                method =
+                    request.method
+
+                -- Build path with query string for routing
+                path =
+                    when request.url.query is
+                        Just q ->
+                            request.url.path ++ "?" ++ q
+
+                        Nothing ->
+                            request.url.path
+
+                route =
+                    Router.parseRoute method path
+            in
+            { model = model
+            , command =
+                Cmd.batch
+                    [ writeLog model.env
+                        (HttpServer.methodToString method ++ " " ++ path ++ " -> " ++ Router.routeToString route)
+                    , handleRoute model route request response
+                    ]
+            }
+
+        GotStaticFile { response, result } ->
+            { model = model
+            , command = Static.sendFileResponse response result
+            }
+
+        GotApiResult { response, result } ->
+            { model = model
+            , command = Api.sendApiResponse response result
+            }
+
+        NoOp ->
+            { model = model
+            , command = Cmd.none
+            }
+
+
+{-| Route the request to the appropriate handler.
+-}
+handleRoute : Model -> Router.Route -> HttpServer.Request -> Response -> Cmd Msg
+handleRoute model route request response =
+    when route is
+        Router.StaticFile filePath ->
+            Static.readStaticFile
+                { fsPermission = model.fsPermission
+                , staticRoot = Path.fromPosixString model.config.staticRoot
+                }
+                filePath
+                (\staticResult -> GotStaticFile { id = 0, response = response, result = staticResult })
+
+        _ ->
+            -- API routes need registry
+            when model.registry is
+                Nothing ->
+                    sendServiceUnavailable response
+
+                Just registry ->
+                    let
+                        ctx =
+                            { registry = registry
+                            , fsPermission = model.fsPermission
+                            , secureContext = model.secureContext
+                            , registryRoot = Path.fromPosixString model.config.registryRoot
+                            }
+
+                        toMsg =
+                            \apiResult -> GotApiResult { response = response, result = apiResult }
+                    in
+                    when route is
+                        Router.ListTasks maybeStatus ->
+                            Api.requestTasks ctx maybeStatus toMsg
+
+                        Router.GetTask taskId ->
+                            Api.requestTask ctx taskId toMsg
+
+                        Router.CreateTask ->
+                            when parseCreateTaskBody request is
+                                Ok params ->
+                                    Api.requestCreateTask ctx params toMsg
+
+                                Err errMsg ->
+                                    sendBadRequest response errMsg
+
+                        Router.UpdateTaskStatus taskId ->
+                            when parseStatusBody request is
+                                Ok status ->
+                                    Api.requestUpdateStatus ctx taskId status toMsg
+
+                                Err errMsg ->
+                                    sendBadRequest response errMsg
+
+                        Router.GetTaskHistory taskId ->
+                            Api.requestHistory ctx taskId toMsg
+
+                        Router.GetTaskQueue taskId ->
+                            Api.requestQueue ctx taskId toMsg
+
+                        Router.EnqueueMessage taskId ->
+                            when parseEnqueueBody request is
+                                Ok content ->
+                                    Api.requestEnqueue ctx taskId content toMsg
+
+                                Err errMsg ->
+                                    sendBadRequest response errMsg
+
+                        Router.NotFound ->
+                            sendNotFound response
+
+                        Router.StaticFile _ ->
+                            -- Already handled above, but needed for exhaustive match
+                            sendNotFound response
+
+
+{-| Send a 503 Service Unavailable response when registry isn't ready.
+-}
+sendServiceUnavailable : Response -> Cmd Msg
+sendServiceUnavailable response =
+    response
+        |> Response.setStatus 503
+        |> Response.setHeader "Content-Type" "application/json"
+        |> Response.setBody "{\"error\":{\"code\":\"SERVICE_UNAVAILABLE\",\"message\":\"Server initializing\"}}"
+        |> Response.send
+
+
+{-| Send a 400 Bad Request response.
+-}
+sendBadRequest : Response -> String -> Cmd Msg
+sendBadRequest response message =
+    response
+        |> Response.setStatus 400
+        |> Response.setHeader "Content-Type" "application/json"
+        |> Response.setBody ("{\"error\":{\"code\":\"BAD_REQUEST\",\"message\":\"" ++ message ++ "\"}}")
+        |> Response.send
+
+
+{-| Send a 404 Not Found response.
+-}
+sendNotFound : Response -> Cmd Msg
+sendNotFound response =
+    response
+        |> Response.setStatus 404
+        |> Response.setHeader "Content-Type" "application/json"
+        |> Response.setBody "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Endpoint not found\"}}"
+        |> Response.send
+
+
+
+-- REQUEST BODY PARSING
+
+
+{-| Parse the body for POST /api/tasks.
+-}
+parseCreateTaskBody : HttpServer.Request -> Result String Api.CreateTaskParams
+parseCreateTaskBody request =
+    let
+        decoder =
+            Decode.map2
+                (\title source ->
+                    { title = title
+                    , source = source
+                    }
+                )
+                (Decode.field "title" Decode.string)
+                (Decode.field "source" sourceDecoder)
+
+        sourceDecoder =
+            Decode.map3
+                (\sourceType userId conversationId ->
+                    { sourceType = sourceType
+                    , userId = userId
+                    , conversationId = conversationId
+                    }
+                )
+                (Decode.field "sourceType" Decode.string)
+                (Decode.field "userId" Decode.string)
+                (Decode.maybe (Decode.field "conversationId" Decode.string))
+    in
+    when HttpServer.bodyFromJson decoder request is
+        Ok params ->
+            Ok params
+
+        Err _ ->
+            Err "Invalid JSON body for task creation"
+
+
+{-| Parse the body for PUT /api/tasks/:id/status.
+-}
+parseStatusBody : HttpServer.Request -> Result String Registry.TaskStatus
+parseStatusBody request =
+    let
+        decoder =
+            Decode.field "status" Decode.string
+    in
+    when HttpServer.bodyFromJson decoder request is
+        Ok statusStr ->
+            when statusStr is
+                "pending" ->
+                    Ok Registry.Pending
+
+                "active" ->
+                    Ok Registry.Active
+
+                "waiting" ->
+                    Ok Registry.Waiting
+
+                "completed" ->
+                    Ok Registry.Completed
+
+                "failed" ->
+                    Ok (Registry.Failed "")
+
+                _ ->
+                    Err ("Unknown status: " ++ statusStr)
+
+        Err _ ->
+            Err "Invalid JSON body for status update"
+
+
+{-| Parse the body for POST /api/tasks/:id/queue.
+-}
+parseEnqueueBody : HttpServer.Request -> Result String String
+parseEnqueueBody request =
+    let
+        decoder =
+            Decode.field "content" Decode.string
+    in
+    when HttpServer.bodyFromJson decoder request is
+        Ok content ->
+            Ok content
+
+        Err _ ->
+            Err "Invalid JSON body for enqueue"
+
+
+
+-- SUBSCRIPTIONS
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    when model.server is
+        Just server ->
+            HttpServer.onRequest server (\req resp -> GotRequest { request = req, response = resp })
+
+        Nothing ->
+            Sub.none
+
+
+
+-- HELPERS
+
+
+{-| Write a log message to stdout.
+-}
+writeLog : Node.Environment -> String -> Cmd Msg
+writeLog env message =
+    Stream.writeLineAsBytes ("[Chorus] " ++ message) env.stdout
+        |> GrenTask.onError (\_ -> GrenTask.succeed env.stdout)
+        |> GrenTask.map (\_ -> NoOp)
+        |> GrenTask.perform identity
+
+
+{-| Convert registry error to string.
+-}
+registryErrorToString : Registry.Error -> String
+registryErrorToString err =
+    when err is
+        Registry.FileSystemError msg ->
+            "File system error: " ++ msg
+
+        Registry.JsonDecodeError msg ->
+            "JSON decode error: " ++ msg
+
+        Registry.TaskNotFound id ->
+            "Task not found: " ++ id
+
+        Registry.RegistryCorrupt msg ->
+            "Registry corrupt: " ++ msg
+
+
+{-| Get a SecureContext for cryptographic operations.
+    The error type {} cannot actually be constructed, so this
+    effectively never fails.
+-}
+getSecureContext : GrenTask.Task Never SecureContext
+getSecureContext =
+    Crypto.getSecureContext
+        |> GrenTask.mapError (\{} -> Debug.todo "SecureContext failed")

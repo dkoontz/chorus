@@ -1,0 +1,590 @@
+module Main exposing (main)
+
+{-| Chorus Web UI - Task Registry Dashboard
+
+A browser application for managing and monitoring tasks in the Chorus
+orchestration system.
+
+Features:
+- Real-time task list with status filtering
+- Task creation form
+- Task detail view with history
+- Automatic polling for updates
+
+-}
+
+import Api
+import Browser
+import Browser.Navigation as Nav
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Html.Events exposing (onClick, onInput, onSubmit)
+import Http
+import Json.Decode
+import Task
+import Time
+import Url exposing (Url)
+import View.Dashboard as Dashboard
+import View.History as History
+import View.TaskDetail as TaskDetail
+import View.TaskList as TaskList
+
+
+-- MAIN
+
+
+main : Program {} Model Msg
+main =
+    Browser.application
+        { init = init
+        , view = view
+        , update = update
+        , subscriptions = subscriptions
+        , onUrlChange = UrlChanged
+        , onUrlRequest = LinkClicked
+        }
+
+
+
+-- MODEL
+
+
+type alias Model =
+    { key : Nav.Key
+    , page : Page
+    , tasks : Array Api.Task
+    , selectedTask : Maybe Api.Task
+    , taskHistory : Maybe Api.History
+    , taskQueue : Maybe Api.Queue
+    , createForm : CreateTaskForm
+    , statusFilter : Maybe String
+    , loading : Bool
+    , error : Maybe String
+    , lastPoll : Time.Posix
+    }
+
+
+type Page
+    = DashboardPage
+    | TaskListPage
+    | TaskDetailPage String
+    | NotFoundPage
+
+
+type alias CreateTaskForm =
+    { title : String
+    , sourceType : String
+    , userId : String
+    , isOpen : Bool
+    }
+
+
+emptyCreateForm : CreateTaskForm
+emptyCreateForm =
+    { title = ""
+    , sourceType = "web"
+    , userId = "anonymous"
+    , isOpen = False
+    }
+
+
+
+-- MSG
+
+
+type Msg
+    = LinkClicked Browser.UrlRequest
+    | UrlChanged Url
+    | GotTasks (Result Http.Error (Array Api.Task))
+    | GotTask (Result Http.Error Api.Task)
+    | GotHistory (Result Http.Error Api.History)
+    | GotQueue (Result Http.Error Api.Queue)
+    | TaskCreated (Result Http.Error Api.Task)
+    | StatusUpdated (Result Http.Error Api.Task)
+    | Poll Time.Posix
+    | SetStatusFilter (Maybe String)
+    | OpenCreateForm
+    | CloseCreateForm
+    | UpdateCreateTitle String
+    | SubmitCreateForm
+    | UpdateTaskStatus { taskId : String, status : String }
+    | RefreshTask String
+    | ClearError
+
+
+
+-- INIT
+
+
+init : {} -> Url -> Nav.Key -> { model : Model, command : Cmd Msg }
+init _ url key =
+    let
+        page =
+            urlToPage url
+
+        model =
+            { key = key
+            , page = page
+            , tasks = []
+            , selectedTask = Nothing
+            , taskHistory = Nothing
+            , taskQueue = Nothing
+            , createForm = emptyCreateForm
+            , statusFilter = Nothing
+            , loading = True
+            , error = Nothing
+            , lastPoll = Time.millisToPosix 0
+            }
+    in
+    { model = model
+    , command = loadPageData page
+    }
+
+
+urlToPage : Url -> Page
+urlToPage url =
+    when url.path is
+        "/" ->
+            DashboardPage
+
+        "/tasks" ->
+            TaskListPage
+
+        _ ->
+            if String.startsWith "/tasks/" url.path then
+                let
+                    taskId =
+                        String.dropFirst 7 url.path
+                in
+                if String.isEmpty taskId then
+                    TaskListPage
+                else
+                    TaskDetailPage taskId
+            else
+                NotFoundPage
+
+
+loadPageData : Page -> Cmd Msg
+loadPageData page =
+    when page is
+        DashboardPage ->
+            Api.getTasks Nothing GotTasks
+
+        TaskListPage ->
+            Api.getTasks Nothing GotTasks
+
+        TaskDetailPage taskId ->
+            Cmd.batch
+                [ Api.getTask taskId GotTask
+                , Api.getTaskHistory taskId GotHistory
+                , Api.getTaskQueue taskId GotQueue
+                ]
+
+        NotFoundPage ->
+            Cmd.none
+
+
+
+-- UPDATE
+
+
+update : Msg -> Model -> { model : Model, command : Cmd Msg }
+update msg model =
+    when msg is
+        LinkClicked urlRequest ->
+            when urlRequest is
+                Browser.Internal url ->
+                    { model = model
+                    , command = Nav.pushUrl model.key (Url.toString url)
+                    }
+
+                Browser.External href ->
+                    { model = model
+                    , command = Nav.load href
+                    }
+
+        UrlChanged url ->
+            let
+                page =
+                    urlToPage url
+            in
+            { model =
+                { model
+                    | page = page
+                    , selectedTask = Nothing
+                    , taskHistory = Nothing
+                    , taskQueue = Nothing
+                    , loading = True
+                }
+            , command = loadPageData page
+            }
+
+        GotTasks result ->
+            when result is
+                Ok tasks ->
+                    { model = { model | tasks = tasks, loading = False, error = Nothing }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | loading = False, error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
+        GotTask result ->
+            when result is
+                Ok task ->
+                    { model = { model | selectedTask = Just task, loading = False, error = Nothing }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | loading = False, error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
+        GotHistory result ->
+            when result is
+                Ok history ->
+                    { model = { model | taskHistory = Just history }
+                    , command = Cmd.none
+                    }
+
+                Err _ ->
+                    -- History fetch failure is non-critical
+                    { model = model
+                    , command = Cmd.none
+                    }
+
+        GotQueue result ->
+            when result is
+                Ok queue ->
+                    { model = { model | taskQueue = Just queue }
+                    , command = Cmd.none
+                    }
+
+                Err _ ->
+                    -- Queue fetch failure is non-critical
+                    { model = model
+                    , command = Cmd.none
+                    }
+
+        TaskCreated result ->
+            when result is
+                Ok task ->
+                    { model =
+                        { model
+                            | tasks = Array.pushLast task model.tasks
+                            , createForm = emptyCreateForm
+                            , error = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
+        StatusUpdated result ->
+            when result is
+                Ok updatedTask ->
+                    let
+                        updateTask t =
+                            if t.id == updatedTask.id then
+                                updatedTask
+                            else
+                                t
+
+                        newTasks =
+                            Array.map updateTask model.tasks
+
+                        newSelected =
+                            when model.selectedTask is
+                                Just selected ->
+                                    if selected.id == updatedTask.id then
+                                        Just updatedTask
+                                    else
+                                        model.selectedTask
+
+                                Nothing ->
+                                    Nothing
+                    in
+                    { model =
+                        { model
+                            | tasks = newTasks
+                            , selectedTask = newSelected
+                            , error = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
+        Poll now ->
+            { model = { model | lastPoll = now }
+            , command =
+                when model.page is
+                    DashboardPage ->
+                        Api.getTasks model.statusFilter GotTasks
+
+                    TaskListPage ->
+                        Api.getTasks model.statusFilter GotTasks
+
+                    TaskDetailPage taskId ->
+                        Cmd.batch
+                            [ Api.getTask taskId GotTask
+                            , Api.getTaskHistory taskId GotHistory
+                            ]
+
+                    NotFoundPage ->
+                        Cmd.none
+            }
+
+        SetStatusFilter filter ->
+            { model = { model | statusFilter = filter, loading = True }
+            , command = Api.getTasks filter GotTasks
+            }
+
+        OpenCreateForm ->
+            { model = { model | createForm = { emptyCreateForm | isOpen = True } }
+            , command = Cmd.none
+            }
+
+        CloseCreateForm ->
+            { model = { model | createForm = emptyCreateForm }
+            , command = Cmd.none
+            }
+
+        UpdateCreateTitle title ->
+            let
+                form =
+                    model.createForm
+            in
+            { model = { model | createForm = { form | title = title } }
+            , command = Cmd.none
+            }
+
+        SubmitCreateForm ->
+            if String.isEmpty (String.trim model.createForm.title) then
+                { model = { model | error = Just "Task title is required" }
+                , command = Cmd.none
+                }
+            else
+                { model = model
+                , command =
+                    Api.createTask
+                        { title = model.createForm.title
+                        , source =
+                            { sourceType = model.createForm.sourceType
+                            , userId = model.createForm.userId
+                            , conversationId = Nothing
+                            }
+                        }
+                        TaskCreated
+                }
+
+        UpdateTaskStatus { taskId, status } ->
+            { model = model
+            , command = Api.updateTaskStatus taskId status StatusUpdated
+            }
+
+        RefreshTask taskId ->
+            { model = { model | loading = True }
+            , command =
+                Cmd.batch
+                    [ Api.getTask taskId GotTask
+                    , Api.getTaskHistory taskId GotHistory
+                    , Api.getTaskQueue taskId GotQueue
+                    ]
+            }
+
+        ClearError ->
+            { model = { model | error = Nothing }
+            , command = Cmd.none
+            }
+
+
+
+-- SUBSCRIPTIONS
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _ =
+    -- Poll every 2 seconds for updates
+    Time.every 2000 Poll
+
+
+
+-- VIEW
+
+
+view : Model -> Browser.Document Msg
+view model =
+    { title = "Chorus - Task Registry"
+    , body =
+        [ div [ class "app" ]
+            [ viewHeader model
+            , viewError model.error
+            , viewMain model
+            ]
+        ]
+    }
+
+
+viewHeader : Model -> Html Msg
+viewHeader model =
+    header [ class "header" ]
+        [ div [ class "header-content" ]
+            [ h1 [] [ text "Chorus" ]
+            , nav [ class "nav" ]
+                [ a
+                    [ href "/"
+                    , classList [ { class = "active", enabled = model.page == DashboardPage } ]
+                    ]
+                    [ text "Dashboard" ]
+                , a
+                    [ href "/tasks"
+                    , classList
+                        [ { class = "active"
+                          , enabled =
+                                when model.page is
+                                    TaskListPage ->
+                                        True
+
+                                    TaskDetailPage _ ->
+                                        True
+
+                                    _ ->
+                                        False
+                          }
+                        ]
+                    ]
+                    [ text "Tasks" ]
+                ]
+            , button [ class "btn btn-primary", onClick OpenCreateForm ]
+                [ text "+ New Task" ]
+            ]
+        ]
+
+
+viewError : Maybe String -> Html Msg
+viewError maybeError =
+    when maybeError is
+        Nothing ->
+            text ""
+
+        Just error ->
+            div [ class "error-banner" ]
+                [ span [] [ text error ]
+                , button [ class "close-btn", onClick ClearError ] [ text "x" ]
+                ]
+
+
+viewMain : Model -> Html Msg
+viewMain model =
+    main_ [ class "main" ]
+        [ when model.page is
+            DashboardPage ->
+                Dashboard.view
+                    { tasks = model.tasks
+                    , loading = model.loading
+                    }
+
+            TaskListPage ->
+                div []
+                    [ TaskList.view
+                        { tasks = model.tasks
+                        , statusFilter = model.statusFilter
+                        , loading = model.loading
+                        , onFilterChange = SetStatusFilter
+                        , onStatusUpdate = \tid status -> UpdateTaskStatus { taskId = tid, status = status }
+                        }
+                    , viewCreateModal model
+                    ]
+
+            TaskDetailPage taskId ->
+                TaskDetail.view
+                    { task = model.selectedTask
+                    , history = model.taskHistory
+                    , queue = model.taskQueue
+                    , loading = model.loading
+                    , onStatusUpdate = \tid status -> UpdateTaskStatus { taskId = tid, status = status }
+                    , onRefresh = RefreshTask taskId
+                    }
+
+            NotFoundPage ->
+                div [ class "not-found" ]
+                    [ h2 [] [ text "Page Not Found" ]
+                    , p [] [ text "The page you requested does not exist." ]
+                    , a [ href "/" ] [ text "Go to Dashboard" ]
+                    ]
+        ]
+
+
+viewCreateModal : Model -> Html Msg
+viewCreateModal model =
+    if model.createForm.isOpen then
+        div [ class "modal-overlay", onClick CloseCreateForm ]
+            [ div
+                [ class "modal"
+                , Html.Events.stopPropagationOn "click" (Json.Decode.succeed { message = ClearError, stopPropagation = True })
+                ]
+                [ h2 [] [ text "Create New Task" ]
+                , Html.form [ onSubmit SubmitCreateForm ]
+                    [ div [ class "form-group" ]
+                        [ label [ for "title" ] [ text "Task Title" ]
+                        , input
+                            [ type_ "text"
+                            , id "title"
+                            , value model.createForm.title
+                            , onInput UpdateCreateTitle
+                            , placeholder "Enter task title..."
+                            , autofocus True
+                            ]
+                            []
+                        ]
+                    , div [ class "form-actions" ]
+                        [ button
+                            [ type_ "button"
+                            , class "btn btn-secondary"
+                            , onClick CloseCreateForm
+                            ]
+                            [ text "Cancel" ]
+                        , button
+                            [ type_ "submit"
+                            , class "btn btn-primary"
+                            ]
+                            [ text "Create" ]
+                        ]
+                    ]
+                ]
+            ]
+    else
+        text ""
+
+
+
+-- HELPERS
+
+
+httpErrorToString : Http.Error -> String
+httpErrorToString error =
+    when error is
+        Http.BadUrl url ->
+            "Invalid URL: " ++ url
+
+        Http.Timeout ->
+            "Request timed out"
+
+        Http.NetworkError ->
+            "Network error - check your connection"
+
+        Http.BadStatus status ->
+            "Server error: " ++ String.fromInt status
+
+        Http.BadBody body ->
+            "Invalid response: " ++ body

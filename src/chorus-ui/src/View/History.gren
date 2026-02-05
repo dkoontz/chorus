@@ -1,0 +1,123 @@
+module View.History exposing (view)
+
+{-| Event history timeline view.
+-}
+
+import Api
+import Dict exposing (Dict)
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Time
+
+
+type alias Props =
+    { history : Maybe Api.History
+    , loading : Bool
+    }
+
+
+view : Props -> Html msg
+view props =
+    div [ class "history-view" ]
+        [ h3 [] [ text "Event Timeline" ]
+        , when props.history is
+            Nothing ->
+                if props.loading then
+                    div [ class "loading" ] [ text "Loading history..." ]
+                else
+                    p [ class "empty-state" ] [ text "No history available" ]
+
+            Just history ->
+                viewTimeline history.events
+        ]
+
+
+viewTimeline : Array Api.Event -> Html msg
+viewTimeline events =
+    if Array.isEmpty events then
+        p [ class "empty-state" ] [ text "No events recorded" ]
+    else
+        div [ class "timeline" ]
+            (Array.map viewTimelineEvent (Array.reverse events))
+
+
+viewTimelineEvent : Api.Event -> Html msg
+viewTimelineEvent event =
+    div [ class ("timeline-event event-" ++ eventTypeClass event.eventType) ]
+        [ div [ class "timeline-marker" ] []
+        , div [ class "timeline-content" ]
+            [ div [ class "timeline-header" ]
+                [ span [ class "event-type" ] [ text (formatEventType event.eventType) ]
+                , span [ class "event-timestamp" ] [ text (formatTimestamp event.timestamp) ]
+                ]
+            , viewEventData event.data
+            ]
+        ]
+
+
+viewEventData : Dict String String -> Html msg
+viewEventData data =
+    if Dict.isEmpty data then
+        text ""
+    else
+        div [ class "event-data" ]
+            (Dict.foldl
+                (\key value acc -> Array.pushLast (viewDataItem { key = key, value = value }) acc)
+                []
+                data
+            )
+
+
+viewDataItem : { key : String, value : String } -> Html msg
+viewDataItem { key, value } =
+    div [ class "data-item" ]
+        [ span [ class "data-key" ] [ text key ]
+        , span [ class "data-value" ] [ text value ]
+        ]
+
+
+formatEventType : String -> String
+formatEventType eventType =
+    eventType
+        |> String.replace "_" " "
+        |> capitalizeFirst
+
+
+capitalizeFirst : String -> String
+capitalizeFirst str =
+    when String.popFirst str is
+        Nothing ->
+            ""
+
+        Just { first, rest } ->
+            String.toUpper (String.fromChar first) ++ rest
+
+
+eventTypeClass : String -> String
+eventTypeClass eventType =
+    when eventType is
+        "task_created" ->
+            "created"
+
+        "status_changed" ->
+            "status"
+
+        "message_received" ->
+            "message"
+
+        "session_started" ->
+            "session"
+
+        "session_ended" ->
+            "session"
+
+        "error" ->
+            "error"
+
+        _ ->
+            "default"
+
+
+formatTimestamp : Time.Posix -> String
+formatTimestamp posix =
+    String.fromInt (Time.posixToMillis posix)

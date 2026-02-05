@@ -75,3 +75,8 @@ Write your report to `REPORT_FILE` using this format:
 - Do NOT proceed if tests fail - fix the test failures first
 - Always verify your changes compile and pass tests before writing the report
 - Be honest about failures - do not report PASS if there were errors
+
+## Gren Language
+
+This project is being authored in the [Gren language](../docs/gren-language.md)
+Be sure to follow the [coding standards](../docs/coding-standards.md) for this project

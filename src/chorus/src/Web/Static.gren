@@ -1,0 +1,215 @@
+module Web.Static exposing
+    ( readStaticFile
+    , sendFileResponse
+    , Config
+    , StaticFileResult(..)
+    , FileData
+    )
+
+{-| Static file serving for the Chorus web interface.
+
+Serves frontend assets from the static/ directory with appropriate
+Content-Type headers based on file extension.
+
+-}
+
+import Bytes exposing (Bytes)
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import HttpServer.Response as Response exposing (Response)
+import Task as GrenTask
+
+
+-- TYPES
+
+
+{-| Configuration for static file serving.
+-}
+type alias Config =
+    { fsPermission : FileSystem.Permission
+    , staticRoot : Path
+    }
+
+
+{-| Data for a successfully read file.
+-}
+type alias FileData =
+    { bytes : Bytes
+    , contentType : String
+    }
+
+
+{-| Result of reading a static file.
+-}
+type StaticFileResult
+    = FileFound FileData
+    | FileNotFound String
+
+
+
+-- READING FILES
+
+
+{-| Read a static file and return the result via a message.
+
+Usage:
+    readStaticFile config "app.js" GotStaticFile
+
+-}
+readStaticFile : Config -> String -> (StaticFileResult -> msg) -> Cmd msg
+readStaticFile config relativePath toMsg =
+    let
+        filePath =
+            Path.append (Path.fromPosixString relativePath) config.staticRoot
+
+        contentType =
+            getContentType relativePath
+    in
+    FileSystem.readFile config.fsPermission filePath
+        |> GrenTask.map (\bytes -> FileFound { bytes = bytes, contentType = contentType })
+        |> GrenTask.onError
+            (\err ->
+                if FileSystem.errorIsNoSuchFileOrDirectory err then
+                    -- Try index.html for SPA routing
+                    if not (String.contains "." relativePath) then
+                        readIndexFile config
+                    else
+                        GrenTask.succeed (FileNotFound relativePath)
+                else
+                    GrenTask.succeed (FileNotFound relativePath)
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| Read index.html for SPA fallback routing.
+-}
+readIndexFile : Config -> GrenTask.Task Never StaticFileResult
+readIndexFile config =
+    let
+        indexPath =
+            Path.append (Path.fromPosixString "index.html") config.staticRoot
+    in
+    FileSystem.readFile config.fsPermission indexPath
+        |> GrenTask.map (\bytes -> FileFound { bytes = bytes, contentType = "text/html; charset=utf-8" })
+        |> GrenTask.onError (\_ -> GrenTask.succeed (FileNotFound "index.html"))
+
+
+
+-- SENDING RESPONSES
+
+
+{-| Send a response based on the static file result.
+-}
+sendFileResponse : Response -> StaticFileResult -> Cmd msg
+sendFileResponse response result =
+    when result is
+        FileFound fileData ->
+            response
+                |> Response.setHeader "Content-Type" fileData.contentType
+                |> Response.setBodyAsBytes fileData.bytes
+                |> Response.send
+
+        FileNotFound path ->
+            response
+                |> Response.setStatus 404
+                |> Response.setHeader "Content-Type" "text/html; charset=utf-8"
+                |> Response.setBody
+                    ("<!DOCTYPE html><html><head><title>404 Not Found</title></head>"
+                        ++ "<body><h1>404 Not Found</h1><p>File not found: "
+                        ++ path
+                        ++ "</p></body></html>"
+                    )
+                |> Response.send
+
+
+
+-- CONTENT TYPES
+
+
+{-| Get the Content-Type header value for a file path.
+-}
+getContentType : String -> String
+getContentType path =
+    let
+        extension =
+            path
+                |> String.split "."
+                |> Array.last
+                |> Maybe.withDefault ""
+                |> String.toLower
+    in
+    when extension is
+        "html" ->
+            "text/html; charset=utf-8"
+
+        "htm" ->
+            "text/html; charset=utf-8"
+
+        "css" ->
+            "text/css; charset=utf-8"
+
+        "js" ->
+            "application/javascript; charset=utf-8"
+
+        "json" ->
+            "application/json; charset=utf-8"
+
+        "png" ->
+            "image/png"
+
+        "jpg" ->
+            "image/jpeg"
+
+        "jpeg" ->
+            "image/jpeg"
+
+        "gif" ->
+            "image/gif"
+
+        "svg" ->
+            "image/svg+xml"
+
+        "ico" ->
+            "image/x-icon"
+
+        "woff" ->
+            "font/woff"
+
+        "woff2" ->
+            "font/woff2"
+
+        "ttf" ->
+            "font/ttf"
+
+        "eot" ->
+            "application/vnd.ms-fontobject"
+
+        "txt" ->
+            "text/plain; charset=utf-8"
+
+        "xml" ->
+            "application/xml; charset=utf-8"
+
+        "webp" ->
+            "image/webp"
+
+        "mp4" ->
+            "video/mp4"
+
+        "webm" ->
+            "video/webm"
+
+        "mp3" ->
+            "audio/mpeg"
+
+        "wav" ->
+            "audio/wav"
+
+        "pdf" ->
+            "application/pdf"
+
+        "zip" ->
+            "application/zip"
+
+        _ ->
+            "application/octet-stream"

@@ -338,13 +338,13 @@ update msg model =
 
 ## Differences from Other Languages
 
-| Concept | JavaScript | Gren |
-|---------|------------|------|
-| Null/undefined | Common source of errors | Does not exist, use `Maybe` |
-| Exceptions | Can be thrown anywhere | Not possible, use `Result` |
-| Mutation | Default behavior | Not possible, create new values |
-| Side effects | Can happen anywhere | Only through `Cmd`, managed by runtime |
-| Types | Dynamic, checked at runtime | Static, checked at compile time |
+| Concept        | JavaScript                  | Gren                                   |
+| -------------- | --------------------------- | -------------------------------------- |
+| Null/undefined | Common source of errors     | Does not exist, use `Maybe`            |
+| Exceptions     | Can be thrown anywhere      | Not possible, use `Result`             |
+| Mutation       | Default behavior            | Not possible, create new values        |
+| Side effects   | Can happen anywhere         | Only through `Cmd`, managed by runtime |
+| Types          | Dynamic, checked at runtime | Static, checked at compile time        |
 
 ## Key Differences from Elm
 
@@ -394,12 +394,12 @@ items = [ "one", "two", "three" ]
 
 Several common functions have been renamed for clarity:
 
-| Elm | Gren | Rationale |
-|-----|------|-----------|
-| `filter` | `keepIf` | Describes what it does |
-| `filterMap` | `mapAndKeepJust` | Describes the two operations |
-| `flatMap` | `mapAndFlatten` | Describes the two operations |
-| `length` (non-constant time) | `count` | `length` implies O(1) |
+| Elm                          | Gren             | Rationale                    |
+| ---------------------------- | ---------------- | ---------------------------- |
+| `filter`                     | `keepIf`         | Describes what it does       |
+| `filterMap`                  | `mapAndKeepJust` | Describes the two operations |
+| `flatMap`                    | `mapAndFlatten`  | Describes the two operations |
+| `length` (non-constant time) | `count`          | `length` implies O(1)        |
 
 ### Record Updates with Any Expression
 
@@ -529,6 +529,10 @@ Gren.Main.init({
   }
 })
 ```
+
+## Installing Packages
+
+Always use the `gren package install` CLI command to install packages, do not edit the gren.json file directly.
 
 ## Resources
 

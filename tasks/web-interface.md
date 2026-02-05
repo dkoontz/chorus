@@ -10,20 +10,19 @@ Build a full-featured web interface for testing task creation and displaying tas
 
 ### Completed
 
-(None yet)
+- [x] Phase 1: Backend HTTP Server
+- [x] Phase 2: API Endpoints
+- [x] Phase 3: Static File Serving
+- [x] Phase 4: Frontend Application
+- [x] Phase 5: Real-Time Polling
 
 ### In Progress
 
-(None yet)
+(None)
 
 ### Not Started
 
-- [ ] Phase 1: Backend HTTP Server
-- [ ] Phase 2: API Endpoints
-- [ ] Phase 3: Static File Serving
-- [ ] Phase 4: Frontend Application
-- [ ] Phase 5: Real-Time Polling
-- [ ] Phase 6: Polish
+- [ ] Phase 6: Polish (error handling improvements, styling refinements)
 
 ## Architecture
 
@@ -221,7 +220,8 @@ gren-lang/node 6.1.0 includes HttpServer module.
   "dependencies": {
     "direct": {
       "gren-lang/core": "7.0.0",
-      "gren-lang/browser": "4.0.0"
+      "gren-lang/browser": "6.0.2",
+      "gren-lang/url": "6.0.0"
     }
   }
 }
@@ -241,32 +241,46 @@ gren-lang/node 6.1.0 includes HttpServer module.
 
 ### Functional Requirements
 
-- [ ] Create tasks via web form
-- [ ] Display task list with status filtering
-- [ ] View single task details
-- [ ] Update task status via UI
-- [ ] View task event history
-- [ ] Inspect message queue
-- [ ] Add messages to queue
-- [ ] Real-time updates (within 2 seconds)
+- [x] Create tasks via web form
+- [x] Display task list with status filtering
+- [x] View single task details
+- [x] Update task status via UI
+- [x] View task event history
+- [x] Inspect message queue
+- [x] Add messages to queue
+- [x] Real-time updates (within 2 seconds)
 
 ### Non-Functional Requirements
 
-- [ ] All-Gren implementation (no JavaScript wrappers)
-- [ ] Clean, usable interface
-- [ ] Graceful error handling
-- [ ] Works on localhost for development
+- [x] All-Gren implementation (no JavaScript wrappers)
+- [x] Clean, usable interface
+- [ ] Graceful error handling (basic implementation done)
+- [x] Works on localhost for development
 
 ## Acceptance Criteria
 
-- [ ] Backend serves HTTP on configurable port
-- [ ] All API endpoints return valid JSON
-- [ ] Frontend loads and displays task list
-- [ ] Can create a task through the UI
-- [ ] Task status changes reflect in UI within 2 seconds
-- [ ] History view shows event timeline
-- [ ] Queue inspection works correctly
-- [ ] Static files served correctly (JS, CSS, HTML)
+- [x] Backend serves HTTP on configurable port
+- [x] All API endpoints return valid JSON
+- [x] Frontend loads and displays task list
+- [x] Can create a task through the UI
+- [x] Task status changes reflect in UI within 2 seconds
+- [x] History view shows event timeline
+- [x] Queue inspection works correctly
+- [x] Static files served correctly (JS, CSS, HTML)
+
+## How to Run
+
+```bash
+cd src/chorus
+
+# Development (quick start)
+npm run dev
+
+# Full build with UI
+npm run start
+```
+
+Server runs on http://localhost:8080
 
 ## Testing
 

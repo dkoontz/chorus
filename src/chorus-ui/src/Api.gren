@@ -1,0 +1,394 @@
+module Api exposing
+    ( Task
+    , TaskStatus(..)
+    , SourceInfo
+    , History
+    , Event
+    , Queue
+    , QueuedMessage
+    , getTasks
+    , getTask
+    , createTask
+    , updateTaskStatus
+    , getTaskHistory
+    , getTaskQueue
+    , statusToString
+    , statusFromString
+    )
+
+{-| HTTP client for the Chorus API.
+
+Provides functions to interact with the backend REST API for task management.
+
+-}
+
+import Dict exposing (Dict)
+import Http
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+import Time
+
+
+-- TYPES
+
+
+{-| A task in the registry.
+-}
+type alias Task =
+    { id : String
+    , title : String
+    , status : TaskStatus
+    , createdAt : Time.Posix
+    , updatedAt : Time.Posix
+    , sessionId : Maybe String
+    , source : SourceInfo
+    , agentWorkspace : String
+    }
+
+
+{-| Task lifecycle status.
+-}
+type TaskStatus
+    = Pending
+    | Active
+    | Waiting
+    | Completed
+    | Failed String
+
+
+{-| Information about where the task originated.
+-}
+type alias SourceInfo =
+    { sourceType : String
+    , userId : String
+    , conversationId : Maybe String
+    }
+
+
+{-| Task event history.
+-}
+type alias History =
+    { events : Array Event
+    }
+
+
+{-| A single event in task history.
+-}
+type alias Event =
+    { timestamp : Time.Posix
+    , eventType : String
+    , data : Dict String String
+    }
+
+
+{-| Task message queue.
+-}
+type alias Queue =
+    { messages : Array QueuedMessage
+    }
+
+
+{-| A queued message.
+-}
+type alias QueuedMessage =
+    { id : String
+    , content : String
+    , receivedAt : Time.Posix
+    }
+
+
+
+-- API FUNCTIONS
+
+
+{-| Get all tasks, optionally filtered by status.
+-}
+getTasks : Maybe String -> (Result Http.Error (Array Task) -> msg) -> Cmd msg
+getTasks maybeStatus toMsg =
+    let
+        url =
+            when maybeStatus is
+                Just status ->
+                    "/api/tasks?status=" ++ status
+
+                Nothing ->
+                    "/api/tasks"
+    in
+    Http.get
+        { url = url
+        , expect = Http.expectJson toMsg (dataDecoder (Decode.array taskDecoder))
+        }
+
+
+{-| Get a single task by ID.
+-}
+getTask : String -> (Result Http.Error Task -> msg) -> Cmd msg
+getTask taskId toMsg =
+    Http.get
+        { url = "/api/tasks/" ++ taskId
+        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        }
+
+
+{-| Create a new task.
+-}
+createTask :
+    { title : String, source : SourceInfo }
+    -> (Result Http.Error Task -> msg)
+    -> Cmd msg
+createTask { title, source } toMsg =
+    Http.post
+        { url = "/api/tasks"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ { key = "title", value = Encode.string title }
+                    , { key = "source", value = encodeSourceInfo source }
+                    ]
+                )
+        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        }
+
+
+{-| Update a task's status.
+-}
+updateTaskStatus :
+    String
+    -> String
+    -> (Result Http.Error Task -> msg)
+    -> Cmd msg
+updateTaskStatus taskId statusStr toMsg =
+    let
+        statusValue =
+            when statusStr is
+                "failed" ->
+                    Encode.object
+                        [ { key = "type", value = Encode.string "failed" }
+                        , { key = "message", value = Encode.string "" }
+                        ]
+
+                _ ->
+                    Encode.object
+                        [ { key = "type", value = Encode.string statusStr }
+                        ]
+    in
+    Http.request
+        { method = "PUT"
+        , headers = []
+        , url = "/api/tasks/" ++ taskId ++ "/status"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ { key = "status", value = statusValue }
+                    ]
+                )
+        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+{-| Get task event history.
+-}
+getTaskHistory : String -> (Result Http.Error History -> msg) -> Cmd msg
+getTaskHistory taskId toMsg =
+    Http.get
+        { url = "/api/tasks/" ++ taskId ++ "/history"
+        , expect = Http.expectJson toMsg (dataDecoder historyDecoder)
+        }
+
+
+{-| Get task message queue.
+-}
+getTaskQueue : String -> (Result Http.Error Queue -> msg) -> Cmd msg
+getTaskQueue taskId toMsg =
+    Http.get
+        { url = "/api/tasks/" ++ taskId ++ "/queue"
+        , expect = Http.expectJson toMsg (dataDecoder queueDecoder)
+        }
+
+
+
+-- DECODERS
+
+
+{-| Decode the data field from the standard response wrapper.
+-}
+dataDecoder : Decoder a -> Decoder a
+dataDecoder decoder =
+    Decode.field "data" decoder
+
+
+taskDecoder : Decoder Task
+taskDecoder =
+    Decode.map8
+        (\id title status createdAt updatedAt sessionId source agentWorkspace ->
+            { id = id
+            , title = title
+            , status = status
+            , createdAt = createdAt
+            , updatedAt = updatedAt
+            , sessionId = sessionId
+            , source = source
+            , agentWorkspace = agentWorkspace
+            }
+        )
+        (Decode.field "id" Decode.string)
+        (Decode.field "title" Decode.string)
+        (Decode.field "status" statusDecoder)
+        (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "sessionId" (Decode.maybe Decode.string))
+        (Decode.field "source" sourceInfoDecoder)
+        (Decode.field "agentWorkspace" Decode.string)
+
+
+statusDecoder : Decoder TaskStatus
+statusDecoder =
+    Decode.field "type" Decode.string
+        |> Decode.andThen
+            (\statusType ->
+                when statusType is
+                    "pending" ->
+                        Decode.succeed Pending
+
+                    "active" ->
+                        Decode.succeed Active
+
+                    "waiting" ->
+                        Decode.succeed Waiting
+
+                    "completed" ->
+                        Decode.succeed Completed
+
+                    "failed" ->
+                        Decode.field "message" Decode.string
+                            |> Decode.map Failed
+
+                    _ ->
+                        Decode.fail ("Unknown status type: " ++ statusType)
+            )
+
+
+sourceInfoDecoder : Decoder SourceInfo
+sourceInfoDecoder =
+    Decode.map3
+        (\sourceType userId conversationId ->
+            { sourceType = sourceType
+            , userId = userId
+            , conversationId = conversationId
+            }
+        )
+        (Decode.field "sourceType" Decode.string)
+        (Decode.field "userId" Decode.string)
+        (Decode.maybe (Decode.field "conversationId" Decode.string))
+
+
+historyDecoder : Decoder History
+historyDecoder =
+    Decode.map (\events -> { events = events })
+        (Decode.field "events" (Decode.array eventDecoder))
+
+
+eventDecoder : Decoder Event
+eventDecoder =
+    Decode.map3
+        (\timestamp eventType data ->
+            { timestamp = timestamp
+            , eventType = eventType
+            , data = data
+            }
+        )
+        (Decode.field "timestamp" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "eventType" Decode.string)
+        (Decode.field "data" (Decode.dict Decode.string))
+
+
+queueDecoder : Decoder Queue
+queueDecoder =
+    Decode.map (\messages -> { messages = messages })
+        (Decode.field "messages" (Decode.array messageDecoder))
+
+
+messageDecoder : Decoder QueuedMessage
+messageDecoder =
+    Decode.map3
+        (\id content receivedAt ->
+            { id = id
+            , content = content
+            , receivedAt = receivedAt
+            }
+        )
+        (Decode.field "id" Decode.string)
+        (Decode.field "content" Decode.string)
+        (Decode.field "receivedAt" (Decode.map Time.millisToPosix Decode.int))
+
+
+
+-- ENCODERS
+
+
+encodeSourceInfo : SourceInfo -> Encode.Value
+encodeSourceInfo source =
+    Encode.object
+        [ { key = "sourceType", value = Encode.string source.sourceType }
+        , { key = "userId", value = Encode.string source.userId }
+        , { key = "conversationId"
+          , value =
+                when source.conversationId is
+                    Just id ->
+                        Encode.string id
+
+                    Nothing ->
+                        Encode.null
+          }
+        ]
+
+
+
+-- HELPERS
+
+
+{-| Convert status to display string.
+-}
+statusToString : TaskStatus -> String
+statusToString status =
+    when status is
+        Pending ->
+            "pending"
+
+        Active ->
+            "active"
+
+        Waiting ->
+            "waiting"
+
+        Completed ->
+            "completed"
+
+        Failed _ ->
+            "failed"
+
+
+{-| Parse status from string.
+-}
+statusFromString : String -> Maybe TaskStatus
+statusFromString str =
+    when str is
+        "pending" ->
+            Just Pending
+
+        "active" ->
+            Just Active
+
+        "waiting" ->
+            Just Waiting
+
+        "completed" ->
+            Just Completed
+
+        "failed" ->
+            Just (Failed "")
+
+        _ ->
+            Nothing
