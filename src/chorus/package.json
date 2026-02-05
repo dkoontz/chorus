@@ -6,7 +6,7 @@
   "scripts": {
     "build": "gren make Main --output=build/chorus.js",
     "test:unit": "cd tests/unit && gren make TestRunner --output=../../build/unit-tests.js && cd ../.. && node build/run-unit-tests.js",
-    "test:integration": "cd tests/integration && gren make Main --output=../../build/integration-tests.js && cd ../.. && node build/integration-tests.js",
+    "test:integration": "cd tests/integration && gren make IntegrationRunner --output=../../build/integration-tests.js && cd ../.. && node build/run-integration-tests.js",
     "test": "npm run test:unit && npm run test:integration",
     "clean": "rm -rf build"
   }

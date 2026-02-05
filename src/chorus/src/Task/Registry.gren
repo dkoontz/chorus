@@ -157,20 +157,11 @@ ensureRegistryIndex : FileSystem.Permission -> Path -> GrenTask.Task Error {}
 ensureRegistryIndex fsPermission registryRoot =
     let
         indexPath =
-            Path.append registryRoot (Path.fromPosixString "registry.json")
+            Path.append (Path.fromPosixString "registry.json") registryRoot
 
         emptyIndex =
-            Encode.object
-                [ { key = "version", value = Encode.int 1 }
-                , { key = "tasks", value = Encode.array encodeTaskSummary [] }
-                ]
+            encodeRegistryIndex { version = 1, tasks = [] }
                 |> Encode.encode 2
-
-        -- Placeholder encoder for task summaries in the index
-        encodeTaskSummary task =
-            Encode.object
-                [ { key = "id", value = Encode.string task.id }
-                ]
     in
     -- Try to access the file - if it succeeds, file exists; if it fails with ENOENT, create it
     FileSystem.checkAccess fsPermission [] indexPath
@@ -196,21 +187,155 @@ createTask :
     -> { title : String, source : SourceInfo }
     -> GrenTask.Task Error Task
 createTask (Registry config) { title, source } =
-    -- TODO: Implement
-    -- 1. Generate UUID
-    -- 2. Create task directory
-    -- 3. Create workspace directory
-    -- 4. Write task.json, queue.json, history.json
-    -- 5. Update registry.json index
-    GrenTask.fail (FileSystemError "Not implemented")
+    -- 1. Generate UUID and get current time
+    Crypto.randomUuidV4 config.secureContext
+        |> GrenTask.mapError (\_ -> FileSystemError "Failed to generate UUID")
+        |> GrenTask.andThen
+            (\taskId ->
+                Time.now
+                    |> GrenTask.mapError (\_ -> FileSystemError "Failed to get time")
+                    |> GrenTask.map (\now -> { taskId = taskId, now = now })
+            )
+        |> GrenTask.andThen
+            (\{ taskId, now } ->
+                let
+                    taskDir =
+                        Path.append (Path.fromPosixString taskId) config.registryRoot
+
+                    workspaceDir =
+                        Path.append (Path.fromPosixString taskId) config.workspacesRoot
+
+                    task =
+                        { id = taskId
+                        , title = title
+                        , status = Pending
+                        , createdAt = now
+                        , updatedAt = now
+                        , sessionId = Nothing
+                        , source = source
+                        , agentWorkspace = Path.toPosixString workspaceDir
+                        }
+                in
+                -- 2. Create task directory
+                ensureDirectoryExists config.fsPermission taskDir
+                    -- 3. Create workspace directory
+                    |> GrenTask.andThen (\_ -> ensureDirectoryExists config.fsPermission workspaceDir)
+                    -- 4. Write task.json
+                    |> GrenTask.andThen
+                        (\_ ->
+                            let
+                                taskPath =
+                                    Path.append (Path.fromPosixString "task.json") taskDir
+
+                                taskJson =
+                                    encodeTask task
+                                        |> Encode.encode 2
+                            in
+                            writeFileAtomic config.fsPermission taskPath taskJson
+                                |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+                        )
+                    -- 5. Write queue.json (empty queue)
+                    |> GrenTask.andThen
+                        (\_ ->
+                            let
+                                queuePath =
+                                    Path.append (Path.fromPosixString "queue.json") taskDir
+
+                                queueJson =
+                                    encodeEmptyQueue
+                                        |> Encode.encode 2
+                            in
+                            writeFileAtomic config.fsPermission queuePath queueJson
+                                |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+                        )
+                    -- 6. Write history.json with task_created event
+                    |> GrenTask.andThen
+                        (\_ ->
+                            let
+                                historyPath =
+                                    Path.append (Path.fromPosixString "history.json") taskDir
+
+                                initialEvent =
+                                    { timestamp = now
+                                    , eventType = "task_created"
+                                    , data = Dict.singleton "title" title
+                                    }
+
+                                historyJson =
+                                    encodeHistory [ initialEvent ]
+                                        |> Encode.encode 2
+                            in
+                            writeFileAtomic config.fsPermission historyPath historyJson
+                                |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+                        )
+                    -- 7. Update registry.json index
+                    |> GrenTask.andThen
+                        (\_ ->
+                            updateRegistryIndex config.fsPermission config.registryRoot
+                                (\index ->
+                                    let
+                                        summary =
+                                            { id = taskId
+                                            , title = title
+                                            , status = Pending
+                                            , createdAt = now
+                                            , updatedAt = now
+                                            }
+                                    in
+                                    { index | tasks = Array.pushLast summary index.tasks }
+                                )
+                        )
+                    |> GrenTask.map (\_ -> task)
+            )
 
 
 {-| Get a task by ID.
 -}
 getTask : Registry -> String -> GrenTask.Task Error (Maybe Task)
 getTask (Registry config) taskId =
-    -- TODO: Implement - read task.json from task directory
-    GrenTask.fail (FileSystemError "Not implemented")
+    let
+        taskDir =
+            Path.append (Path.fromPosixString taskId) config.registryRoot
+
+        taskPath =
+            Path.append (Path.fromPosixString "task.json") taskDir
+    in
+    FileSystem.readFile config.fsPermission taskPath
+        |> GrenTask.onError
+            (\err ->
+                if FileSystem.errorIsNoSuchFileOrDirectory err then
+                    -- Convert to a special marker that we'll handle below
+                    GrenTask.fail err
+                else
+                    GrenTask.fail err
+            )
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        GrenTask.fail (JsonDecodeError "Could not decode file as UTF-8")
+
+                    Just content ->
+                        when Decode.decodeString taskDecoder content is
+                            Ok task ->
+                                GrenTask.succeed (Just task)
+
+                            Err err ->
+                                GrenTask.fail (JsonDecodeError (Decode.errorToString err))
+            )
+        |> GrenTask.onError
+            (\err ->
+                when err is
+                    FileSystemError msg ->
+                        if String.contains "ENOENT" msg || String.contains "no such file" msg then
+                            GrenTask.succeed Nothing
+                        else
+                            GrenTask.fail err
+
+                    _ ->
+                        GrenTask.fail err
+            )
 
 
 {-| Update a task.
@@ -220,9 +345,60 @@ updateTask :
     -> String
     -> (Task -> Task)
     -> GrenTask.Task Error Task
-updateTask registry taskId updateFn =
-    -- TODO: Implement
-    GrenTask.fail (FileSystemError "Not implemented")
+updateTask (Registry config) taskId updateFn =
+    getTask (Registry config) taskId
+        |> GrenTask.andThen
+            (\maybeTask ->
+                when maybeTask is
+                    Nothing ->
+                        GrenTask.fail (TaskNotFound taskId)
+
+                    Just task ->
+                        Time.now
+                            |> GrenTask.mapError (\_ -> FileSystemError "Failed to get time")
+                            |> GrenTask.andThen
+                                (\now ->
+                                    let
+                                        updatedTask =
+                                            updateFn task
+                                                |> (\t -> { t | updatedAt = now })
+
+                                        taskDir =
+                                            Path.append (Path.fromPosixString taskId) config.registryRoot
+
+                                        taskPath =
+                                            Path.append (Path.fromPosixString "task.json") taskDir
+
+                                        taskJson =
+                                            encodeTask updatedTask
+                                                |> Encode.encode 2
+                                    in
+                                    writeFileAtomic config.fsPermission taskPath taskJson
+                                        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+                                        |> GrenTask.andThen
+                                            (\_ ->
+                                                -- Update registry index with new status/updatedAt
+                                                updateRegistryIndex config.fsPermission config.registryRoot
+                                                    (\index ->
+                                                        { index
+                                                            | tasks =
+                                                                Array.map
+                                                                    (\summary ->
+                                                                        if summary.id == taskId then
+                                                                            { summary
+                                                                                | status = updatedTask.status
+                                                                                , updatedAt = now
+                                                                            }
+                                                                        else
+                                                                            summary
+                                                                    )
+                                                                    index.tasks
+                                                        }
+                                                    )
+                                            )
+                                        |> GrenTask.map (\_ -> updatedTask)
+                                )
+            )
 
 
 {-| Update just the task status.
@@ -240,8 +416,40 @@ updateStatus registry taskId newStatus =
 -}
 listTasks : Registry -> Maybe TaskStatus -> GrenTask.Task Error (Array Task)
 listTasks (Registry config) maybeStatus =
-    -- TODO: Implement - read registry.json, load each task
-    GrenTask.fail (FileSystemError "Not implemented")
+    readRegistryIndex config.fsPermission config.registryRoot
+        |> GrenTask.andThen
+            (\index ->
+                let
+                    filteredSummaries =
+                        when maybeStatus is
+                            Nothing ->
+                                index.tasks
+
+                            Just status ->
+                                Array.keepIf (\s -> statusEquals s.status status) index.tasks
+                in
+                -- Load each task from disk
+                filteredSummaries
+                    |> Array.foldl
+                        (\summary acc ->
+                            acc
+                                |> GrenTask.andThen
+                                    (\tasks ->
+                                        getTask (Registry config) summary.id
+                                            |> GrenTask.map
+                                                (\maybeTask ->
+                                                    when maybeTask is
+                                                        Just task ->
+                                                            Array.pushLast task tasks
+
+                                                        Nothing ->
+                                                            -- Task file missing, skip it
+                                                            tasks
+                                                )
+                                    )
+                        )
+                        (GrenTask.succeed [])
+            )
 
 
 {-| Get currently active tasks.
@@ -255,8 +463,13 @@ getActiveTasks registry =
 -}
 getRecentTasks : Registry -> Int -> GrenTask.Task Error (Array Task)
 getRecentTasks registry limit =
-    -- TODO: Implement - list all, sort by updatedAt, take limit
-    GrenTask.fail (FileSystemError "Not implemented")
+    listTasks registry Nothing
+        |> GrenTask.map
+            (\tasks ->
+                tasks
+                    |> Array.sortBy (\t -> negate (Time.posixToMillis t.updatedAt))
+                    |> Array.takeFirst limit
+            )
 
 
 {-| Record an event to the task's history.
@@ -267,8 +480,38 @@ recordEvent :
     -> { eventType : String, data : Dict String String }
     -> GrenTask.Task Error {}
 recordEvent (Registry config) taskId event =
-    -- TODO: Implement - append to history.json
-    GrenTask.fail (FileSystemError "Not implemented")
+    let
+        taskDir =
+            Path.append (Path.fromPosixString taskId) config.registryRoot
+
+        historyPath =
+            Path.append (Path.fromPosixString "history.json") taskDir
+    in
+    Time.now
+        |> GrenTask.mapError (\_ -> FileSystemError "Failed to get time")
+        |> GrenTask.andThen
+            (\now ->
+                readHistory config.fsPermission historyPath
+                    |> GrenTask.andThen
+                        (\events ->
+                            let
+                                newEvent =
+                                    { timestamp = now
+                                    , eventType = event.eventType
+                                    , data = event.data
+                                    }
+
+                                updatedEvents =
+                                    Array.pushLast newEvent events
+
+                                historyJson =
+                                    encodeHistory updatedEvents
+                                        |> Encode.encode 2
+                            in
+                            writeFileAtomic config.fsPermission historyPath historyJson
+                                |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+                        )
+            )
 
 
 
@@ -408,6 +651,223 @@ sourceInfoDecoder =
 
 
 
+-- REGISTRY INDEX TYPES AND OPERATIONS
+
+
+{-| Summary of a task stored in the registry index.
+-}
+type alias TaskSummary =
+    { id : String
+    , title : String
+    , status : TaskStatus
+    , createdAt : Time.Posix
+    , updatedAt : Time.Posix
+    }
+
+
+{-| Registry index stored in registry.json.
+-}
+type alias RegistryIndex =
+    { version : Int
+    , tasks : Array TaskSummary
+    }
+
+
+{-| Read the registry index from disk.
+-}
+readRegistryIndex : FileSystem.Permission -> Path -> GrenTask.Task Error RegistryIndex
+readRegistryIndex fsPermission registryRoot =
+    let
+        indexPath =
+            Path.append (Path.fromPosixString "registry.json") registryRoot
+    in
+    FileSystem.readFile fsPermission indexPath
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        GrenTask.fail (JsonDecodeError "Could not decode file as UTF-8")
+
+                    Just content ->
+                        when Decode.decodeString registryIndexDecoder content is
+                            Ok index ->
+                                GrenTask.succeed index
+
+                            Err err ->
+                                GrenTask.fail (JsonDecodeError (Decode.errorToString err))
+            )
+
+
+{-| Update the registry index atomically.
+-}
+updateRegistryIndex :
+    FileSystem.Permission
+    -> Path
+    -> (RegistryIndex -> RegistryIndex)
+    -> GrenTask.Task Error {}
+updateRegistryIndex fsPermission registryRoot updateFn =
+    readRegistryIndex fsPermission registryRoot
+        |> GrenTask.andThen
+            (\index ->
+                let
+                    updatedIndex =
+                        updateFn index
+
+                    indexPath =
+                        Path.append (Path.fromPosixString "registry.json") registryRoot
+
+                    indexJson =
+                        encodeRegistryIndex updatedIndex
+                            |> Encode.encode 2
+                in
+                writeFileAtomic fsPermission indexPath indexJson
+                    |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+            )
+
+
+encodeRegistryIndex : RegistryIndex -> Encode.Value
+encodeRegistryIndex index =
+    Encode.object
+        [ { key = "version", value = Encode.int index.version }
+        , { key = "tasks", value = Encode.array encodeTaskSummary index.tasks }
+        ]
+
+
+encodeTaskSummary : TaskSummary -> Encode.Value
+encodeTaskSummary summary =
+    Encode.object
+        [ { key = "id", value = Encode.string summary.id }
+        , { key = "title", value = Encode.string summary.title }
+        , { key = "status", value = encodeStatus summary.status }
+        , { key = "createdAt", value = Encode.int (Time.posixToMillis summary.createdAt) }
+        , { key = "updatedAt", value = Encode.int (Time.posixToMillis summary.updatedAt) }
+        ]
+
+
+registryIndexDecoder : Decoder RegistryIndex
+registryIndexDecoder =
+    Decode.map2
+        (\version tasks -> { version = version, tasks = tasks })
+        (Decode.field "version" Decode.int)
+        (Decode.field "tasks" (Decode.array taskSummaryDecoder))
+
+
+taskSummaryDecoder : Decoder TaskSummary
+taskSummaryDecoder =
+    Decode.map5
+        (\id title status createdAt updatedAt ->
+            { id = id
+            , title = title
+            , status = status
+            , createdAt = createdAt
+            , updatedAt = updatedAt
+            }
+        )
+        (Decode.field "id" Decode.string)
+        (Decode.field "title" Decode.string)
+        (Decode.field "status" statusDecoder)
+        (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
+
+
+
+-- HISTORY OPERATIONS
+
+
+{-| Read history events from disk.
+-}
+readHistory : FileSystem.Permission -> Path -> GrenTask.Task Error (Array Event)
+readHistory fsPermission path =
+    FileSystem.readFile fsPermission path
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        GrenTask.fail (JsonDecodeError "Could not decode file as UTF-8")
+
+                    Just content ->
+                        when Decode.decodeString historyDecoder content is
+                            Ok events ->
+                                GrenTask.succeed events
+
+                            Err err ->
+                                GrenTask.fail (JsonDecodeError (Decode.errorToString err))
+            )
+
+
+encodeHistory : Array Event -> Encode.Value
+encodeHistory events =
+    Encode.object
+        [ { key = "events", value = Encode.array encodeEvent events }
+        ]
+
+
+encodeEvent : Event -> Encode.Value
+encodeEvent event =
+    Encode.object
+        [ { key = "timestamp", value = Encode.int (Time.posixToMillis event.timestamp) }
+        , { key = "eventType", value = Encode.string event.eventType }
+        , { key = "data", value = Encode.dict identity Encode.string event.data }
+        ]
+
+
+historyDecoder : Decoder (Array Event)
+historyDecoder =
+    Decode.field "events" (Decode.array eventDecoder)
+
+
+eventDecoder : Decoder Event
+eventDecoder =
+    Decode.map3
+        (\timestamp eventType data ->
+            { timestamp = timestamp
+            , eventType = eventType
+            , data = data
+            }
+        )
+        (Decode.field "timestamp" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "eventType" Decode.string)
+        (Decode.field "data" (Decode.dict Decode.string))
+
+
+encodeEmptyQueue : Encode.Value
+encodeEmptyQueue =
+    Encode.object
+        [ { key = "messages", value = Encode.array identity [] }
+        ]
+
+
+
+-- STATUS HELPERS
+
+
+{-| Check if two statuses are equal (for filtering).
+-}
+statusEquals : TaskStatus -> TaskStatus -> Bool
+statusEquals a b =
+    when { a = a, b = b } is
+        { a = Pending, b = Pending } ->
+            True
+
+        { a = Active, b = Active } ->
+            True
+
+        { a = Waiting, b = Waiting } ->
+            True
+
+        { a = Completed, b = Completed } ->
+            True
+
+        { a = Failed _, b = Failed _ } ->
+            True
+
+        _ ->
+            False
+
+
+
 -- FILE HELPERS
 
 
@@ -423,5 +883,5 @@ writeFileAtomic fsPermission path content =
             Bytes.fromString content
     in
     FileSystem.writeFile fsPermission bytes tempPath
-        |> GrenTask.andThen (\_ -> FileSystem.move fsPermission tempPath path)
+        |> GrenTask.andThen (\_ -> FileSystem.move fsPermission path tempPath)
         |> GrenTask.map (\_ -> {})

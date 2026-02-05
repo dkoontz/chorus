@@ -1,5 +1,6 @@
 module Task.Queue exposing
     ( QueuedMessage
+    , Error(..)
     , enqueue
     , dequeue
     , peek
@@ -81,7 +82,7 @@ enqueue :
 enqueue fsPermission secureContext taskDir taskId content =
     let
         queuePath =
-            Path.append taskDir (Path.fromPosixString "queue.json")
+            Path.append (Path.fromPosixString "queue.json") taskDir
     in
     Crypto.randomUuidV4 secureContext
         |> GrenTask.mapError (\_ -> FileSystemError "Failed to generate UUID")
@@ -120,7 +121,7 @@ dequeue :
 dequeue fsPermission taskDir =
     let
         queuePath =
-            Path.append taskDir (Path.fromPosixString "queue.json")
+            Path.append (Path.fromPosixString "queue.json") taskDir
     in
     readQueue fsPermission queuePath
         |> GrenTask.andThen
@@ -148,7 +149,7 @@ peek :
 peek fsPermission taskDir =
     let
         queuePath =
-            Path.append taskDir (Path.fromPosixString "queue.json")
+            Path.append (Path.fromPosixString "queue.json") taskDir
     in
     readQueue fsPermission queuePath
         |> GrenTask.map (\queue -> Array.first queue.messages)
@@ -163,7 +164,7 @@ isEmpty :
 isEmpty fsPermission taskDir =
     let
         queuePath =
-            Path.append taskDir (Path.fromPosixString "queue.json")
+            Path.append (Path.fromPosixString "queue.json") taskDir
     in
     readQueue fsPermission queuePath
         |> GrenTask.map (\queue -> Array.isEmpty queue.messages)
@@ -178,7 +179,7 @@ length :
 length fsPermission taskDir =
     let
         queuePath =
-            Path.append taskDir (Path.fromPosixString "queue.json")
+            Path.append (Path.fromPosixString "queue.json") taskDir
     in
     readQueue fsPermission queuePath
         |> GrenTask.map (\queue -> Array.length queue.messages)
@@ -226,7 +227,7 @@ writeQueue fsPermission path queue =
             Bytes.fromString content
     in
     FileSystem.writeFile fsPermission bytes tempPath
-        |> GrenTask.andThen (\_ -> FileSystem.move fsPermission tempPath path)
+        |> GrenTask.andThen (\_ -> FileSystem.move fsPermission path tempPath)
         |> GrenTask.map (\_ -> {})
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
 

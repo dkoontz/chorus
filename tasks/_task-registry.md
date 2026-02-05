@@ -6,6 +6,46 @@ Implement a task registry module (`Task.Registry`) within the main Chorus applic
 
 **Important:** The task registry is system-level infrastructure managed directly by the Chorus application. Agents do not have access to read or modify the registry - they only see their sandboxed workspace directory.
 
+## Progress
+
+### Completed ✅
+
+- [x] Project structure created (`src/chorus/`)
+- [x] `gren.json` and `package.json` configured
+- [x] `Task.Registry` module skeleton with data types
+- [x] `Task.Queue` module skeleton with data types
+- [x] JSON encoding/decoding for Task, TaskStatus, SourceInfo
+- [x] JSON encoding/decoding for Queue, QueuedMessage
+- [x] Unit test infrastructure (`tests/unit/TestRunner.gren`)
+- [x] 8 unit tests passing (serialization round-trips)
+- [x] Atomic file write helper (`writeFileAtomic`)
+- [x] Registry initialization (`init`) - creates directories and registry.json
+
+### In Progress 🔄
+
+(None - all planned items complete)
+
+### Not Started ❌
+
+(None - all planned items complete)
+
+### Recently Completed ✅
+
+- [x] Queue integration tests (6 tests: enqueue, dequeue FIFO, dequeue empty, peek, isEmpty, length)
+- [x] Integration tests for Registry operations (12 tests passing)
+- [x] `createTask` - generate UUID, create directories, write task.json/queue.json/history.json, update registry index
+- [x] `getTask` - read task.json from disk, handle missing files gracefully
+- [x] `updateTask` / `updateStatus` - modify and persist task, update registry index
+- [x] `listTasks` - read registry.json index, load tasks, filter by status
+- [x] `getActiveTasks` / `getRecentTasks` - filter and sort task queries
+- [x] `recordEvent` - append events to history.json
+- [x] Registry index types (TaskSummary, RegistryIndex) with JSON encoding/decoding
+- [x] History event types with JSON encoding/decoding
+- [x] Status equality helper for filtering
+- [x] Path.append argument order fixed (Gren uses `append child parent`)
+- [x] FileSystem.move argument order fixed (destination then source)
+- [x] Queue.Error type exported for integration tests
+
 ## Location
 
 This module is part of the main Chorus application:
@@ -19,13 +59,15 @@ src/chorus/
 │   │   └── Queue.gren       # Message queue operations
 │   └── ...
 ├── tests/
-│   ├── unit/
-│   │   ├── Main.gren
-│   │   ├── RegistryTests.gren
-│   │   └── QueueTests.gren
-│   └── integration/
-│       ├── Main.gren
-│       └── RegistryScenarios.gren
+│   └── unit/
+│       ├── gren.json
+│       ├── TestRunner.gren   # Test entry point
+│       ├── RegistryTests.gren
+│       └── QueueTests.gren
+├── build/
+│   ├── chorus.js
+│   ├── unit-tests.js
+│   └── run-unit-tests.js    # Wrapper to init Gren runtime
 ├── gren.json
 └── package.json
 ```
@@ -305,23 +347,23 @@ length : Registry -> String -> Task (Result Error Int)
 
 ### Functional Requirements
 
-- [ ] Create new tasks with GUID-based unique IDs
-- [ ] Persist task state to disk as JSON (survives restart)
-- [ ] Update task status through lifecycle
-- [ ] Queue messages for tasks (FIFO)
-- [ ] Dequeue messages when task is ready
-- [ ] List tasks by status (for UI and triage)
-- [ ] Get recent tasks (for triage context)
-- [ ] Record structured events to history.json
-- [ ] Create corresponding agent workspace directory
+- [x] Create new tasks with GUID-based unique IDs
+- [x] Persist task state to disk as JSON (survives restart)
+- [x] Update task status through lifecycle
+- [x] Queue messages for tasks (FIFO)
+- [x] Dequeue messages when task is ready
+- [x] List tasks by status (for UI and triage)
+- [x] Get recent tasks (for triage context)
+- [x] Record structured events to history.json
+- [x] Create corresponding agent workspace directory
 
 ### Non-Functional Requirements
 
-- [ ] File operations are atomic (write to temp, then rename)
-- [ ] Always read from disk (no in-memory caching for v1)
-- [ ] Single-writer assumed (no concurrent access handling needed for v1)
-- [ ] Task IDs are GUIDs for uniqueness and isolation
-- [ ] Clear separation: registry files are system-only, workspaces are agent-accessible
+- [x] File operations are atomic (write to temp, then rename)
+- [x] Always read from disk (no in-memory caching for v1)
+- [x] Single-writer assumed (no concurrent access handling needed for v1)
+- [x] Task IDs are GUIDs for uniqueness and isolation
+- [x] Clear separation: registry files are system-only, workspaces are agent-accessible
 
 ## Implementation Notes
 
@@ -435,11 +477,11 @@ init env =
 
 ## Acceptance Criteria
 
-- [ ] Can create tasks with GUID IDs
-- [ ] Task directories created in both registry and workspace roots
-- [ ] Tasks persist across application restarts
-- [ ] Task status transitions work correctly
-- [ ] Message queue works correctly (FIFO)
-- [ ] History events are recorded as structured JSON
-- [ ] Active/recent task queries work for triage
-- [ ] Agent workspace is separate from registry storage
+- [x] Can create tasks with GUID IDs
+- [x] Task directories created in both registry and workspace roots
+- [x] Tasks persist across application restarts
+- [x] Task status transitions work correctly
+- [x] Message queue works correctly (FIFO)
+- [x] History events are recorded as structured JSON
+- [x] Active/recent task queries work for triage
+- [x] Agent workspace is separate from registry storage
