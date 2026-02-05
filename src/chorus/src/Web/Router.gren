@@ -20,14 +20,17 @@ import HttpServer exposing (Method(..))
 {-| All routes handled by the API.
 -}
 type Route
-    = ListTasks (Maybe String)        -- GET /api/tasks?status=...
-    | GetTask String                   -- GET /api/tasks/:id
-    | CreateTask                       -- POST /api/tasks
-    | UpdateTaskStatus String          -- PUT /api/tasks/:id/status
-    | GetTaskHistory String            -- GET /api/tasks/:id/history
-    | GetTaskQueue String              -- GET /api/tasks/:id/queue
-    | EnqueueMessage String            -- POST /api/tasks/:id/queue
-    | StaticFile String                -- GET /* (for frontend assets)
+    = ListTasks (Maybe String)                -- GET /api/tasks?status=...
+    | GetTask String                           -- GET /api/tasks/:id
+    | CreateTask                               -- POST /api/tasks
+    | UpdateTaskStatus String                  -- PUT /api/tasks/:id/status
+    | GetTaskHistory String                    -- GET /api/tasks/:id/history
+    | GetTaskQueue String                      -- GET /api/tasks/:id/queue
+    | EnqueueMessage String                    -- POST /api/tasks/:id/queue
+    | UploadAttachment { taskId : String, filename : String }   -- POST /api/tasks/:id/attachments?filename=...
+    | DownloadAttachment { taskId : String, filename : String } -- GET /api/tasks/:id/attachments/:filename
+    | DeleteAttachment { taskId : String, filename : String }   -- DELETE /api/tasks/:id/attachments/:filename
+    | StaticFile String                        -- GET /* (for frontend assets)
     | NotFound
 
 
@@ -76,6 +79,29 @@ parseRoute method path =
 
         { method = POST, segments = [ "api", "tasks", taskId, "queue" ] } ->
             EnqueueMessage taskId
+
+        { method = POST, segments = [ "api", "tasks", taskId, "attachments" ] } ->
+            when Dict.get "filename" queryParams is
+                Just filename ->
+                    if isValidFilename filename then
+                        UploadAttachment { taskId = taskId, filename = filename }
+                    else
+                        NotFound
+
+                Nothing ->
+                    NotFound
+
+        { method = GET, segments = [ "api", "tasks", taskId, "attachments", filename ] } ->
+            if isValidFilename filename then
+                DownloadAttachment { taskId = taskId, filename = filename }
+            else
+                NotFound
+
+        { method = DELETE, segments = [ "api", "tasks", taskId, "attachments", filename ] } ->
+            if isValidFilename filename then
+                DeleteAttachment { taskId = taskId, filename = filename }
+            else
+                NotFound
 
         -- Static files (anything not matching /api/*)
         { method = GET, segments = segs } ->
@@ -147,6 +173,20 @@ segmentsToPath segments =
         String.join "/" segments
 
 
+{-| Check if a filename is safe to use in file paths.
+
+Rejects empty filenames and filenames containing path traversal
+sequences (..) or path separators (/ and \).
+
+-}
+isValidFilename : String -> Bool
+isValidFilename name =
+    not (String.isEmpty name)
+        && not (String.contains ".." name)
+        && not (String.contains "/" name)
+        && not (String.contains "\\" name)
+
+
 
 -- DEBUG
 
@@ -181,6 +221,15 @@ routeToString route =
 
         EnqueueMessage id ->
             "EnqueueMessage(" ++ id ++ ")"
+
+        UploadAttachment { taskId } ->
+            "UploadAttachment(" ++ taskId ++ ")"
+
+        DownloadAttachment { taskId, filename } ->
+            "DownloadAttachment(" ++ taskId ++ ", " ++ filename ++ ")"
+
+        DeleteAttachment { taskId, filename } ->
+            "DeleteAttachment(" ++ taskId ++ ", " ++ filename ++ ")"
 
         StaticFile path ->
             "StaticFile(" ++ path ++ ")"

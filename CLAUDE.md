@@ -76,6 +76,14 @@ npm run test:integration  # Integration tests only
 - `src/tools/` - File tools
 - `docker-data/` - Persistent data directory (Docker volume mount)
 
+## Command Line Tools
+
+Prefer these tools over their slower alternatives:
+
+- `rg` (ripgrep) instead of `grep`
+- `fd` instead of `find`
+- `jq` instead of using Python to parse/validate JSON
+
 ## Key Constraints
 
 - Do not create `src/chorus/data/` - data lives only in Docker volume mount

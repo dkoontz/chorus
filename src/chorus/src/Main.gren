@@ -75,6 +75,7 @@ type alias Config =
     , registryRoot : String
     , workspacesRoot : String
     , staticRoot : String
+    , uploadDir : String
     , logLevel : LogLevel
     }
 
@@ -92,6 +93,7 @@ defaultConfig =
     , registryRoot = "./data/registry"
     , workspacesRoot = "./data/workspaces"
     , staticRoot = "./static"
+    , uploadDir = "./data/uploads"
     , logLevel = LogInfo
     }
 
@@ -130,12 +132,17 @@ configFromEnv envVars config =
             Dict.get "CHORUS_LOG_LEVEL" envVars
                 |> Maybe.andThen Logging.parseLogLevel
                 |> Maybe.withDefault config.logLevel
+
+        uploadDir =
+            Dict.get "CHORUS_UPLOAD_DIR" envVars
+                |> Maybe.withDefault (dataDir ++ "/uploads")
     in
     { host = host
     , port_ = port_
     , registryRoot = dataDir ++ "/registry"
     , workspacesRoot = dataDir ++ "/workspaces"
     , staticRoot = staticRoot
+    , uploadDir = uploadDir
     , logLevel = logLevel
     }
 
@@ -149,6 +156,7 @@ type Msg
     | GotRequest { request : HttpServer.Request, response : Response }
     | GotStaticFile { id : Int, response : Response, result : Static.StaticFileResult }
     | GotApiResult { response : Response, result : Api.ApiResult }
+    | GotBinaryResult { response : Response, result : Api.BinaryResult }
     | NoOp
 
 
@@ -297,6 +305,11 @@ update msg model =
             , command = Api.sendApiResponse response result
             }
 
+        GotBinaryResult { response, result } ->
+            { model = model
+            , command = Api.sendBinaryResponse response result
+            }
+
         NoOp ->
             { model = model
             , command = Cmd.none
@@ -371,6 +384,19 @@ handleRoute model route request response =
                                 Err errMsg ->
                                     sendBadRequest response errMsg
 
+                        Router.UploadAttachment { taskId, filename } ->
+                            Api.requestUploadAttachment ctx taskId filename request.body model.config.uploadDir toMsg
+
+                        Router.DownloadAttachment { taskId, filename } ->
+                            let
+                                toBinaryMsg =
+                                    \binaryResult -> GotBinaryResult { response = response, result = binaryResult }
+                            in
+                            Api.requestDownloadAttachment ctx taskId filename model.config.uploadDir toBinaryMsg
+
+                        Router.DeleteAttachment { taskId, filename } ->
+                            Api.requestDeleteAttachment ctx taskId filename model.config.uploadDir toMsg
+
                         Router.NotFound ->
                             sendNotFound response
 
@@ -423,12 +449,12 @@ parseCreateTaskBody request =
     let
         decoder =
             Decode.map2
-                (\title source ->
-                    { title = title
+                (\description source ->
+                    { description = description
                     , source = source
                     }
                 )
-                (Decode.field "title" Decode.string)
+                (Decode.field "description" Decode.string)
                 (Decode.field "source" sourceDecoder)
 
         sourceDecoder =

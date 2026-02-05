@@ -1,1 +1,1 @@
-- [ ] Document the hook that loads .env in CLAUDE.md so agents understand how to set up environment variables. 
+- [ ] 

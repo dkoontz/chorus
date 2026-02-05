@@ -52,7 +52,7 @@ FROM --platform=linux/amd64 node:22-bookworm-slim AS runtime
 WORKDIR /app
 
 # Create data directory (will be overridden by volume mount)
-RUN mkdir -p /app/data/registry /app/data/workspaces
+RUN mkdir -p /app/data/registry /app/data/workspaces /app/data/uploads
 
 # Create .claude directory for auth persistence
 RUN mkdir -p /root/.claude
@@ -71,6 +71,7 @@ ENV CHORUS_HOST=0.0.0.0
 ENV CHORUS_PORT=8080
 ENV CHORUS_DATA_DIR=/app/data
 ENV CHORUS_STATIC_DIR=/app/static
+ENV CHORUS_UPLOAD_DIR=/app/data/uploads
 ENV CHORUS_LOG_LEVEL=info
 
 # Expose port

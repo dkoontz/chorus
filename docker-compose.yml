@@ -16,5 +16,6 @@ services:
       - CHORUS_PORT=8080
       - CHORUS_DATA_DIR=/app/data
       - CHORUS_STATIC_DIR=/app/static
+      - CHORUS_UPLOAD_DIR=/app/data/uploads
       - CHORUS_LOG_LEVEL=${CHORUS_LOG_LEVEL:-info}
     restart: unless-stopped

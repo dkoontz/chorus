@@ -1,3 +1,7 @@
+## Gren Language
+
+This project is being authored in the [Gren language](../docs/gren-language.md)
+
 # Chorus Coding Standards
 
 This document defines the coding conventions for the Chorus project. All Gren code should follow these standards.
@@ -112,15 +116,15 @@ Because the constructor `UserId` is not exported, external code must use `fromSt
 
 ### Common cases for newtypes
 
-| Data | Why not String? |
-|------|-----------------|
-| `UserId` | Has format rules, different from other IDs |
-| `Email` | Must contain @, has local and domain parts |
-| `Url` | Has scheme, host, path structure |
-| `FilePath` | Must be validated for path traversal |
-| `Port` | Must be 1-65535, should probably be Int-based |
-| `JsonString` | Must be valid JSON |
-| `Regex` | Must be a valid regex pattern |
+| Data         | Why not String?                               |
+| ------------ | --------------------------------------------- |
+| `UserId`     | Has format rules, different from other IDs    |
+| `Email`      | Must contain @, has local and domain parts    |
+| `Url`        | Has scheme, host, path structure              |
+| `FilePath`   | Must be validated for path traversal          |
+| `Port`       | Must be 1-65535, should probably be Int-based |
+| `JsonString` | Must be valid JSON                            |
+| `Regex`      | Must be a valid regex pattern                 |
 
 ### Example: FilePath with validation
 

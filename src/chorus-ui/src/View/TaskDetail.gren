@@ -5,9 +5,11 @@ module View.TaskDetail exposing (view)
 
 import Api
 import Dict exposing (Dict)
+import File
 import Html exposing (..)
 import Html.Attributes exposing (..)
-import Html.Events exposing (onClick)
+import Html.Events exposing (onClick, on)
+import Json.Decode
 import Time
 
 
@@ -18,6 +20,8 @@ type alias Props msg =
     , loading : Bool
     , onStatusUpdate : String -> String -> msg
     , onRefresh : msg
+    , onFileSelected : File.File -> msg
+    , onDeleteAttachment : String -> msg
     }
 
 
@@ -42,6 +46,7 @@ viewTask props task =
         [ viewTaskHeader props task
         , div [ class "task-detail-grid" ]
             [ viewTaskInfo task
+            , viewAttachments props task
             , viewTaskHistory props.history
             , viewTaskQueue props.queue
             ]
@@ -53,7 +58,7 @@ viewTaskHeader props task =
     div [ class "task-detail-header" ]
         [ div [ class "task-title-row" ]
             [ a [ href "/tasks", class "back-link" ] [ text "< Back to Tasks" ]
-            , h2 [] [ text task.title ]
+            , h2 [] [ text task.description ]
             , button
                 [ class "btn btn-small btn-secondary"
                 , onClick props.onRefresh
@@ -149,6 +154,63 @@ viewTaskInfo task =
             , dd [] [ text (formatTimestamp task.updatedAt) ]
             ]
         ]
+
+
+viewAttachments : Props msg -> Api.Task -> Html msg
+viewAttachments props task =
+    div [ class "task-attachments card" ]
+        [ h3 [] [ text "Attachments" ]
+        , if Array.isEmpty task.attachments then
+            p [ class "empty-state" ] [ text "No attachments" ]
+          else
+            ul [ class "attachment-list" ]
+                (Array.map (viewAttachment props task.id) task.attachments)
+        , div [ class "attachment-upload" ]
+            [ label [ class "btn btn-secondary" ]
+                [ text "Upload File"
+                , input
+                    [ type_ "file"
+                    , style "display" "none"
+                    , on "change"
+                        (Json.Decode.at [ "target", "files", "0" ] File.decoder
+                            |> Json.Decode.map props.onFileSelected
+                        )
+                    ]
+                    []
+                ]
+            ]
+        ]
+
+
+viewAttachment : Props msg -> String -> Api.Attachment -> Html msg
+viewAttachment props taskId attachment =
+    li [ class "attachment-item" ]
+        [ a
+            [ href ("/api/tasks/" ++ taskId ++ "/attachments/" ++ attachment.filename)
+            , target "_blank"
+            , class "attachment-link"
+            ]
+            [ text attachment.filename ]
+        , span [ class "attachment-size" ]
+            [ text (formatFileSize attachment.size) ]
+        , span [ class "attachment-time" ]
+            [ text (formatTimestamp attachment.uploadedAt) ]
+        , button
+            [ class "btn btn-small btn-danger"
+            , onClick (props.onDeleteAttachment attachment.filename)
+            ]
+            [ text "Delete" ]
+        ]
+
+
+formatFileSize : Int -> String
+formatFileSize bytes =
+    if bytes < 1024 then
+        String.fromInt bytes ++ " B"
+    else if bytes < 1024 * 1024 then
+        String.fromInt (bytes // 1024) ++ " KB"
+    else
+        String.fromInt (bytes // (1024 * 1024)) ++ " MB"
 
 
 viewTaskHistory : Maybe Api.History -> Html msg

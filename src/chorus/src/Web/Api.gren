@@ -1,5 +1,6 @@
 module Web.Api exposing
     ( ApiResult(..)
+    , BinaryResult(..)
     , requestTasks
     , requestTask
     , requestCreateTask
@@ -7,7 +8,11 @@ module Web.Api exposing
     , requestHistory
     , requestQueue
     , requestEnqueue
+    , requestUploadAttachment
+    , requestDownloadAttachment
+    , requestDeleteAttachment
     , sendApiResponse
+    , sendBinaryResponse
     , CreateTaskParams
     )
 
@@ -17,7 +22,7 @@ Each endpoint produces an ApiResult that should be sent back via the Response.
 
 -}
 
-import Bytes
+import Bytes exposing (Bytes)
 import Crypto exposing (SecureContext)
 import Dict exposing (Dict)
 import FileSystem
@@ -56,9 +61,16 @@ type ApiResult
 {-| Parameters for creating a task.
 -}
 type alias CreateTaskParams =
-    { title : String
+    { description : String
     , source : Registry.SourceInfo
     }
+
+
+{-| Result of a binary file operation (for attachment downloads).
+-}
+type BinaryResult
+    = BinarySuccess { bytes : Bytes.Bytes, contentType : String }
+    | BinaryError { statusCode : Int, code : String, message : String }
 
 
 
@@ -131,7 +143,7 @@ requestTask ctx taskId toMsg =
 requestCreateTask : ApiContext -> CreateTaskParams -> (ApiResult -> msg) -> Cmd msg
 requestCreateTask ctx params toMsg =
     Registry.createTask ctx.registry
-        { title = params.title
+        { description = params.description
         , source = params.source
         }
         |> GrenTask.andThen
@@ -308,6 +320,202 @@ requestEnqueue ctx taskId content toMsg =
 
 
 
+{-| POST /api/tasks/:id/attachments?filename=... - Upload a file attachment.
+-}
+requestUploadAttachment :
+    ApiContext
+    -> String
+    -> String
+    -> Bytes.Bytes
+    -> String
+    -> (ApiResult -> msg)
+    -> Cmd msg
+requestUploadAttachment ctx taskId filename fileBytes uploadDir toMsg =
+    let
+        maxSize =
+            10 * 1024 * 1024  -- 10MB
+
+        fileSize =
+            Bytes.length fileBytes
+    in
+    if fileSize > maxSize then
+        GrenTask.succeed (ApiError { statusCode = 413, code = "FILE_TOO_LARGE", message = "Upload exceeds 10MB limit" })
+            |> GrenTask.perform toMsg
+    else
+        let
+            contentType =
+                Registry.contentTypeFromExtension filename
+
+            taskUploadDir =
+                Path.append (Path.fromPosixString taskId) (Path.fromPosixString uploadDir)
+
+            filePath =
+                Path.append (Path.fromPosixString filename) taskUploadDir
+        in
+        -- Create the per-task upload directory
+        FileSystem.makeDirectory ctx.fsPermission { recursive = True } taskUploadDir
+            |> GrenTask.mapError (\e -> Registry.FileSystemError (FileSystem.errorToString e))
+            |> GrenTask.andThen
+                (\_ ->
+                    -- Write the file
+                    FileSystem.writeFile ctx.fsPermission fileBytes filePath
+                        |> GrenTask.mapError (\e -> Registry.FileSystemError (FileSystem.errorToString e))
+                )
+            |> GrenTask.andThen
+                (\_ ->
+                    -- Get current time for the attachment metadata
+                    Time.now
+                        |> GrenTask.mapError (\_ -> Registry.FileSystemError "Failed to get time")
+                )
+            |> GrenTask.andThen
+                (\now ->
+                    let
+                        attachment =
+                            { filename = filename
+                            , size = fileSize
+                            , contentType = contentType
+                            , uploadedAt = now
+                            }
+                    in
+                    -- Update the task to add the attachment metadata
+                    Registry.updateTask ctx.registry taskId
+                        (\task ->
+                            { task | attachments = Array.pushLast attachment task.attachments }
+                        )
+                        |> GrenTask.map
+                            (\updatedTask ->
+                                ApiSuccess
+                                    { statusCode = 200
+                                    , body =
+                                        wrapResponse (Registry.encodeTask updatedTask) now
+                                    }
+                            )
+                )
+            |> GrenTask.onError
+                (\err ->
+                    GrenTask.succeed (ApiError { statusCode = 500, code = "UPLOAD_ERROR", message = registryErrorToString err })
+                )
+            |> GrenTask.perform toMsg
+
+
+{-| GET /api/tasks/:id/attachments/:filename - Download a file attachment.
+-}
+requestDownloadAttachment :
+    ApiContext
+    -> String
+    -> String
+    -> String
+    -> (BinaryResult -> msg)
+    -> Cmd msg
+requestDownloadAttachment ctx taskId filename uploadDir toMsg =
+    let
+        taskUploadDir =
+            Path.append (Path.fromPosixString taskId) (Path.fromPosixString uploadDir)
+
+        filePath =
+            Path.append (Path.fromPosixString filename) taskUploadDir
+    in
+    -- First get the task to find the content type
+    Registry.getTask ctx.registry taskId
+        |> GrenTask.andThen
+            (\maybeTask ->
+                when maybeTask is
+                    Nothing ->
+                        GrenTask.fail (Registry.TaskNotFound taskId)
+
+                    Just task ->
+                        let
+                            maybeAttachment =
+                                Array.findFirst (\a -> a.filename == filename) task.attachments
+                        in
+                        when maybeAttachment is
+                            Nothing ->
+                                GrenTask.fail (Registry.FileSystemError ("Attachment not found: " ++ filename))
+
+                            Just { value } ->
+                                FileSystem.readFile ctx.fsPermission filePath
+                                    |> GrenTask.mapError (\e -> Registry.FileSystemError (FileSystem.errorToString e))
+                                    |> GrenTask.map
+                                        (\bytes ->
+                                            BinarySuccess
+                                                { bytes = bytes
+                                                , contentType = value.contentType
+                                                }
+                                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                let
+                    errMsg =
+                        registryErrorToString err
+                in
+                if String.contains "ENOENT" errMsg || String.contains "no such file" errMsg then
+                    GrenTask.succeed (BinaryError { statusCode = 404, code = "NOT_FOUND", message = "Attachment not found: " ++ filename })
+                else
+                    GrenTask.succeed (BinaryError { statusCode = 500, code = "DOWNLOAD_ERROR", message = errMsg })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| DELETE /api/tasks/:id/attachments/:filename - Delete a file attachment.
+-}
+requestDeleteAttachment :
+    ApiContext
+    -> String
+    -> String
+    -> String
+    -> (ApiResult -> msg)
+    -> Cmd msg
+requestDeleteAttachment ctx taskId filename uploadDir toMsg =
+    let
+        taskUploadDir =
+            Path.append (Path.fromPosixString taskId) (Path.fromPosixString uploadDir)
+
+        filePath =
+            Path.append (Path.fromPosixString filename) taskUploadDir
+    in
+    -- Delete the file from disk
+    FileSystem.remove ctx.fsPermission { recursive = False } filePath
+        |> GrenTask.mapError (\e -> Registry.FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.andThen
+            (\_ ->
+                -- Remove the attachment entry from the task
+                Registry.updateTask ctx.registry taskId
+                    (\task ->
+                        { task
+                            | attachments =
+                                Array.keepIf (\a -> a.filename /= filename) task.attachments
+                        }
+                    )
+            )
+        |> GrenTask.andThen
+            (\updatedTask ->
+                Time.now
+                    |> GrenTask.mapError (\_ -> Registry.FileSystemError "Failed to get time")
+                    |> GrenTask.map
+                        (\now ->
+                            ApiSuccess
+                                { statusCode = 200
+                                , body =
+                                    wrapResponse (Registry.encodeTask updatedTask) now
+                                }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                let
+                    errMsg =
+                        registryErrorToString err
+                in
+                if String.contains "ENOENT" errMsg || String.contains "no such file" errMsg then
+                    GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Attachment not found: " ++ filename })
+                else
+                    GrenTask.succeed (ApiError { statusCode = 500, code = "DELETE_ERROR", message = errMsg })
+            )
+        |> GrenTask.perform toMsg
+
+
+
 -- RESPONSE SENDING
 
 
@@ -324,6 +532,40 @@ sendApiResponse response result =
                 |> Response.send
 
         ApiError { statusCode, code, message } ->
+            let
+                errorBody =
+                    Encode.object
+                        [ { key = "error"
+                          , value =
+                                Encode.object
+                                    [ { key = "code", value = Encode.string code }
+                                    , { key = "message", value = Encode.string message }
+                                    ]
+                          }
+                        ]
+                        |> Encode.encode 0
+            in
+            response
+                |> Response.setStatus statusCode
+                |> Response.setHeader "Content-Type" "application/json"
+                |> Response.setBody errorBody
+                |> Response.send
+
+
+
+{-| Send a binary response (for file downloads).
+-}
+sendBinaryResponse : Response -> BinaryResult -> Cmd msg
+sendBinaryResponse response result =
+    when result is
+        BinarySuccess { bytes, contentType } ->
+            response
+                |> Response.setStatus 200
+                |> Response.setHeader "Content-Type" contentType
+                |> Response.setBodyAsBytes bytes
+                |> Response.send
+
+        BinaryError { statusCode, code, message } ->
             let
                 errorBody =
                     Encode.object

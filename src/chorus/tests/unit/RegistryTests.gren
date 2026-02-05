@@ -6,7 +6,7 @@ module RegistryTests exposing (tests)
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task
-import Task.Registry as Registry exposing (Task, TaskStatus(..), SourceInfo)
+import Task.Registry as Registry exposing (Task, TaskStatus(..), SourceInfo, Attachment)
 import Time
 
 
@@ -17,6 +17,10 @@ tests =
     , testStatusActive
     , testStatusFailed
     , testSourceInfoEncodeDecode
+    , testAttachmentRoundTrip
+    , testBackwardCompatMissingAttachments
+    , testMalformedAttachmentMissingField
+    , testMalformedAttachmentWrongType
     ]
 
 
@@ -46,7 +50,7 @@ testTaskEncodeDecode =
         let
             task =
                 { id = "test-id-123"
-                , title = "Test Task"
+                , description = "Test Task"
                 , status = Pending
                 , createdAt = Time.millisToPosix 1707048600000
                 , updatedAt = Time.millisToPosix 1707048600000
@@ -57,6 +61,7 @@ testTaskEncodeDecode =
                     , conversationId = Nothing
                     }
                 , agentWorkspace = "/tmp/workspace"
+                , attachments = []
                 }
 
             encoded =
@@ -106,7 +111,7 @@ testStatusRoundTrip status =
     let
         task =
             { id = "test"
-            , title = "Test"
+            , description = "Test"
             , status = status
             , createdAt = Time.millisToPosix 0
             , updatedAt = Time.millisToPosix 0
@@ -117,6 +122,7 @@ testStatusRoundTrip status =
                 , conversationId = Nothing
                 }
             , agentWorkspace = "/tmp"
+            , attachments = []
             }
 
         encoded =
@@ -143,7 +149,7 @@ testSourceInfoEncodeDecode =
         let
             task =
                 { id = "test"
-                , title = "Test"
+                , description = "Test"
                 , status = Pending
                 , createdAt = Time.millisToPosix 0
                 , updatedAt = Time.millisToPosix 0
@@ -154,6 +160,7 @@ testSourceInfoEncodeDecode =
                     , conversationId = Just "thread-456"
                     }
                 , agentWorkspace = "/tmp"
+                , attachments = []
                 }
 
             encoded =
@@ -174,4 +181,152 @@ testSourceInfoEncodeDecode =
 
             Err err ->
                 Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testAttachmentRoundTrip : { name : String, run : Task.Task String {} }
+testAttachmentRoundTrip =
+    { name = "Task with attachments encodes and decodes correctly"
+    , run =
+        let
+            attachment1 =
+                { filename = "readme.md"
+                , size = 1024
+                , contentType = "text/markdown"
+                , uploadedAt = Time.millisToPosix 1707048700000
+                }
+
+            attachment2 =
+                { filename = "data.csv"
+                , size = 2048
+                , contentType = "text/csv"
+                , uploadedAt = Time.millisToPosix 1707048800000
+                }
+
+            task =
+                { id = "test-attach"
+                , description = "Task with attachments"
+                , status = Pending
+                , createdAt = Time.millisToPosix 1707048600000
+                , updatedAt = Time.millisToPosix 1707048600000
+                , sessionId = Nothing
+                , source =
+                    { sourceType = "terminal"
+                    , userId = "testuser"
+                    , conversationId = Nothing
+                    }
+                , agentWorkspace = "/tmp/workspace"
+                , attachments = [ attachment1, attachment2 ]
+                }
+
+            encoded =
+                Registry.encodeTask task
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Registry.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                expectEqual 2 (Array.length decodedTask.attachments)
+                    |> Task.andThen
+                        (\_ ->
+                            when Array.first decodedTask.attachments is
+                                Just a ->
+                                    expectEqual "readme.md" a.filename
+                                        |> Task.andThen (\_ -> expectEqual 1024 a.size)
+                                        |> Task.andThen (\_ -> expectEqual "text/markdown" a.contentType)
+                                        |> Task.andThen (\_ -> expectEqual (Time.millisToPosix 1707048700000) a.uploadedAt)
+
+                                Nothing ->
+                                    Task.fail "First attachment was Nothing"
+                        )
+                    |> Task.andThen
+                        (\_ ->
+                            when Array.get 1 decodedTask.attachments is
+                                Just a ->
+                                    expectEqual "data.csv" a.filename
+                                        |> Task.andThen (\_ -> expectEqual 2048 a.size)
+                                        |> Task.andThen (\_ -> expectEqual "text/csv" a.contentType)
+                                        |> Task.andThen (\_ -> expectEqual (Time.millisToPosix 1707048800000) a.uploadedAt)
+
+                                Nothing ->
+                                    Task.fail "Second attachment was Nothing"
+                        )
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testBackwardCompatMissingAttachments : { name : String, run : Task.Task String {} }
+testBackwardCompatMissingAttachments =
+    { name = "Task JSON without attachments field decodes with empty array"
+    , run =
+        let
+            -- Manually constructed JSON without the "attachments" key
+            json =
+                "{\"id\":\"old-task\",\"description\":\"Legacy task\",\"status\":{\"type\":\"pending\"},\"createdAt\":1707048600000,\"updatedAt\":1707048600000,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"tester\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\"}"
+
+            decoded =
+                Decode.decodeString Registry.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                expectEqual "old-task" decodedTask.id
+                    |> Task.andThen (\_ -> expectEqual "Legacy task" decodedTask.description)
+                    |> Task.andThen (\_ -> expectEqual [] decodedTask.attachments)
+
+            Err err ->
+                Task.fail ("Decode should have succeeded but failed: " ++ Decode.errorToString err)
+    }
+
+
+testMalformedAttachmentMissingField : { name : String, run : Task.Task String {} }
+testMalformedAttachmentMissingField =
+    { name = "Task with malformed attachment falls back to empty array"
+    , run =
+        let
+            -- Attachment is missing the "contentType" field.
+            -- The Decode.oneOf in taskDecoder falls back to [] when
+            -- the attachments array fails to decode.
+            json =
+                "{\"id\":\"bad-task\",\"description\":\"Bad\",\"status\":{\"type\":\"pending\"},\"createdAt\":0,\"updatedAt\":0,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"test\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[{\"filename\":\"f.txt\",\"size\":100,\"uploadedAt\":0}]}"
+
+            decoded =
+                Decode.decodeString Registry.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                expectEqual "bad-task" decodedTask.id
+                    |> Task.andThen (\_ -> expectEqual [] decodedTask.attachments)
+
+            Err err ->
+                Task.fail ("Decode failed unexpectedly: " ++ Decode.errorToString err)
+    }
+
+
+testMalformedAttachmentWrongType : { name : String, run : Task.Task String {} }
+testMalformedAttachmentWrongType =
+    { name = "Task with wrong attachment field type falls back to empty array"
+    , run =
+        let
+            -- Attachment "size" is a string instead of an int.
+            -- The Decode.oneOf in taskDecoder falls back to [] when
+            -- the attachments array fails to decode.
+            json =
+                "{\"id\":\"bad-task\",\"description\":\"Bad\",\"status\":{\"type\":\"pending\"},\"createdAt\":0,\"updatedAt\":0,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"test\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[{\"filename\":\"f.txt\",\"size\":\"not-a-number\",\"contentType\":\"text/plain\",\"uploadedAt\":0}]}"
+
+            decoded =
+                Decode.decodeString Registry.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                expectEqual "bad-task" decodedTask.id
+                    |> Task.andThen (\_ -> expectEqual [] decodedTask.attachments)
+
+            Err err ->
+                Task.fail ("Decode failed unexpectedly: " ++ Decode.errorToString err)
     }

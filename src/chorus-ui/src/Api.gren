@@ -2,6 +2,7 @@ module Api exposing
     ( Task
     , TaskStatus(..)
     , SourceInfo
+    , Attachment
     , History
     , Event
     , Queue
@@ -12,6 +13,8 @@ module Api exposing
     , updateTaskStatus
     , getTaskHistory
     , getTaskQueue
+    , uploadAttachment
+    , deleteAttachment
     , statusToString
     , statusFromString
     )
@@ -22,6 +25,7 @@ Provides functions to interact with the backend REST API for task management.
 
 -}
 
+import Bytes exposing (Bytes)
 import Dict exposing (Dict)
 import Http
 import Json.Decode as Decode exposing (Decoder)
@@ -36,13 +40,24 @@ import Time
 -}
 type alias Task =
     { id : String
-    , title : String
+    , description : String
     , status : TaskStatus
     , createdAt : Time.Posix
     , updatedAt : Time.Posix
     , sessionId : Maybe String
     , source : SourceInfo
     , agentWorkspace : String
+    , attachments : Array Attachment
+    }
+
+
+{-| Metadata for a file attached to a task.
+-}
+type alias Attachment =
+    { filename : String
+    , size : Int
+    , contentType : String
+    , uploadedAt : Time.Posix
     }
 
 
@@ -133,16 +148,16 @@ getTask taskId toMsg =
 {-| Create a new task.
 -}
 createTask :
-    { title : String, source : SourceInfo }
+    { description : String, source : SourceInfo }
     -> (Result Http.Error Task -> msg)
     -> Cmd msg
-createTask { title, source } toMsg =
+createTask { description, source } toMsg =
     Http.post
         { url = "/api/tasks"
         , body =
             Http.jsonBody
                 (Encode.object
-                    [ { key = "title", value = Encode.string title }
+                    [ { key = "description", value = Encode.string description }
                     , { key = "source", value = encodeSourceInfo source }
                     ]
                 )
@@ -209,6 +224,47 @@ getTaskQueue taskId toMsg =
 
 
 
+{-| Upload a file attachment to a task.
+-}
+uploadAttachment :
+    String
+    -> String
+    -> Bytes
+    -> String
+    -> (Result Http.Error Task -> msg)
+    -> Cmd msg
+uploadAttachment taskId filename fileBytes contentType toMsg =
+    Http.request
+        { method = "POST"
+        , headers = []
+        , url = "/api/tasks/" ++ taskId ++ "/attachments?filename=" ++ filename
+        , body = Http.bytesBody contentType fileBytes
+        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+{-| Delete a file attachment from a task.
+-}
+deleteAttachment :
+    String
+    -> String
+    -> (Result Http.Error Task -> msg)
+    -> Cmd msg
+deleteAttachment taskId filename toMsg =
+    Http.request
+        { method = "DELETE"
+        , headers = []
+        , url = "/api/tasks/" ++ taskId ++ "/attachments/" ++ filename
+        , body = Http.emptyBody
+        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+
 -- DECODERS
 
 
@@ -222,25 +278,50 @@ dataDecoder decoder =
 taskDecoder : Decoder Task
 taskDecoder =
     Decode.map8
-        (\id title status createdAt updatedAt sessionId source agentWorkspace ->
+        (\id description status createdAt updatedAt sessionId source agentWorkspace ->
             { id = id
-            , title = title
+            , description = description
             , status = status
             , createdAt = createdAt
             , updatedAt = updatedAt
             , sessionId = sessionId
             , source = source
             , agentWorkspace = agentWorkspace
+            , attachments = []
             }
         )
         (Decode.field "id" Decode.string)
-        (Decode.field "title" Decode.string)
+        (Decode.field "description" Decode.string)
         (Decode.field "status" statusDecoder)
         (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
         (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
         (Decode.field "sessionId" (Decode.maybe Decode.string))
         (Decode.field "source" sourceInfoDecoder)
         (Decode.field "agentWorkspace" Decode.string)
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "attachments" (Decode.array attachmentDecoder)
+                    , Decode.succeed []
+                    ]
+                    |> Decode.map (\attachments -> { task | attachments = attachments })
+            )
+
+
+attachmentDecoder : Decoder Attachment
+attachmentDecoder =
+    Decode.map4
+        (\filename size contentType uploadedAt ->
+            { filename = filename
+            , size = size
+            , contentType = contentType
+            , uploadedAt = uploadedAt
+            }
+        )
+        (Decode.field "filename" Decode.string)
+        (Decode.field "size" Decode.int)
+        (Decode.field "contentType" Decode.string)
+        (Decode.field "uploadedAt" (Decode.map Time.millisToPosix Decode.int))
 
 
 statusDecoder : Decoder TaskStatus

@@ -16,6 +16,8 @@ Features:
 import Api
 import Browser
 import Browser.Navigation as Nav
+import Bytes exposing (Bytes)
+import File exposing (File)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput, onSubmit)
@@ -72,7 +74,7 @@ type Page
 
 
 type alias CreateTaskForm =
-    { title : String
+    { description : String
     , sourceType : String
     , userId : String
     , isOpen : Bool
@@ -81,7 +83,7 @@ type alias CreateTaskForm =
 
 emptyCreateForm : CreateTaskForm
 emptyCreateForm =
-    { title = ""
+    { description = ""
     , sourceType = "web"
     , userId = "anonymous"
     , isOpen = False
@@ -105,11 +107,16 @@ type Msg
     | SetStatusFilter (Maybe String)
     | OpenCreateForm
     | CloseCreateForm
-    | UpdateCreateTitle String
+    | UpdateCreateDescription String
     | SubmitCreateForm
     | UpdateTaskStatus { taskId : String, status : String }
     | RefreshTask String
     | ClearError
+    | FileSelected File
+    | GotFileBytes { file : File, bytes : Bytes }
+    | FileUploaded (Result Http.Error Api.Task)
+    | DeleteAttachment { taskId : String, filename : String }
+    | AttachmentDeleted (Result Http.Error Api.Task)
 
 
 
@@ -359,25 +366,25 @@ update msg model =
             , command = Cmd.none
             }
 
-        UpdateCreateTitle title ->
+        UpdateCreateDescription description ->
             let
                 form =
                     model.createForm
             in
-            { model = { model | createForm = { form | title = title } }
+            { model = { model | createForm = { form | description = description } }
             , command = Cmd.none
             }
 
         SubmitCreateForm ->
-            if String.isEmpty (String.trim model.createForm.title) then
-                { model = { model | error = Just "Task title is required" }
+            if String.isEmpty (String.trim model.createForm.description) then
+                { model = { model | error = Just "Task description is required" }
                 , command = Cmd.none
                 }
             else
                 { model = model
                 , command =
                     Api.createTask
-                        { title = model.createForm.title
+                        { description = model.createForm.description
                         , source =
                             { sourceType = model.createForm.sourceType
                             , userId = model.createForm.userId
@@ -406,6 +413,64 @@ update msg model =
             { model = { model | error = Nothing }
             , command = Cmd.none
             }
+
+        FileSelected file ->
+            { model = model
+            , command =
+                File.toBytes file
+                    |> Task.map (\bytes -> { file = file, bytes = bytes })
+                    |> Task.perform GotFileBytes
+            }
+
+        GotFileBytes { file, bytes } ->
+            when model.page is
+                TaskDetailPage taskId ->
+                    { model = model
+                    , command =
+                        Api.uploadAttachment taskId (File.name file) bytes (File.mime file) FileUploaded
+                    }
+
+                _ ->
+                    { model = model
+                    , command = Cmd.none
+                    }
+
+        FileUploaded result ->
+            when result is
+                Ok updatedTask ->
+                    { model =
+                        { model
+                            | selectedTask = Just updatedTask
+                            , error = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
+        DeleteAttachment { taskId, filename } ->
+            { model = model
+            , command = Api.deleteAttachment taskId filename AttachmentDeleted
+            }
+
+        AttachmentDeleted result ->
+            when result is
+                Ok updatedTask ->
+                    { model =
+                        { model
+                            | selectedTask = Just updatedTask
+                            , error = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
 
 
 
@@ -514,6 +579,8 @@ viewMain model =
                     , loading = model.loading
                     , onStatusUpdate = \tid status -> UpdateTaskStatus { taskId = tid, status = status }
                     , onRefresh = RefreshTask taskId
+                    , onFileSelected = FileSelected
+                    , onDeleteAttachment = \filename -> DeleteAttachment { taskId = taskId, filename = filename }
                     }
 
             NotFoundPage ->
@@ -536,13 +603,13 @@ viewCreateModal model =
                 [ h2 [] [ text "Create New Task" ]
                 , Html.form [ onSubmit SubmitCreateForm ]
                     [ div [ class "form-group" ]
-                        [ label [ for "title" ] [ text "Task Title" ]
-                        , input
-                            [ type_ "text"
-                            , id "title"
-                            , value model.createForm.title
-                            , onInput UpdateCreateTitle
-                            , placeholder "Enter task title..."
+                        [ label [ for "description" ] [ text "Description" ]
+                        , textarea
+                            [ id "description"
+                            , value model.createForm.description
+                            , onInput UpdateCreateDescription
+                            , placeholder "Enter task description..."
+                            , Html.Attributes.rows 4
                             , autofocus True
                             ]
                             []

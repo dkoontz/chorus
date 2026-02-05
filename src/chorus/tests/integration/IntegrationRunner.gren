@@ -350,7 +350,7 @@ testCreateTaskCreatesTask ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Test Task"
+                    { description = "Test Task"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -375,7 +375,7 @@ testCreateTaskWritesTaskJson ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Test Task"
+                    { description = "Test Task"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -400,7 +400,7 @@ testCreateTaskWritesQueueJson ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Test Task"
+                    { description = "Test Task"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -425,7 +425,7 @@ testCreateTaskWritesHistoryJson ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Test Task"
+                    { description = "Test Task"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -450,7 +450,7 @@ testGetTaskReturnsTask ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Test Task"
+                    { description = "Test Task"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -467,7 +467,7 @@ testGetTaskReturnsTask ctx subdir =
                     |> GrenTask.andThen (assertJust "getTask")
                     |> GrenTask.andThen
                         (\retrieved ->
-                            assertEqual "task title" task.title retrieved.title
+                            assertEqual "task description" task.description retrieved.description
                         )
             )
 
@@ -489,7 +489,7 @@ testUpdateTaskModifiesStatus ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Test Task"
+                    { description = "Test Task"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -522,7 +522,7 @@ testListTasksReturnsAll ctx subdir =
             (\registry ->
                 -- Create two tasks
                 Registry.createTask registry
-                    { title = "Task 1"
+                    { description = "Task 1"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -535,7 +535,7 @@ testListTasksReturnsAll ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Task 2"
+                    { description = "Task 2"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -563,7 +563,7 @@ testListTasksFiltersByStatus ctx subdir =
             (\registry ->
                 -- Create a task and update it to Active
                 Registry.createTask registry
-                    { title = "Active Task"
+                    { description = "Active Task"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -582,7 +582,7 @@ testListTasksFiltersByStatus ctx subdir =
             (\registry ->
                 -- Create a Pending task
                 Registry.createTask registry
-                    { title = "Pending Task"
+                    { description = "Pending Task"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -609,7 +609,7 @@ testRecordEventAppendsToHistory ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Test Task"
+                    { description = "Test Task"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -689,7 +689,7 @@ testEnqueueAddsMessage ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Queue Test Task"
+                    { description = "Queue Test Task"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -723,7 +723,7 @@ testDequeueFIFO ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Queue FIFO Test"
+                    { description = "Queue FIFO Test"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -786,7 +786,7 @@ testDequeueEmptyQueue ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Empty Queue Test"
+                    { description = "Empty Queue Test"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -813,7 +813,7 @@ testPeekDoesNotRemove ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Peek Test"
+                    { description = "Peek Test"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -870,7 +870,7 @@ testIsEmpty ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "IsEmpty Test"
+                    { description = "IsEmpty Test"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"
@@ -924,7 +924,7 @@ testQueueLength ctx subdir =
         |> GrenTask.andThen
             (\registry ->
                 Registry.createTask registry
-                    { title = "Length Test"
+                    { description = "Length Test"
                     , source =
                         { sourceType = "test"
                         , userId = "tester"

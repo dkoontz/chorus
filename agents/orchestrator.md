@@ -79,7 +79,7 @@ Where `[planning]` is optional - only invoked if the user describes a new task.
 
 ### Phase: `complete`
 - Write final status update
-- Rename the task file from `tasks/{task-name}.md` to `tasks/_{task-name}.md` (prefix with underscore)
+- Move the task file from `tasks/{task-name}.md` to `tasks/completed/{task-name}.md`
 - Report success to the user
 
 ## Invoking Sub-Agents
@@ -234,7 +234,7 @@ Last Updated: [ISO timestamp]
 
 ## Important
 
-- You coordinate, you do NOT implement. Never write code directly.
+- You coordinate, you do NOT implement. Never write code or carry out testing directly.
 - Always read reports completely before making decisions
 - Update status.md BEFORE invoking the next agent
 - Include clear history entries so the workflow can be understood
@@ -242,13 +242,13 @@ Last Updated: [ISO timestamp]
 - Always pass file paths as parameters to sub-agents - never assume paths
 - Use iteration numbers in all report filenames to preserve history
 
-## Task File Naming Convention
+## Task File Organization
 
-Task files in the `tasks/` directory follow this naming convention:
+Task files in the `tasks/` directory are organized as follows:
 - **Active tasks**: `tasks/{task-name}.md` - tasks that still need work
-- **Completed tasks**: `tasks/_{task-name}.md` - tasks that are done (prefixed with underscore)
+- **Completed tasks**: `tasks/completed/{task-name}.md` - tasks that are done
 
-When a task reaches the `complete` phase, rename the task file to add the underscore prefix. This makes it easy to see which tasks are still pending by listing the directory.
+When a task reaches the `complete` phase, move the task file into the `tasks/completed/` subdirectory. This keeps active tasks visible at the top level.
 
 ## Starting the Workflow
 
@@ -273,7 +273,7 @@ When first invoked:
 
 4. **Parse `TASK_FILE`** to extract task name (e.g., `tasks/feature-a.md` → `feature-a`)
 
-5. **Create workspace directory**: `workspaces/{task-name}/reports/`
+5. **Create directories** if they don't exist: `tasks/completed/`, `workspaces`, `workspaces/{task-name}/reports/`
 
 6. **Initialize `workspaces/{task-name}/status.md`**
 

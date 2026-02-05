@@ -66,7 +66,7 @@ viewRecentTask task =
         [ a [ href ("/tasks/" ++ task.id) ]
             [ span [ class ("status-badge status-" ++ Api.statusToString task.status) ]
                 [ text (Api.statusToString task.status) ]
-            , span [ class "task-title" ] [ text task.title ]
+            , span [ class "task-description task-description-truncate" ] [ text task.description ]
             ]
         ]
 
