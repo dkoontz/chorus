@@ -19,6 +19,23 @@ npm run docker:compose
 
 The app runs on port 8080. Data is persisted via Docker volume mount at `./docker-data:/app/data`.
 
+## Claude Code Authentication
+
+The agent-executor uses Claude Code CLI. First-time setup requires authentication:
+
+```bash
+# Start the container
+npm run docker:compose
+
+# Login to Claude Code (opens browser for OAuth)
+docker exec -it chorus-chorus-1 claude login
+
+# Verify authentication
+docker exec -it chorus-chorus-1 claude --version
+```
+
+Credentials are persisted in `./docker-data/.claude/` and survive container restarts.
+
 ## Debugging
 
 Set `CHORUS_LOG_LEVEL` to control log verbosity:

@@ -15,7 +15,6 @@
     "test:unit": "cd src/chorus && npm run test:unit",
     "test:integration": "cd src/chorus && npm run test:integration",
     "test": "npm run test:unit && npm run test:integration",
-    "docker:run": "docker run -p 8080:8080 -v ./docker-data:/app/data chorus",
     "docker:compose": "docker compose up",
     "clean": "rm -rf src/*/build src/*/.gren src/*/gren_packages"
   }

@@ -60,6 +60,12 @@ WORKDIR /app
 # Create data directory (will be overridden by volume mount)
 RUN mkdir -p /app/data/registry /app/data/workspaces
 
+# Create .claude directory for auth persistence
+RUN mkdir -p /root/.claude
+
+# Install Claude Code CLI for agent-executor
+RUN npm install -g @anthropic-ai/claude-code
+
 # Copy compiled artifacts from build stage
 COPY --from=builder /app/src/chorus/build/chorus.js /app/build/chorus.js
 COPY --from=builder /app/src/chorus/static/ /app/static/

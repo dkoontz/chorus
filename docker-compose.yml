@@ -9,6 +9,8 @@ services:
       # Mount application data directory
       # Host path can be configured via DATA_PATH environment variable
       - "${DATA_PATH:-./docker-data}:/app/data"
+      # Mount Claude Code config for auth persistence
+      - "${CLAUDE_CONFIG_PATH:-./docker-data/.claude}:/root/.claude"
     environment:
       - CHORUS_HOST=0.0.0.0
       - CHORUS_PORT=8080
