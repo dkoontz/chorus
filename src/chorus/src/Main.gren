@@ -21,11 +21,11 @@ import HttpServer
 import HttpServer.Response as Response exposing (Response)
 import Init
 import Json.Decode as Decode
+import Logging exposing (LogLevel(..))
 import Node
 import Stream
 import Task as GrenTask
 import Task.Registry as Registry
-import Time
 import Web.Api as Api
 import Web.Router as Router
 import Web.Server as Server
@@ -57,6 +57,7 @@ type alias Model =
     , config : Config
     , status : Status
     , pendingResponses : Array PendingResponse
+    , logger : Logging.Logger
     }
 
 
@@ -74,21 +75,6 @@ type alias Config =
     , staticRoot : String
     , logLevel : LogLevel
     }
-
-
-{-| Log level for controlling output verbosity.
-
-    - LogError: Only errors
-    - LogWarn: Warnings and errors
-    - LogInfo: Normal operation (default)
-    - LogDebug: Verbose output including request details
-
--}
-type LogLevel
-    = LogError
-    | LogWarn
-    | LogInfo
-    | LogDebug
 
 
 type Status
@@ -140,7 +126,7 @@ configFromEnv envVars config =
 
         logLevel =
             Dict.get "CHORUS_LOG_LEVEL" envVars
-                |> Maybe.andThen parseLogLevel
+                |> Maybe.andThen Logging.parseLogLevel
                 |> Maybe.withDefault config.logLevel
     in
     { host = host
@@ -150,28 +136,6 @@ configFromEnv envVars config =
     , staticRoot = staticRoot
     , logLevel = logLevel
     }
-
-
-{-| Parse a log level string.
--}
-parseLogLevel : String -> Maybe LogLevel
-parseLogLevel str =
-    when String.toLower str is
-        "error" ->
-            Just LogError
-
-        "warn" ->
-            Just LogWarn
-
-        "info" ->
-            Just LogInfo
-
-        "debug" ->
-            Just LogDebug
-
-        _ ->
-            Nothing
-
 
 
 -- MSG
@@ -200,6 +164,9 @@ init env =
                         config =
                             configFromEnv envVars defaultConfig
 
+                        logger =
+                            Logging.makeLogger env.stdout config.logLevel
+
                         model =
                             { env = env
                             , server = Nothing
@@ -209,6 +176,7 @@ init env =
                             , config = config
                             , status = Initializing
                             , pendingResponses = []
+                            , logger = logger
                             }
                     in
                     Node.startProgram
@@ -230,7 +198,7 @@ init env =
                                     |> GrenTask.attempt GotRegistry
 
                                 , -- Log startup
-                                  logInfoInit env config ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.port_)
+                                  Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.port_) NoOp
                                 ]
                         }
 
@@ -246,12 +214,12 @@ update msg model =
             when result is
                 Ok server ->
                     { model = { model | server = Just server }
-                    , command = logInfo model "HTTP server started"
+                    , command = Logging.logInfo model.logger "HTTP server started" NoOp
                     }
 
                 Err err ->
                     { model = { model | status = Error (Server.errorToString err) }
-                    , command = logError model ("Server error: " ++ Server.errorToString err)
+                    , command = Logging.logError model.logger ("Server error: " ++ Server.errorToString err) NoOp
                     }
 
         GotRegistry result ->
@@ -262,12 +230,12 @@ update msg model =
                             | registry = Just registry
                             , status = Running
                         }
-                    , command = logInfo model "Task registry initialized"
+                    , command = Logging.logInfo model.logger "Task registry initialized" NoOp
                     }
 
                 Err err ->
                     { model = { model | status = Error (registryErrorToString err) }
-                    , command = logError model ("Registry error: " ++ registryErrorToString err)
+                    , command = Logging.logError model.logger ("Registry error: " ++ registryErrorToString err) NoOp
                     }
 
         GotRequest { request, response } ->
@@ -302,13 +270,14 @@ update msg model =
                                     Bytes.toString request.body
                                         |> Maybe.withDefault "<binary data>"
                             in
-                            logDebug model ("Request body: " ++ bodyStr)
+                            Logging.logDebug model.logger ("Request body: " ++ bodyStr) NoOp
             in
             { model = model
             , command =
                 Cmd.batch
-                    [ logInfo model
+                    [ Logging.logInfo model.logger
                         (HttpServer.methodToString method ++ " " ++ path ++ " -> " ++ Router.routeToString route)
+                        NoOp
                     , debugCmd
                     , handleRoute model route request response
                     ]
@@ -539,240 +508,6 @@ subscriptions model =
 
         Nothing ->
             Sub.none
-
-
-
--- LOGGING
-
-
-{-| Log at INFO level during init (before model exists).
--}
-logInfoInit : Node.Environment -> Config -> String -> Cmd Msg
-logInfoInit env config message =
-    writeLogAtLevelInit env config LogInfo "INFO" message
-
-
-{-| Write a log message during init phase.
--}
-writeLogAtLevelInit : Node.Environment -> Config -> LogLevel -> String -> String -> Cmd Msg
-writeLogAtLevelInit env config msgLevel levelStr message =
-    if shouldLog config.logLevel msgLevel then
-        Time.now
-            |> GrenTask.andThen
-                (\now ->
-                    let
-                        timestamp =
-                            formatTimestamp now
-
-                        line =
-                            "[Chorus " ++ timestamp ++ "] [" ++ levelStr ++ "] " ++ message
-                    in
-                    Stream.writeLineAsBytes line env.stdout
-                )
-            |> GrenTask.onError (\_ -> GrenTask.succeed env.stdout)
-            |> GrenTask.map (\_ -> NoOp)
-            |> GrenTask.perform identity
-    else
-        Cmd.none
-
-
-{-| Log at ERROR level.
--}
-logError : Model -> String -> Cmd Msg
-logError model message =
-    writeLogAtLevel model LogError "ERROR" message
-
-
-{-| Log at WARN level.
--}
-logWarn : Model -> String -> Cmd Msg
-logWarn model message =
-    writeLogAtLevel model LogWarn "WARN" message
-
-
-{-| Log at INFO level.
--}
-logInfo : Model -> String -> Cmd Msg
-logInfo model message =
-    writeLogAtLevel model LogInfo "INFO" message
-
-
-{-| Log at DEBUG level.
--}
-logDebug : Model -> String -> Cmd Msg
-logDebug model message =
-    writeLogAtLevel model LogDebug "DEBUG" message
-
-
-{-| Write a log message if the configured level allows it.
--}
-writeLogAtLevel : Model -> LogLevel -> String -> String -> Cmd Msg
-writeLogAtLevel model msgLevel levelStr message =
-    if shouldLog model.config.logLevel msgLevel then
-        Time.now
-            |> GrenTask.andThen
-                (\now ->
-                    let
-                        timestamp =
-                            formatTimestamp now
-
-                        line =
-                            "[Chorus " ++ timestamp ++ "] [" ++ levelStr ++ "] " ++ message
-                    in
-                    Stream.writeLineAsBytes line model.env.stdout
-                )
-            |> GrenTask.onError (\_ -> GrenTask.succeed model.env.stdout)
-            |> GrenTask.map (\_ -> NoOp)
-            |> GrenTask.perform identity
-    else
-        Cmd.none
-
-
-{-| Check if a message at the given level should be logged.
--}
-shouldLog : LogLevel -> LogLevel -> Bool
-shouldLog configLevel msgLevel =
-    logLevelToInt msgLevel >= logLevelToInt configLevel
-
-
-{-| Convert log level to integer for comparison.
--}
-logLevelToInt : LogLevel -> Int
-logLevelToInt level =
-    when level is
-        LogDebug ->
-            0
-
-        LogInfo ->
-            1
-
-        LogWarn ->
-            2
-
-        LogError ->
-            3
-
-
-{-| Format a timestamp as ISO 8601.
-
-    Uses a simplified algorithm to avoid importing additional modules.
-
--}
-formatTimestamp : Time.Posix -> String
-formatTimestamp time =
-    let
-        millis =
-            Time.posixToMillis time
-
-        totalSeconds =
-            millis // 1000
-
-        -- Use integer division and subtraction to compute remainder
-        -- since modBy isn't directly available
-        seconds =
-            totalSeconds - ((totalSeconds // 60) * 60)
-
-        totalMinutes =
-            totalSeconds // 60
-
-        minutes =
-            totalMinutes - ((totalMinutes // 60) * 60)
-
-        totalHours =
-            totalMinutes // 60
-
-        hours =
-            totalHours - ((totalHours // 24) * 24)
-
-        -- Days since epoch (1970-01-01)
-        days =
-            totalHours // 24
-
-        -- Calculate year, month, day from days since epoch
-        { year, month, day } =
-            daysToDate days
-    in
-    String.fromInt year
-        ++ "-"
-        ++ padZero month
-        ++ "-"
-        ++ padZero day
-        ++ "T"
-        ++ padZero hours
-        ++ ":"
-        ++ padZero minutes
-        ++ ":"
-        ++ padZero seconds
-        ++ "Z"
-
-
-{-| Pad a number with leading zero if needed.
--}
-padZero : Int -> String
-padZero n =
-    if n < 10 then
-        "0" ++ String.fromInt n
-
-    else
-        String.fromInt n
-
-
-{-| Convert days since Unix epoch to year, month, day.
--}
-daysToDate : Int -> { year : Int, month : Int, day : Int }
-daysToDate totalDays =
-    let
-        -- Algorithm to convert days since epoch to date
-        -- Based on the algorithm from Howard Hinnant
-        z =
-            totalDays + 719468
-
-        era =
-            (if z >= 0 then
-                z
-
-             else
-                z - 146096
-            )
-                // 146097
-
-        doe =
-            z - (era * 146097)
-
-        yoe =
-            (doe - (doe // 1460) + (doe // 36524) - (doe // 146096)) // 365
-
-        y =
-            yoe + (era * 400)
-
-        doy =
-            doe - ((365 * yoe) + (yoe // 4) - (yoe // 100))
-
-        mp =
-            ((5 * doy) + 2) // 153
-
-        d =
-            doy - (((153 * mp) + 2) // 5) + 1
-
-        m =
-            mp
-                + (if mp < 10 then
-                    3
-
-                   else
-                    -9
-                  )
-
-        year =
-            y
-                + (if m <= 2 then
-                    1
-
-                   else
-                    0
-                  )
-    in
-    { year = year, month = m, day = d }
 
 
 

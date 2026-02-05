@@ -1,0 +1,287 @@
+module Logging exposing
+    ( LogLevel(..)
+    , Logger
+    , parseLogLevel
+    , makeLogger
+    , logError
+    , logWarn
+    , logInfo
+    , logDebug
+    )
+
+{-| Logging module for Chorus.
+
+Provides level-based logging with ISO 8601 timestamps.
+
+## Log Levels
+
+  - `LogError`: Only errors
+  - `LogWarn`: Warnings and errors
+  - `LogInfo`: Normal operation (default)
+  - `LogDebug`: Verbose output including request details
+
+## Usage
+
+    -- Create a logger
+    logger = Logging.makeLogger env.stdout config.logLevel
+
+    -- Log messages at different levels
+    Logging.logInfo logger "Server started" identity
+    Logging.logDebug logger "Request body: ..." identity
+
+-}
+
+import Bytes
+import Node
+import Stream
+import Task as GrenTask
+import Time
+
+
+{-| Log level for controlling output verbosity.
+-}
+type LogLevel
+    = LogError
+    | LogWarn
+    | LogInfo
+    | LogDebug
+
+
+{-| Logger context containing stdout stream and configured log level.
+-}
+type alias Logger =
+    { stdout : Stream.Writable Bytes.Bytes
+    , level : LogLevel
+    }
+
+
+{-| Create a logger from environment stdout and log level.
+-}
+makeLogger : Stream.Writable Bytes.Bytes -> LogLevel -> Logger
+makeLogger stdout level =
+    { stdout = stdout
+    , level = level
+    }
+
+
+{-| Parse a log level string.
+
+    parseLogLevel "debug" == Just LogDebug
+    parseLogLevel "INFO" == Just LogInfo
+    parseLogLevel "unknown" == Nothing
+
+-}
+parseLogLevel : String -> Maybe LogLevel
+parseLogLevel str =
+    when String.toLower str is
+        "error" ->
+            Just LogError
+
+        "warn" ->
+            Just LogWarn
+
+        "info" ->
+            Just LogInfo
+
+        "debug" ->
+            Just LogDebug
+
+        _ ->
+            Nothing
+
+
+{-| Log at ERROR level.
+-}
+logError : Logger -> String -> msg -> Cmd msg
+logError logger message noOpMsg =
+    writeLogAtLevel logger LogError "ERROR" message noOpMsg
+
+
+{-| Log at WARN level.
+-}
+logWarn : Logger -> String -> msg -> Cmd msg
+logWarn logger message noOpMsg =
+    writeLogAtLevel logger LogWarn "WARN" message noOpMsg
+
+
+{-| Log at INFO level.
+-}
+logInfo : Logger -> String -> msg -> Cmd msg
+logInfo logger message noOpMsg =
+    writeLogAtLevel logger LogInfo "INFO" message noOpMsg
+
+
+{-| Log at DEBUG level.
+-}
+logDebug : Logger -> String -> msg -> Cmd msg
+logDebug logger message noOpMsg =
+    writeLogAtLevel logger LogDebug "DEBUG" message noOpMsg
+
+
+{-| Write a log message if the configured level allows it.
+-}
+writeLogAtLevel : Logger -> LogLevel -> String -> String -> msg -> Cmd msg
+writeLogAtLevel logger msgLevel levelStr message noOpMsg =
+    if shouldLog logger.level msgLevel then
+        Time.now
+            |> GrenTask.andThen
+                (\now ->
+                    let
+                        timestamp =
+                            formatTimestamp now
+
+                        line =
+                            "[Chorus " ++ timestamp ++ "] [" ++ levelStr ++ "] " ++ message
+                    in
+                    Stream.writeLineAsBytes line logger.stdout
+                )
+            |> GrenTask.onError (\_ -> GrenTask.succeed logger.stdout)
+            |> GrenTask.map (\_ -> noOpMsg)
+            |> GrenTask.perform identity
+
+    else
+        Cmd.none
+
+
+{-| Check if a message at the given level should be logged.
+-}
+shouldLog : LogLevel -> LogLevel -> Bool
+shouldLog configLevel msgLevel =
+    logLevelToInt msgLevel >= logLevelToInt configLevel
+
+
+{-| Convert log level to integer for comparison.
+-}
+logLevelToInt : LogLevel -> Int
+logLevelToInt level =
+    when level is
+        LogDebug ->
+            0
+
+        LogInfo ->
+            1
+
+        LogWarn ->
+            2
+
+        LogError ->
+            3
+
+
+{-| Format a timestamp as ISO 8601.
+-}
+formatTimestamp : Time.Posix -> String
+formatTimestamp time =
+    let
+        millis =
+            Time.posixToMillis time
+
+        totalSeconds =
+            millis // 1000
+
+        -- Use integer division and subtraction to compute remainder
+        seconds =
+            totalSeconds - ((totalSeconds // 60) * 60)
+
+        totalMinutes =
+            totalSeconds // 60
+
+        minutes =
+            totalMinutes - ((totalMinutes // 60) * 60)
+
+        totalHours =
+            totalMinutes // 60
+
+        hours =
+            totalHours - ((totalHours // 24) * 24)
+
+        -- Days since epoch (1970-01-01)
+        days =
+            totalHours // 24
+
+        -- Calculate year, month, day from days since epoch
+        { year, month, day } =
+            daysToDate days
+    in
+    String.fromInt year
+        ++ "-"
+        ++ padZero month
+        ++ "-"
+        ++ padZero day
+        ++ "T"
+        ++ padZero hours
+        ++ ":"
+        ++ padZero minutes
+        ++ ":"
+        ++ padZero seconds
+        ++ "Z"
+
+
+{-| Pad a number with leading zero if needed.
+-}
+padZero : Int -> String
+padZero n =
+    if n < 10 then
+        "0" ++ String.fromInt n
+
+    else
+        String.fromInt n
+
+
+{-| Convert days since Unix epoch to year, month, day.
+
+Based on the algorithm from Howard Hinnant.
+
+-}
+daysToDate : Int -> { year : Int, month : Int, day : Int }
+daysToDate totalDays =
+    let
+        z =
+            totalDays + 719468
+
+        era =
+            (if z >= 0 then
+                z
+
+             else
+                z - 146096
+            )
+                // 146097
+
+        doe =
+            z - (era * 146097)
+
+        yoe =
+            (doe - (doe // 1460) + (doe // 36524) - (doe // 146096)) // 365
+
+        y =
+            yoe + (era * 400)
+
+        doy =
+            doe - ((365 * yoe) + (yoe // 4) - (yoe // 100))
+
+        mp =
+            ((5 * doy) + 2) // 153
+
+        d =
+            doy - (((153 * mp) + 2) // 5) + 1
+
+        m =
+            mp
+                + (if mp < 10 then
+                    3
+
+                   else
+                    -9
+                  )
+
+        year =
+            y
+                + (if m <= 2 then
+                    1
+
+                   else
+                    0
+                  )
+    in
+    { year = year, month = m, day = d }
