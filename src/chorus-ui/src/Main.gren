@@ -28,7 +28,7 @@ import Time
 import Url exposing (Url)
 import View.Dashboard as Dashboard
 import View.History as History
-import View.TaskDetail as TaskDetail
+import View.TaskDetail as TaskDetail exposing (PlanningSection(..), PlanningEditState)
 import View.TaskList as TaskList
 
 
@@ -63,6 +63,7 @@ type alias Model =
     , loading : Bool
     , error : Maybe String
     , lastPoll : Time.Posix
+    , editingPlanning : Maybe PlanningEditState
     }
 
 
@@ -117,6 +118,14 @@ type Msg
     | FileUploaded (Result Http.Error Api.Task)
     | DeleteAttachment { taskId : String, filename : String }
     | AttachmentDeleted (Result Http.Error Api.Task)
+    | EditPlanningSection PlanningSection
+    | UpdatePlanningDraft String
+    | UpdatePlanningItemDraft { index : Int, value : String }
+    | AddPlanningItem
+    | RemovePlanningItem Int
+    | SavePlanning
+    | CancelPlanningEdit
+    | PlanningUpdated (Result Http.Error Api.Task)
 
 
 
@@ -141,6 +150,7 @@ init _ url key =
             , loading = True
             , error = Nothing
             , lastPoll = Time.millisToPosix 0
+            , editingPlanning = Nothing
             }
     in
     { model = model
@@ -222,6 +232,7 @@ update msg model =
                     , taskHistory = Nothing
                     , taskQueue = Nothing
                     , loading = True
+                    , editingPlanning = Nothing
                 }
             , command = loadPageData page
             }
@@ -298,7 +309,7 @@ update msg model =
                 Ok updatedTask ->
                     let
                         updateTask t =
-                            if t.id == updatedTask.id then
+                            if Api.taskId t == Api.taskId updatedTask then
                                 updatedTask
                             else
                                 t
@@ -309,7 +320,7 @@ update msg model =
                         newSelected =
                             when model.selectedTask is
                                 Just selected ->
-                                    if selected.id == updatedTask.id then
+                                    if Api.taskId selected == Api.taskId updatedTask then
                                         Just updatedTask
                                     else
                                         model.selectedTask
@@ -472,6 +483,182 @@ update msg model =
                     , command = Cmd.none
                     }
 
+        EditPlanningSection section ->
+            let
+                editState =
+                    when model.selectedTask is
+                        Just task ->
+                            let
+                                -- Get current planning values (empty for DescriptionOnly)
+                                planning =
+                                    when task is
+                                        Api.DescriptionOnly _ ->
+                                            { summary = ""
+                                            , requirements = []
+                                            , acceptanceCriteria = []
+                                            , plan = []
+                                            }
+
+                                        Api.Planned t ->
+                                            { summary = t.summary
+                                            , requirements = t.requirements
+                                            , acceptanceCriteria = t.acceptanceCriteria
+                                            , plan = t.plan
+                                            }
+                            in
+                            when section is
+                                PlanningSummary ->
+                                    Just
+                                        { section = section
+                                        , draftSummary = planning.summary
+                                        , draftItems = []
+                                        }
+
+                                PlanningRequirements ->
+                                    Just
+                                        { section = section
+                                        , draftSummary = ""
+                                        , draftItems = planning.requirements
+                                        }
+
+                                PlanningAcceptanceCriteria ->
+                                    Just
+                                        { section = section
+                                        , draftSummary = ""
+                                        , draftItems = planning.acceptanceCriteria
+                                        }
+
+                                PlanningPlan ->
+                                    Just
+                                        { section = section
+                                        , draftSummary = ""
+                                        , draftItems = planning.plan
+                                        }
+
+                        Nothing ->
+                            Nothing
+            in
+            { model = { model | editingPlanning = editState }
+            , command = Cmd.none
+            }
+
+        UpdatePlanningDraft value ->
+            { model =
+                { model
+                    | editingPlanning =
+                        Maybe.map
+                            (\state -> { state | draftSummary = value })
+                            model.editingPlanning
+                }
+            , command = Cmd.none
+            }
+
+        UpdatePlanningItemDraft { index, value } ->
+            { model =
+                { model
+                    | editingPlanning =
+                        Maybe.map
+                            (\state -> { state | draftItems = Array.set index value state.draftItems })
+                            model.editingPlanning
+                }
+            , command = Cmd.none
+            }
+
+        AddPlanningItem ->
+            { model =
+                { model
+                    | editingPlanning =
+                        Maybe.map
+                            (\state -> { state | draftItems = Array.pushLast "" state.draftItems })
+                            model.editingPlanning
+                }
+            , command = Cmd.none
+            }
+
+        RemovePlanningItem index ->
+            { model =
+                { model
+                    | editingPlanning =
+                        Maybe.map
+                            (\state ->
+                                { state
+                                    | draftItems =
+                                        state.draftItems
+                                            |> Array.indexedMap (\i item -> { index = i, item = item })
+                                            |> Array.keepIf (\entry -> entry.index /= index)
+                                            |> Array.map .item
+                                }
+                            )
+                            model.editingPlanning
+                }
+            , command = Cmd.none
+            }
+
+        SavePlanning ->
+            when { task = model.selectedTask, editing = model.editingPlanning } is
+                { task = Just task, editing = Just editState } ->
+                    let
+                        params =
+                            when editState.section is
+                                PlanningSummary ->
+                                    { summary = Just editState.draftSummary
+                                    , requirements = Nothing
+                                    , acceptanceCriteria = Nothing
+                                    , plan = Nothing
+                                    }
+
+                                PlanningRequirements ->
+                                    { summary = Nothing
+                                    , requirements = Just editState.draftItems
+                                    , acceptanceCriteria = Nothing
+                                    , plan = Nothing
+                                    }
+
+                                PlanningAcceptanceCriteria ->
+                                    { summary = Nothing
+                                    , requirements = Nothing
+                                    , acceptanceCriteria = Just editState.draftItems
+                                    , plan = Nothing
+                                    }
+
+                                PlanningPlan ->
+                                    { summary = Nothing
+                                    , requirements = Nothing
+                                    , acceptanceCriteria = Nothing
+                                    , plan = Just editState.draftItems
+                                    }
+                    in
+                    { model = model
+                    , command = Api.updateTaskPlanning (Api.taskId task) params PlanningUpdated
+                    }
+
+                _ ->
+                    { model = model
+                    , command = Cmd.none
+                    }
+
+        CancelPlanningEdit ->
+            { model = { model | editingPlanning = Nothing }
+            , command = Cmd.none
+            }
+
+        PlanningUpdated result ->
+            when result is
+                Ok updatedTask ->
+                    { model =
+                        { model
+                            | selectedTask = Just updatedTask
+                            , editingPlanning = Nothing
+                            , error = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
 
 
 -- SUBSCRIPTIONS
@@ -581,6 +768,14 @@ viewMain model =
                     , onRefresh = RefreshTask taskId
                     , onFileSelected = FileSelected
                     , onDeleteAttachment = \filename -> DeleteAttachment { taskId = taskId, filename = filename }
+                    , editingPlanning = model.editingPlanning
+                    , onEditPlanningSection = EditPlanningSection
+                    , onUpdatePlanningDraft = UpdatePlanningDraft
+                    , onUpdatePlanningItemDraft = \args -> UpdatePlanningItemDraft args
+                    , onAddPlanningItem = AddPlanningItem
+                    , onRemovePlanningItem = RemovePlanningItem
+                    , onSavePlanning = SavePlanning
+                    , onCancelPlanningEdit = CancelPlanningEdit
                     }
 
             NotFoundPage ->

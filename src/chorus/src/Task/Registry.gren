@@ -1,6 +1,9 @@
 module Task.Registry exposing
     ( Registry
-    , Task
+    , Task(..)
+    , DescriptionOnlyTask
+    , PlannedTask
+    , PlanningFields
     , TaskStatus(..)
     , SourceInfo
     , Attachment
@@ -19,6 +22,19 @@ module Task.Registry exposing
     , encodeAttachment
     , attachmentDecoder
     , contentTypeFromExtension
+    , taskId
+    , taskDescription
+    , taskStatus
+    , taskCreatedAt
+    , taskUpdatedAt
+    , taskSessionId
+    , taskSource
+    , taskAgentWorkspace
+    , taskAttachments
+    , isPlanned
+    , planTask
+    , setTaskStatus
+    , setAttachments
     )
 
 {-| Task Registry - manages task lifecycle and persistence.
@@ -62,9 +78,17 @@ type Registry
         }
 
 
-{-| A task in the registry.
+{-| A task in the registry. Either a simple description-only task or a fully
+    planned task with summary, requirements, acceptance criteria, and plan.
 -}
-type alias Task =
+type Task
+    = DescriptionOnly DescriptionOnlyTask
+    | Planned PlannedTask
+
+
+{-| A task that has only a description and no planning data.
+-}
+type alias DescriptionOnlyTask =
     { id : String
     , description : String
     , status : TaskStatus
@@ -74,6 +98,35 @@ type alias Task =
     , source : SourceInfo
     , agentWorkspace : String
     , attachments : Array Attachment
+    }
+
+
+{-| A task that has been planned with summary, requirements, criteria, and steps.
+-}
+type alias PlannedTask =
+    { id : String
+    , description : String
+    , status : TaskStatus
+    , createdAt : Time.Posix
+    , updatedAt : Time.Posix
+    , sessionId : Maybe String
+    , source : SourceInfo
+    , agentWorkspace : String
+    , attachments : Array Attachment
+    , summary : String
+    , requirements : Array String
+    , acceptanceCriteria : Array String
+    , plan : Array String
+    }
+
+
+{-| Planning fields used when converting a DescriptionOnly task to Planned.
+-}
+type alias PlanningFields =
+    { summary : String
+    , requirements : Array String
+    , acceptanceCriteria : Array String
+    , plan : Array String
     }
 
 
@@ -122,6 +175,222 @@ type Error
     | JsonDecodeError String
     | TaskNotFound String
     | RegistryCorrupt String
+
+
+
+-- TASK ACCESSORS
+
+
+{-| Get the ID of a task.
+-}
+taskId : Task -> String
+taskId task =
+    when task is
+        DescriptionOnly t ->
+            t.id
+
+        Planned t ->
+            t.id
+
+
+{-| Get the description of a task.
+-}
+taskDescription : Task -> String
+taskDescription task =
+    when task is
+        DescriptionOnly t ->
+            t.description
+
+        Planned t ->
+            t.description
+
+
+{-| Get the status of a task.
+-}
+taskStatus : Task -> TaskStatus
+taskStatus task =
+    when task is
+        DescriptionOnly t ->
+            t.status
+
+        Planned t ->
+            t.status
+
+
+{-| Get the creation time of a task.
+-}
+taskCreatedAt : Task -> Time.Posix
+taskCreatedAt task =
+    when task is
+        DescriptionOnly t ->
+            t.createdAt
+
+        Planned t ->
+            t.createdAt
+
+
+{-| Get the last update time of a task.
+-}
+taskUpdatedAt : Task -> Time.Posix
+taskUpdatedAt task =
+    when task is
+        DescriptionOnly t ->
+            t.updatedAt
+
+        Planned t ->
+            t.updatedAt
+
+
+{-| Get the session ID of a task.
+-}
+taskSessionId : Task -> Maybe String
+taskSessionId task =
+    when task is
+        DescriptionOnly t ->
+            t.sessionId
+
+        Planned t ->
+            t.sessionId
+
+
+{-| Get the source info of a task.
+-}
+taskSource : Task -> SourceInfo
+taskSource task =
+    when task is
+        DescriptionOnly t ->
+            t.source
+
+        Planned t ->
+            t.source
+
+
+{-| Get the agent workspace of a task.
+-}
+taskAgentWorkspace : Task -> String
+taskAgentWorkspace task =
+    when task is
+        DescriptionOnly t ->
+            t.agentWorkspace
+
+        Planned t ->
+            t.agentWorkspace
+
+
+{-| Get the attachments of a task.
+-}
+taskAttachments : Task -> Array Attachment
+taskAttachments task =
+    when task is
+        DescriptionOnly t ->
+            t.attachments
+
+        Planned t ->
+            t.attachments
+
+
+{-| Check if a task has been planned.
+-}
+isPlanned : Task -> Bool
+isPlanned task =
+    when task is
+        DescriptionOnly _ ->
+            False
+
+        Planned _ ->
+            True
+
+
+{-| Convert a task to Planned by adding planning fields.
+    If the task is already Planned, the existing planning fields are replaced.
+-}
+planTask : Task -> PlanningFields -> Task
+planTask task fields =
+    when task is
+        DescriptionOnly t ->
+            Planned
+                { id = t.id
+                , description = t.description
+                , status = t.status
+                , createdAt = t.createdAt
+                , updatedAt = t.updatedAt
+                , sessionId = t.sessionId
+                , source = t.source
+                , agentWorkspace = t.agentWorkspace
+                , attachments = t.attachments
+                , summary = fields.summary
+                , requirements = fields.requirements
+                , acceptanceCriteria = fields.acceptanceCriteria
+                , plan = fields.plan
+                }
+
+        Planned t ->
+            Planned
+                { t
+                    | summary = fields.summary
+                    , requirements = fields.requirements
+                    , acceptanceCriteria = fields.acceptanceCriteria
+                    , plan = fields.plan
+                }
+
+
+
+-- INTERNAL SETTERS
+-- These setters are used only within this module and are not exported.
+-- setUpdatedAt is called automatically by updateTask.
+-- setSessionId is used internally for session management.
+--
+-- PUBLIC SETTERS (exported)
+-- setTaskStatus and setAttachments are exported because Web.Api
+-- uses them to build update functions passed to updateTask.
+
+
+{-| Set the updatedAt time on a task. Internal use only.
+-}
+setUpdatedAt : Time.Posix -> Task -> Task
+setUpdatedAt time task =
+    when task is
+        DescriptionOnly t ->
+            DescriptionOnly { t | updatedAt = time }
+
+        Planned t ->
+            Planned { t | updatedAt = time }
+
+
+{-| Set the status on a task.
+-}
+setTaskStatus : TaskStatus -> Task -> Task
+setTaskStatus newStatus task =
+    when task is
+        DescriptionOnly t ->
+            DescriptionOnly { t | status = newStatus }
+
+        Planned t ->
+            Planned { t | status = newStatus }
+
+
+{-| Set the session ID on a task. Internal use only.
+-}
+setSessionId : Maybe String -> Task -> Task
+setSessionId sid task =
+    when task is
+        DescriptionOnly t ->
+            DescriptionOnly { t | sessionId = sid }
+
+        Planned t ->
+            Planned { t | sessionId = sid }
+
+
+{-| Set the attachments on a task.
+-}
+setAttachments : Array Attachment -> Task -> Task
+setAttachments attachments task =
+    when task is
+        DescriptionOnly t ->
+            DescriptionOnly { t | attachments = attachments }
+
+        Planned t ->
+            Planned { t | attachments = attachments }
 
 
 
@@ -206,31 +475,32 @@ createTask (Registry config) { description, source } =
     Crypto.randomUuidV4 config.secureContext
         |> GrenTask.mapError (\_ -> FileSystemError "Failed to generate UUID")
         |> GrenTask.andThen
-            (\taskId ->
+            (\newId ->
                 Time.now
                     |> GrenTask.mapError (\_ -> FileSystemError "Failed to get time")
-                    |> GrenTask.map (\now -> { taskId = taskId, now = now })
+                    |> GrenTask.map (\now -> { newId = newId, now = now })
             )
         |> GrenTask.andThen
-            (\{ taskId, now } ->
+            (\{ newId, now } ->
                 let
                     taskDir =
-                        Path.append (Path.fromPosixString taskId) config.registryRoot
+                        Path.append (Path.fromPosixString newId) config.registryRoot
 
                     workspaceDir =
-                        Path.append (Path.fromPosixString taskId) config.workspacesRoot
+                        Path.append (Path.fromPosixString newId) config.workspacesRoot
 
                     task =
-                        { id = taskId
-                        , description = description
-                        , status = Pending
-                        , createdAt = now
-                        , updatedAt = now
-                        , sessionId = Nothing
-                        , source = source
-                        , agentWorkspace = Path.toPosixString workspaceDir
-                        , attachments = []
-                        }
+                        DescriptionOnly
+                            { id = newId
+                            , description = description
+                            , status = Pending
+                            , createdAt = now
+                            , updatedAt = now
+                            , sessionId = Nothing
+                            , source = source
+                            , agentWorkspace = Path.toPosixString workspaceDir
+                            , attachments = []
+                            }
                 in
                 -- 2. Create task directory
                 ensureDirectoryExists config.fsPermission taskDir
@@ -291,7 +561,7 @@ createTask (Registry config) { description, source } =
                                 (\index ->
                                     let
                                         summary =
-                                            { id = taskId
+                                            { id = newId
                                             , description = description
                                             , status = Pending
                                             , createdAt = now
@@ -308,10 +578,10 @@ createTask (Registry config) { description, source } =
 {-| Get a task by ID.
 -}
 getTask : Registry -> String -> GrenTask.Task Error (Maybe Task)
-getTask (Registry config) taskId =
+getTask (Registry config) tid =
     let
         taskDir =
-            Path.append (Path.fromPosixString taskId) config.registryRoot
+            Path.append (Path.fromPosixString tid) config.registryRoot
 
         taskPath =
             Path.append (Path.fromPosixString "task.json") taskDir
@@ -361,13 +631,13 @@ updateTask :
     -> String
     -> (Task -> Task)
     -> GrenTask.Task Error Task
-updateTask (Registry config) taskId updateFn =
-    getTask (Registry config) taskId
+updateTask (Registry config) theTaskId updateFn =
+    getTask (Registry config) theTaskId
         |> GrenTask.andThen
             (\maybeTask ->
                 when maybeTask is
                     Nothing ->
-                        GrenTask.fail (TaskNotFound taskId)
+                        GrenTask.fail (TaskNotFound theTaskId)
 
                     Just task ->
                         Time.now
@@ -377,10 +647,10 @@ updateTask (Registry config) taskId updateFn =
                                     let
                                         updatedTask =
                                             updateFn task
-                                                |> (\t -> { t | updatedAt = now })
+                                                |> setUpdatedAt now
 
                                         taskDir =
-                                            Path.append (Path.fromPosixString taskId) config.registryRoot
+                                            Path.append (Path.fromPosixString theTaskId) config.registryRoot
 
                                         taskPath =
                                             Path.append (Path.fromPosixString "task.json") taskDir
@@ -400,9 +670,9 @@ updateTask (Registry config) taskId updateFn =
                                                             | tasks =
                                                                 Array.map
                                                                     (\summary ->
-                                                                        if summary.id == taskId then
+                                                                        if summary.id == theTaskId then
                                                                             { summary
-                                                                                | status = updatedTask.status
+                                                                                | status = taskStatus updatedTask
                                                                                 , updatedAt = now
                                                                             }
                                                                         else
@@ -424,8 +694,8 @@ updateStatus :
     -> String
     -> TaskStatus
     -> GrenTask.Task Error Task
-updateStatus registry taskId newStatus =
-    updateTask registry taskId (\task -> { task | status = newStatus })
+updateStatus registry theTaskId newStatus =
+    updateTask registry theTaskId (setTaskStatus newStatus)
 
 
 {-| List all tasks, optionally filtered by status.
@@ -483,7 +753,7 @@ getRecentTasks registry limit =
         |> GrenTask.map
             (\tasks ->
                 tasks
-                    |> Array.sortBy (\t -> negate (Time.posixToMillis t.updatedAt))
+                    |> Array.sortBy (\t -> negate (Time.posixToMillis (taskUpdatedAt t)))
                     |> Array.takeFirst limit
             )
 
@@ -495,10 +765,10 @@ recordEvent :
     -> String
     -> { eventType : String, data : Dict String String }
     -> GrenTask.Task Error {}
-recordEvent (Registry config) taskId event =
+recordEvent (Registry config) tid event =
     let
         taskDir =
-            Path.append (Path.fromPosixString taskId) config.registryRoot
+            Path.append (Path.fromPosixString tid) config.registryRoot
 
         historyPath =
             Path.append (Path.fromPosixString "history.json") taskDir
@@ -534,21 +804,46 @@ recordEvent (Registry config) taskId event =
 -- JSON ENCODING/DECODING
 
 
-{-| Encode a task to JSON.
+{-| Encode a task to JSON. Includes a "taskType" discriminator field.
+
+    The discriminator is named "taskType" rather than "type" because "type"
+    is already used as the discriminator inside the nested status object
+    (e.g. {"type": "active"}). Using "taskType" avoids ambiguity.
 -}
 encodeTask : Task -> Encode.Value
 encodeTask task =
-    Encode.object
-        [ { key = "id", value = Encode.string task.id }
-        , { key = "description", value = Encode.string task.description }
-        , { key = "status", value = encodeStatus task.status }
-        , { key = "createdAt", value = Encode.int (Time.posixToMillis task.createdAt) }
-        , { key = "updatedAt", value = Encode.int (Time.posixToMillis task.updatedAt) }
-        , { key = "sessionId", value = encodeMaybe Encode.string task.sessionId }
-        , { key = "source", value = encodeSourceInfo task.source }
-        , { key = "agentWorkspace", value = Encode.string task.agentWorkspace }
-        , { key = "attachments", value = Encode.array encodeAttachment task.attachments }
-        ]
+    when task is
+        DescriptionOnly t ->
+            Encode.object
+                [ { key = "taskType", value = Encode.string "descriptionOnly" }
+                , { key = "id", value = Encode.string t.id }
+                , { key = "description", value = Encode.string t.description }
+                , { key = "status", value = encodeStatus t.status }
+                , { key = "createdAt", value = Encode.int (Time.posixToMillis t.createdAt) }
+                , { key = "updatedAt", value = Encode.int (Time.posixToMillis t.updatedAt) }
+                , { key = "sessionId", value = encodeMaybe Encode.string t.sessionId }
+                , { key = "source", value = encodeSourceInfo t.source }
+                , { key = "agentWorkspace", value = Encode.string t.agentWorkspace }
+                , { key = "attachments", value = Encode.array encodeAttachment t.attachments }
+                ]
+
+        Planned t ->
+            Encode.object
+                [ { key = "taskType", value = Encode.string "planned" }
+                , { key = "id", value = Encode.string t.id }
+                , { key = "description", value = Encode.string t.description }
+                , { key = "status", value = encodeStatus t.status }
+                , { key = "createdAt", value = Encode.int (Time.posixToMillis t.createdAt) }
+                , { key = "updatedAt", value = Encode.int (Time.posixToMillis t.updatedAt) }
+                , { key = "sessionId", value = encodeMaybe Encode.string t.sessionId }
+                , { key = "source", value = encodeSourceInfo t.source }
+                , { key = "agentWorkspace", value = Encode.string t.agentWorkspace }
+                , { key = "attachments", value = Encode.array encodeAttachment t.attachments }
+                , { key = "summary", value = Encode.string t.summary }
+                , { key = "requirements", value = Encode.array Encode.string t.requirements }
+                , { key = "acceptanceCriteria", value = Encode.array Encode.string t.acceptanceCriteria }
+                , { key = "plan", value = Encode.array Encode.string t.plan }
+                ]
 
 
 {-| Encode an attachment to JSON.
@@ -612,10 +907,32 @@ encodeMaybe encoder maybeValue =
             Encode.null
 
 
-{-| Decode a task from JSON.
+{-| Decode a task from JSON. Handles both the new union type format
+    (with "taskType" discriminator) and backward-compatible legacy format.
 -}
 taskDecoder : Decoder Task
 taskDecoder =
+    Decode.oneOf
+        [ Decode.field "taskType" Decode.string
+            |> Decode.andThen
+                (\taskType ->
+                    when taskType is
+                        "planned" ->
+                            plannedTaskDecoder
+
+                        _ ->
+                            descriptionOnlyTaskDecoder
+                )
+        , -- Backward compatibility: no taskType field.
+          -- Check if planning fields are present to decide variant.
+          legacyTaskDecoder
+        ]
+
+
+{-| Decode a DescriptionOnly task.
+-}
+descriptionOnlyTaskDecoder : Decoder Task
+descriptionOnlyTaskDecoder =
     Decode.map8
         (\id description status createdAt updatedAt sessionId source agentWorkspace ->
             { id = id
@@ -643,7 +960,157 @@ taskDecoder =
                     [ Decode.field "attachments" (Decode.array attachmentDecoder)
                     , Decode.succeed []
                     ]
+                    |> Decode.map (\attachments -> DescriptionOnly { task | attachments = attachments })
+            )
+
+
+{-| Decode a Planned task (all base fields plus planning fields).
+-}
+plannedTaskDecoder : Decoder Task
+plannedTaskDecoder =
+    Decode.map8
+        (\id description status createdAt updatedAt sessionId source agentWorkspace ->
+            { id = id
+            , description = description
+            , status = status
+            , createdAt = createdAt
+            , updatedAt = updatedAt
+            , sessionId = sessionId
+            , source = source
+            , agentWorkspace = agentWorkspace
+            , attachments = []
+            , summary = ""
+            , requirements = []
+            , acceptanceCriteria = []
+            , plan = []
+            }
+        )
+        (Decode.field "id" Decode.string)
+        (Decode.field "description" Decode.string)
+        (Decode.field "status" statusDecoder)
+        (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "sessionId" (Decode.maybe Decode.string))
+        (Decode.field "source" sourceInfoDecoder)
+        (Decode.field "agentWorkspace" Decode.string)
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "attachments" (Decode.array attachmentDecoder)
+                    , Decode.succeed []
+                    ]
                     |> Decode.map (\attachments -> { task | attachments = attachments })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "summary" Decode.string
+                    , Decode.succeed ""
+                    ]
+                    |> Decode.map (\summary -> { task | summary = summary })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "requirements" (Decode.array Decode.string)
+                    , Decode.succeed []
+                    ]
+                    |> Decode.map (\requirements -> { task | requirements = requirements })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "acceptanceCriteria" (Decode.array Decode.string)
+                    , Decode.succeed []
+                    ]
+                    |> Decode.map (\acceptanceCriteria -> { task | acceptanceCriteria = acceptanceCriteria })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "plan" (Decode.array Decode.string)
+                    , Decode.succeed []
+                    ]
+                    |> Decode.map (\plan -> Planned { task | plan = plan })
+            )
+
+
+{-| Backward-compatible decoder for legacy task.json files without a taskType field.
+
+    This decoder is only reached when the taskType discriminator field is absent
+    (via the Decode.oneOf in taskDecoder). It uses a heuristic: if any planning
+    fields contain non-empty data, the task is decoded as Planned; otherwise as
+    DescriptionOnly. This heuristic is a fallback for truly legacy data written
+    before the taskType field was introduced. Newly serialized tasks always
+    include taskType, so the discriminator-based branch handles them.
+-}
+legacyTaskDecoder : Decoder Task
+legacyTaskDecoder =
+    Decode.map8
+        (\id description status createdAt updatedAt sessionId source agentWorkspace ->
+            { id = id
+            , description = description
+            , status = status
+            , createdAt = createdAt
+            , updatedAt = updatedAt
+            , sessionId = sessionId
+            , source = source
+            , agentWorkspace = agentWorkspace
+            , attachments = []
+            }
+        )
+        (Decode.field "id" Decode.string)
+        (Decode.field "description" Decode.string)
+        (Decode.field "status" statusDecoder)
+        (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "sessionId" (Decode.maybe Decode.string))
+        (Decode.field "source" sourceInfoDecoder)
+        (Decode.field "agentWorkspace" Decode.string)
+        |> Decode.andThen
+            (\baseTask ->
+                Decode.oneOf
+                    [ Decode.field "attachments" (Decode.array attachmentDecoder)
+                    , Decode.succeed []
+                    ]
+                    |> Decode.map (\attachments -> { baseTask | attachments = attachments })
+            )
+        |> Decode.andThen
+            (\baseTask ->
+                -- Try decoding planning fields. If any are present, create Planned.
+                Decode.map4
+                    (\summary requirements acceptanceCriteria plan ->
+                        { summary = summary
+                        , requirements = requirements
+                        , acceptanceCriteria = acceptanceCriteria
+                        , plan = plan
+                        }
+                    )
+                    (Decode.oneOf [ Decode.field "summary" Decode.string, Decode.succeed "" ])
+                    (Decode.oneOf [ Decode.field "requirements" (Decode.array Decode.string), Decode.succeed [] ])
+                    (Decode.oneOf [ Decode.field "acceptanceCriteria" (Decode.array Decode.string), Decode.succeed [] ])
+                    (Decode.oneOf [ Decode.field "plan" (Decode.array Decode.string), Decode.succeed [] ])
+                    |> Decode.map
+                        (\planningFields ->
+                            if String.isEmpty planningFields.summary && Array.isEmpty planningFields.requirements && Array.isEmpty planningFields.acceptanceCriteria && Array.isEmpty planningFields.plan then
+                                DescriptionOnly baseTask
+                            else
+                                Planned
+                                    { id = baseTask.id
+                                    , description = baseTask.description
+                                    , status = baseTask.status
+                                    , createdAt = baseTask.createdAt
+                                    , updatedAt = baseTask.updatedAt
+                                    , sessionId = baseTask.sessionId
+                                    , source = baseTask.source
+                                    , agentWorkspace = baseTask.agentWorkspace
+                                    , attachments = baseTask.attachments
+                                    , summary = planningFields.summary
+                                    , requirements = planningFields.requirements
+                                    , acceptanceCriteria = planningFields.acceptanceCriteria
+                                    , plan = planningFields.plan
+                                    }
+                        )
             )
 
 

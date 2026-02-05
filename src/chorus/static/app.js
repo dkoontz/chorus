@@ -5516,6 +5516,9 @@ var $gren_lang$browser$Http$get = function(r) {
 	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$emptyBody, expect: r.expect, headers: [  ], method: 'GET', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: r.url });
 };
 var $gren_lang$core$Json$Decode$andThen = _Json_andThen;
+var $author$project$Api$DescriptionOnly = function (a) {
+	return { $: 'DescriptionOnly', a: a };
+};
 var $gren_lang$core$Json$Decode$array = _Json_decodeArray;
 var $gren_lang$core$Json$Decode$int = _Json_decodeInt;
 var $gren_lang$core$Json$Decode$map4 = _Json_map4;
@@ -5560,15 +5563,64 @@ var $author$project$Api$statusDecoder = A2($gren_lang$core$Json$Decode$andThen, 
 				return $gren_lang$core$Json$Decode$fail('Unknown status type: ' + statusType);
 		}
 	}, A2($gren_lang$core$Json$Decode$field, 'type', $gren_lang$core$Json$Decode$string));
-var $author$project$Api$taskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(task) {
+var $author$project$Api$descriptionOnlyTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(task) {
 		return A2($gren_lang$core$Json$Decode$map, function(attachments) {
-				return _Utils_update(task, { attachments: attachments });
+				return $author$project$Api$DescriptionOnly(_Utils_update(task, { attachments: attachments }));
 			}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Api$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
 	}, A9($gren_lang$core$Json$Decode$map8, F8(function(id, description, status, createdAt, updatedAt, sessionId, source, agentWorkspace) {
 				return { agentWorkspace: agentWorkspace, attachments: [  ], createdAt: createdAt, description: description, id: id, sessionId: sessionId, source: source, status: status, updatedAt: updatedAt };
 			}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Api$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Api$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string)));
-var $author$project$Api$getTask$ = function(taskId, toMsg) {
-	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), url: '/api/tasks/' + taskId });
+var $author$project$Api$Planned = function (a) {
+	return { $: 'Planned', a: a };
+};
+var $gren_lang$core$Array$isEmpty = function(array) {
+	return $gren_lang$core$Array$length(array) === 0;
+};
+var $author$project$Api$legacyTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(baseTask) {
+		return A2($gren_lang$core$Json$Decode$map, function(planningFields) {
+				return ($gren_lang$core$String$isEmpty(planningFields.summary) && ($gren_lang$core$Array$isEmpty(planningFields.requirements) && ($gren_lang$core$Array$isEmpty(planningFields.acceptanceCriteria) && $gren_lang$core$Array$isEmpty(planningFields.plan)))) ? $author$project$Api$DescriptionOnly(baseTask) : $author$project$Api$Planned({ acceptanceCriteria: planningFields.acceptanceCriteria, agentWorkspace: baseTask.agentWorkspace, attachments: baseTask.attachments, createdAt: baseTask.createdAt, description: baseTask.description, id: baseTask.id, plan: planningFields.plan, requirements: planningFields.requirements, sessionId: baseTask.sessionId, source: baseTask.source, status: baseTask.status, summary: planningFields.summary, updatedAt: baseTask.updatedAt });
+			}, A5($gren_lang$core$Json$Decode$map4, F4(function(summary, requirements, acceptanceCriteria, plan) {
+						return { acceptanceCriteria: acceptanceCriteria, plan: plan, requirements: requirements, summary: summary };
+					}), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'summary', $gren_lang$core$Json$Decode$string), $gren_lang$core$Json$Decode$succeed('') ]), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'requirements', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'acceptanceCriteria', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'plan', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ])));
+	}, A2($gren_lang$core$Json$Decode$andThen, function(baseTask) {
+			return A2($gren_lang$core$Json$Decode$map, function(attachments) {
+					return _Utils_update(baseTask, { attachments: attachments });
+				}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Api$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+		}, A9($gren_lang$core$Json$Decode$map8, F8(function(id, description, status, createdAt, updatedAt, sessionId, source, agentWorkspace) {
+					return { agentWorkspace: agentWorkspace, attachments: [  ], createdAt: createdAt, description: description, id: id, sessionId: sessionId, source: source, status: status, updatedAt: updatedAt };
+				}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Api$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Api$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string))));
+var $author$project$Api$plannedTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(task) {
+		return A2($gren_lang$core$Json$Decode$map, function(plan) {
+				return $author$project$Api$Planned(_Utils_update(task, { plan: plan }));
+			}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'plan', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+	}, A2($gren_lang$core$Json$Decode$andThen, function(task) {
+			return A2($gren_lang$core$Json$Decode$map, function(acceptanceCriteria) {
+					return _Utils_update(task, { acceptanceCriteria: acceptanceCriteria });
+				}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'acceptanceCriteria', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+		}, A2($gren_lang$core$Json$Decode$andThen, function(task) {
+				return A2($gren_lang$core$Json$Decode$map, function(requirements) {
+						return _Utils_update(task, { requirements: requirements });
+					}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'requirements', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+			}, A2($gren_lang$core$Json$Decode$andThen, function(task) {
+					return A2($gren_lang$core$Json$Decode$map, function(summary) {
+							return _Utils_update(task, { summary: summary });
+						}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'summary', $gren_lang$core$Json$Decode$string), $gren_lang$core$Json$Decode$succeed('') ]));
+				}, A2($gren_lang$core$Json$Decode$andThen, function(task) {
+						return A2($gren_lang$core$Json$Decode$map, function(attachments) {
+								return _Utils_update(task, { attachments: attachments });
+							}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Api$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+					}, A9($gren_lang$core$Json$Decode$map8, F8(function(id, description, status, createdAt, updatedAt, sessionId, source, agentWorkspace) {
+								return { acceptanceCriteria: [  ], agentWorkspace: agentWorkspace, attachments: [  ], createdAt: createdAt, description: description, id: id, plan: [  ], requirements: [  ], sessionId: sessionId, source: source, status: status, summary: '', updatedAt: updatedAt };
+							}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Api$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Api$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string)))))));
+var $author$project$Api$taskDecoder = $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$andThen, function(taskType) {
+			if (taskType === 'planned') {
+				return $author$project$Api$plannedTaskDecoder;
+			} else {
+				return $author$project$Api$descriptionOnlyTaskDecoder;
+			}
+		}, A2($gren_lang$core$Json$Decode$field, 'taskType', $gren_lang$core$Json$Decode$string)), $author$project$Api$legacyTaskDecoder ]);
+var $author$project$Api$getTask$ = function(tid, toMsg) {
+	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), url: '/api/tasks/' + tid });
 };
 var $author$project$Api$getTask = F2($author$project$Api$getTask$);
 var $gren_lang$core$Array$foldl = _Array_foldl;
@@ -5586,8 +5638,8 @@ var $author$project$Api$eventDecoder = A4($gren_lang$core$Json$Decode$map3, F3(f
 var $author$project$Api$historyDecoder = A2($gren_lang$core$Json$Decode$map, function(events) {
 		return { events: events };
 	}, A2($gren_lang$core$Json$Decode$field, 'events', $gren_lang$core$Json$Decode$array($author$project$Api$eventDecoder)));
-var $author$project$Api$getTaskHistory$ = function(taskId, toMsg) {
-	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$historyDecoder)), url: '/api/tasks/' + (taskId + '/history') });
+var $author$project$Api$getTaskHistory$ = function(tid, toMsg) {
+	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$historyDecoder)), url: '/api/tasks/' + (tid + '/history') });
 };
 var $author$project$Api$getTaskHistory = F2($author$project$Api$getTaskHistory$);
 var $author$project$Api$messageDecoder = A4($gren_lang$core$Json$Decode$map3, F3(function(id, content, receivedAt) {
@@ -5596,8 +5648,8 @@ var $author$project$Api$messageDecoder = A4($gren_lang$core$Json$Decode$map3, F3
 var $author$project$Api$queueDecoder = A2($gren_lang$core$Json$Decode$map, function(messages) {
 		return { messages: messages };
 	}, A2($gren_lang$core$Json$Decode$field, 'messages', $gren_lang$core$Json$Decode$array($author$project$Api$messageDecoder)));
-var $author$project$Api$getTaskQueue$ = function(taskId, toMsg) {
-	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$queueDecoder)), url: '/api/tasks/' + (taskId + '/queue') });
+var $author$project$Api$getTaskQueue$ = function(tid, toMsg) {
+	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$queueDecoder)), url: '/api/tasks/' + (tid + '/queue') });
 };
 var $author$project$Api$getTaskQueue = F2($author$project$Api$getTaskQueue$);
 var $author$project$Api$getTasks$ = function(maybeStatus, toMsg) {
@@ -5650,7 +5702,7 @@ var $author$project$Main$urlToPage = function(url) {
 };
 var $author$project$Main$init$ = function(_v0, url, key) {
 	var page = $author$project$Main$urlToPage(url);
-	var model = { createForm: $author$project$Main$emptyCreateForm, error: $gren_lang$core$Maybe$Nothing, key: key, lastPoll: $gren_lang$core$Time$millisToPosix(0), loading: true, page: page, selectedTask: $gren_lang$core$Maybe$Nothing, statusFilter: $gren_lang$core$Maybe$Nothing, taskHistory: $gren_lang$core$Maybe$Nothing, taskQueue: $gren_lang$core$Maybe$Nothing, tasks: [  ] };
+	var model = { createForm: $author$project$Main$emptyCreateForm, editingPlanning: $gren_lang$core$Maybe$Nothing, error: $gren_lang$core$Maybe$Nothing, key: key, lastPoll: $gren_lang$core$Time$millisToPosix(0), loading: true, page: page, selectedTask: $gren_lang$core$Maybe$Nothing, statusFilter: $gren_lang$core$Maybe$Nothing, taskHistory: $gren_lang$core$Maybe$Nothing, taskQueue: $gren_lang$core$Maybe$Nothing, tasks: [  ] };
 	return { command: $author$project$Main$loadPageData(page), model: model };
 };
 var $author$project$Main$init = F3($author$project$Main$init$);
@@ -5830,6 +5882,9 @@ var $author$project$Main$FileUploaded = function (a) {
 var $author$project$Main$GotFileBytes = function (a) {
 	return { $: 'GotFileBytes', a: a };
 };
+var $author$project$Main$PlanningUpdated = function (a) {
+	return { $: 'PlanningUpdated', a: a };
+};
 var $author$project$Main$StatusUpdated = function (a) {
 	return { $: 'StatusUpdated', a: a };
 };
@@ -5868,8 +5923,8 @@ var $author$project$Api$createTask$ = function(_v0, toMsg) {
 	return $gren_lang$browser$Http$post({ body: $gren_lang$browser$Http$jsonBody($gren_lang$core$Json$Encode$object([ { key: 'description', value: $gren_lang$core$Json$Encode$string(description) }, { key: 'source', value: $author$project$Api$encodeSourceInfo(source) } ])), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), url: '/api/tasks' });
 };
 var $author$project$Api$createTask = F2($author$project$Api$createTask$);
-var $author$project$Api$deleteAttachment$ = function(taskId, filename, toMsg) {
-	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$emptyBody, expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), headers: [  ], method: 'DELETE', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (taskId + ('/attachments/' + filename)) });
+var $author$project$Api$deleteAttachment$ = function(tid, filename, toMsg) {
+	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$emptyBody, expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), headers: [  ], method: 'DELETE', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + ('/attachments/' + filename)) });
 };
 var $author$project$Api$deleteAttachment = F3($author$project$Api$deleteAttachment$);
 var $author$project$Main$httpErrorToString = function(error) {
@@ -5889,7 +5944,17 @@ var $author$project$Main$httpErrorToString = function(error) {
 			return 'Invalid response: ' + body;
 	}
 };
+var $gren_lang$core$Array$keepIf = _Array_filter;
 var $gren_lang$browser$Browser$Navigation$load = _Browser_load;
+var $gren_lang$core$Maybe$map$ = function(f, maybe) {
+	if (maybe.$ === 'Just') {
+		var value = maybe.a;
+		return $gren_lang$core$Maybe$Just(f(value));
+	} else {
+		return $gren_lang$core$Maybe$Nothing;
+	}
+};
+var $gren_lang$core$Maybe$map = F2($gren_lang$core$Maybe$map$);
 
 
 // DECODER
@@ -6074,7 +6139,18 @@ function _File_toUrl(blob) {
 }
 var $gren_lang$browser$File$mime = _File_mime;
 var $gren_lang$browser$File$name = _File_name;
+var $gren_lang$core$Basics$neq = _Utils_notEqual;
 var $gren_lang$browser$Browser$Navigation$pushUrl = _Browser_pushUrl;
+var $gren_lang$core$Array$set = _Array_set;
+var $author$project$Api$taskId = function(task) {
+	if (task.$ === 'DescriptionOnly') {
+		var t = task.a;
+		return t.id;
+	} else {
+		var t = task.a;
+		return t.id;
+	}
+};
 var $gren_lang$browser$File$toBytes = _File_toBytes;
 var $gren_lang$url$Url$addPort$ = function(maybePort, starter) {
 	if (maybePort.$ === 'Nothing') {
@@ -6106,7 +6182,25 @@ var $gren_lang$url$Url$toString = function(url) {
 	return $gren_lang$url$Url$addPrefixed$('#', url.fragment, $gren_lang$url$Url$addPrefixed$('?', url.query, _Utils_ap($gren_lang$url$Url$addPort$(url.port_, _Utils_ap(http, url.host)), url.path)));
 };
 var $gren_lang$core$String$trim = _String_trim;
-var $author$project$Api$updateTaskStatus$ = function(taskId, statusStr, toMsg) {
+var $gren_lang$core$Json$Encode$array$ = function(func, entries) {
+	return _Json_wrap(A3($gren_lang$core$Array$foldl, _Json_addEntry(func), _Json_emptyArray({  }), entries));
+};
+var $gren_lang$core$Json$Encode$array = F2($gren_lang$core$Json$Encode$array$);
+var $gren_lang$core$Array$flatten = _Array_flat;
+var $author$project$Api$updateTaskPlanning$ = function(tid, params, toMsg) {
+	var encodeMaybeField = F3(function(key, encoder, maybeVal) {
+			if (maybeVal.$ === 'Just') {
+				var val = maybeVal.a;
+				return [ { key: key, value: encoder(val) } ];
+			} else {
+				return [  ];
+			}
+		});
+	var fields = $gren_lang$core$Array$flatten([ A3(encodeMaybeField, 'summary', $gren_lang$core$Json$Encode$string, params.summary), A3(encodeMaybeField, 'requirements', $gren_lang$core$Json$Encode$array($gren_lang$core$Json$Encode$string), params.requirements), A3(encodeMaybeField, 'acceptanceCriteria', $gren_lang$core$Json$Encode$array($gren_lang$core$Json$Encode$string), params.acceptanceCriteria), A3(encodeMaybeField, 'plan', $gren_lang$core$Json$Encode$array($gren_lang$core$Json$Encode$string), params.plan) ]);
+	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$jsonBody($gren_lang$core$Json$Encode$object(fields)), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), headers: [  ], method: 'PUT', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + '/planning') });
+};
+var $author$project$Api$updateTaskPlanning = F3($author$project$Api$updateTaskPlanning$);
+var $author$project$Api$updateTaskStatus$ = function(tid, statusStr, toMsg) {
 	var statusValue = function () {
 		if (statusStr === 'failed') {
 			return $gren_lang$core$Json$Encode$object([ { key: 'type', value: $gren_lang$core$Json$Encode$string('failed') }, { key: 'message', value: $gren_lang$core$Json$Encode$string('') } ]);
@@ -6114,12 +6208,12 @@ var $author$project$Api$updateTaskStatus$ = function(taskId, statusStr, toMsg) {
 			return $gren_lang$core$Json$Encode$object([ { key: 'type', value: $gren_lang$core$Json$Encode$string(statusStr) } ]);
 		}
 	}();
-	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$jsonBody($gren_lang$core$Json$Encode$object([ { key: 'status', value: statusValue } ])), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), headers: [  ], method: 'PUT', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (taskId + '/status') });
+	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$jsonBody($gren_lang$core$Json$Encode$object([ { key: 'status', value: statusValue } ])), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), headers: [  ], method: 'PUT', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + '/status') });
 };
 var $author$project$Api$updateTaskStatus = F3($author$project$Api$updateTaskStatus$);
 var $gren_lang$browser$Http$bytesBody = _Http_pair;
-var $author$project$Api$uploadAttachment$ = function(taskId, filename, fileBytes, contentType, toMsg) {
-	return $gren_lang$browser$Http$request({ body: A2($gren_lang$browser$Http$bytesBody, contentType, fileBytes), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), headers: [  ], method: 'POST', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (taskId + ('/attachments?filename=' + filename)) });
+var $author$project$Api$uploadAttachment$ = function(tid, filename, fileBytes, contentType, toMsg) {
+	return $gren_lang$browser$Http$request({ body: A2($gren_lang$browser$Http$bytesBody, contentType, fileBytes), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), headers: [  ], method: 'POST', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + ('/attachments?filename=' + filename)) });
 };
 var $author$project$Api$uploadAttachment = F5($author$project$Api$uploadAttachment$);
 var $author$project$Main$update$ = function(msg, model) {
@@ -6136,7 +6230,7 @@ var $author$project$Main$update$ = function(msg, model) {
 		case 'UrlChanged':
 			var url = msg.a;
 			var page = $author$project$Main$urlToPage(url);
-			return { command: $author$project$Main$loadPageData(page), model: _Utils_update(model, { loading: true, page: page, selectedTask: $gren_lang$core$Maybe$Nothing, taskHistory: $gren_lang$core$Maybe$Nothing, taskQueue: $gren_lang$core$Maybe$Nothing }) };
+			return { command: $author$project$Main$loadPageData(page), model: _Utils_update(model, { editingPlanning: $gren_lang$core$Maybe$Nothing, loading: true, page: page, selectedTask: $gren_lang$core$Maybe$Nothing, taskHistory: $gren_lang$core$Maybe$Nothing, taskQueue: $gren_lang$core$Maybe$Nothing }) };
 		case 'GotTasks':
 			var result = msg.a;
 			if (result.$ === 'Ok') {
@@ -6185,14 +6279,14 @@ var $author$project$Main$update$ = function(msg, model) {
 			if (result.$ === 'Ok') {
 				var updatedTask = result.a;
 				var updateTask = function(t) {
-					return _Utils_eq(t.id, updatedTask.id) ? updatedTask : t;
+					return _Utils_eq($author$project$Api$taskId(t), $author$project$Api$taskId(updatedTask)) ? updatedTask : t;
 				};
 				var newTasks = A2($gren_lang$core$Array$map, updateTask, model.tasks);
 				var newSelected = function () {
 					var _v8 = model.selectedTask;
 					if (_v8.$ === 'Just') {
 						var selected = _v8.a;
-						return _Utils_eq(selected.id, updatedTask.id) ? $gren_lang$core$Maybe$Just(updatedTask) : model.selectedTask;
+						return _Utils_eq($author$project$Api$taskId(selected), $author$project$Api$taskId(updatedTask)) ? $gren_lang$core$Maybe$Just(updatedTask) : model.selectedTask;
 					} else {
 						return $gren_lang$core$Maybe$Nothing;
 					}
@@ -6271,11 +6365,100 @@ var $author$project$Main$update$ = function(msg, model) {
 			var taskId = _v14.taskId;
 			var filename = _v14.filename;
 			return { command: $author$project$Api$deleteAttachment$(taskId, filename, $author$project$Main$AttachmentDeleted), model: model };
-		default:
+		case 'AttachmentDeleted':
 			var result = msg.a;
 			if (result.$ === 'Ok') {
 				var updatedTask = result.a;
 				return { command: $gren_lang$core$Platform$Cmd$none, model: _Utils_update(model, { error: $gren_lang$core$Maybe$Nothing, selectedTask: $gren_lang$core$Maybe$Just(updatedTask) }) };
+			} else {
+				var err = result.a;
+				return { command: $gren_lang$core$Platform$Cmd$none, model: _Utils_update(model, { error: $gren_lang$core$Maybe$Just($author$project$Main$httpErrorToString(err)) }) };
+			}
+		case 'EditPlanningSection':
+			var section = msg.a;
+			var editState = function () {
+				var _v16 = model.selectedTask;
+				if (_v16.$ === 'Just') {
+					var task = _v16.a;
+					var planning = function () {
+						if (task.$ === 'DescriptionOnly') {
+							return { acceptanceCriteria: [  ], plan: [  ], requirements: [  ], summary: '' };
+						} else {
+							var t = task.a;
+							return { acceptanceCriteria: t.acceptanceCriteria, plan: t.plan, requirements: t.requirements, summary: t.summary };
+						}
+					}();
+					switch (section.$) {
+						case 'PlanningSummary':
+							return $gren_lang$core$Maybe$Just({ draftItems: [  ], draftSummary: planning.summary, section: section });
+						case 'PlanningRequirements':
+							return $gren_lang$core$Maybe$Just({ draftItems: planning.requirements, draftSummary: '', section: section });
+						case 'PlanningAcceptanceCriteria':
+							return $gren_lang$core$Maybe$Just({ draftItems: planning.acceptanceCriteria, draftSummary: '', section: section });
+						default:
+							return $gren_lang$core$Maybe$Just({ draftItems: planning.plan, draftSummary: '', section: section });
+					}
+				} else {
+					return $gren_lang$core$Maybe$Nothing;
+				}
+			}();
+			return { command: $gren_lang$core$Platform$Cmd$none, model: _Utils_update(model, { editingPlanning: editState }) };
+		case 'UpdatePlanningDraft':
+			var value = msg.a;
+			return { command: $gren_lang$core$Platform$Cmd$none, model: _Utils_update(model, { editingPlanning: $gren_lang$core$Maybe$map$(function(state) {
+						return _Utils_update(state, { draftSummary: value });
+					}, model.editingPlanning) }) };
+		case 'UpdatePlanningItemDraft':
+			var _v19 = msg.a;
+			var index = _v19.index;
+			var value = _v19.value;
+			return { command: $gren_lang$core$Platform$Cmd$none, model: _Utils_update(model, { editingPlanning: $gren_lang$core$Maybe$map$(function(state) {
+						return _Utils_update(state, { draftItems: A3($gren_lang$core$Array$set, index, value, state.draftItems) });
+					}, model.editingPlanning) }) };
+		case 'AddPlanningItem':
+			return { command: $gren_lang$core$Platform$Cmd$none, model: _Utils_update(model, { editingPlanning: $gren_lang$core$Maybe$map$(function(state) {
+						return _Utils_update(state, { draftItems: $gren_lang$core$Array$pushLast$('', state.draftItems) });
+					}, model.editingPlanning) }) };
+		case 'RemovePlanningItem':
+			var index = msg.a;
+			return { command: $gren_lang$core$Platform$Cmd$none, model: _Utils_update(model, { editingPlanning: $gren_lang$core$Maybe$map$(function(state) {
+						return _Utils_update(state, { draftItems: A2($gren_lang$core$Array$map, function ($) {
+									return $.item;
+								}, A2($gren_lang$core$Array$keepIf, function(entry) {
+										return !_Utils_eq(entry.index, index);
+									}, A2($gren_lang$core$Array$indexedMap, F2(function(i, item) {
+												return { index: i, item: item };
+											}), state.draftItems))) });
+					}, model.editingPlanning) }) };
+		case 'SavePlanning':
+			var _v20 = { editing: model.editingPlanning, task: model.selectedTask };
+			if ((_v20.task.$ === 'Just') && (_v20.editing.$ === 'Just')) {
+				var task = _v20.task.a;
+				var editState = _v20.editing.a;
+				var params = function () {
+					var _v21 = editState.section;
+					switch (_v21.$) {
+						case 'PlanningSummary':
+							return { acceptanceCriteria: $gren_lang$core$Maybe$Nothing, plan: $gren_lang$core$Maybe$Nothing, requirements: $gren_lang$core$Maybe$Nothing, summary: $gren_lang$core$Maybe$Just(editState.draftSummary) };
+						case 'PlanningRequirements':
+							return { acceptanceCriteria: $gren_lang$core$Maybe$Nothing, plan: $gren_lang$core$Maybe$Nothing, requirements: $gren_lang$core$Maybe$Just(editState.draftItems), summary: $gren_lang$core$Maybe$Nothing };
+						case 'PlanningAcceptanceCriteria':
+							return { acceptanceCriteria: $gren_lang$core$Maybe$Just(editState.draftItems), plan: $gren_lang$core$Maybe$Nothing, requirements: $gren_lang$core$Maybe$Nothing, summary: $gren_lang$core$Maybe$Nothing };
+						default:
+							return { acceptanceCriteria: $gren_lang$core$Maybe$Nothing, plan: $gren_lang$core$Maybe$Just(editState.draftItems), requirements: $gren_lang$core$Maybe$Nothing, summary: $gren_lang$core$Maybe$Nothing };
+					}
+				}();
+				return { command: $author$project$Api$updateTaskPlanning$($author$project$Api$taskId(task), params, $author$project$Main$PlanningUpdated), model: model };
+			} else {
+				return { command: $gren_lang$core$Platform$Cmd$none, model: model };
+			}
+		case 'CancelPlanningEdit':
+			return { command: $gren_lang$core$Platform$Cmd$none, model: _Utils_update(model, { editingPlanning: $gren_lang$core$Maybe$Nothing }) };
+		default:
+			var result = msg.a;
+			if (result.$ === 'Ok') {
+				var updatedTask = result.a;
+				return { command: $gren_lang$core$Platform$Cmd$none, model: _Utils_update(model, { editingPlanning: $gren_lang$core$Maybe$Nothing, error: $gren_lang$core$Maybe$Nothing, selectedTask: $gren_lang$core$Maybe$Just(updatedTask) }) };
 			} else {
 				var err = result.a;
 				return { command: $gren_lang$core$Platform$Cmd$none, model: _Utils_update(model, { error: $gren_lang$core$Maybe$Just($author$project$Main$httpErrorToString(err)) }) };
@@ -6324,7 +6507,6 @@ var $author$project$Main$viewError = function(maybeError) {
 };
 var $author$project$Main$OpenCreateForm = { $: 'OpenCreateForm' };
 var $gren_lang$browser$Html$a = $gren_lang$browser$Html$node('a');
-var $gren_lang$core$Array$keepIf = _Array_filter;
 var $gren_lang$browser$Html$Attributes$classList = function(classes) {
 	return $gren_lang$browser$Html$Attributes$class(A2($gren_lang$core$String$join, ' ', A2($gren_lang$core$Array$map, function ($) {
 					return $._class;
@@ -6351,8 +6533,13 @@ var $author$project$Main$viewHeader = function(model) {
 							}
 						}() } ]) ], [ $gren_lang$browser$Html$text('Tasks') ]) ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-primary'), $gren_lang$browser$Html$Events$onClick($author$project$Main$OpenCreateForm) ], [ $gren_lang$browser$Html$text('+ New Task') ]) ]) ]);
 };
+var $author$project$Main$AddPlanningItem = { $: 'AddPlanningItem' };
+var $author$project$Main$CancelPlanningEdit = { $: 'CancelPlanningEdit' };
 var $author$project$Main$DeleteAttachment = function (a) {
 	return { $: 'DeleteAttachment', a: a };
+};
+var $author$project$Main$EditPlanningSection = function (a) {
+	return { $: 'EditPlanningSection', a: a };
 };
 var $author$project$Main$FileSelected = function (a) {
 	return { $: 'FileSelected', a: a };
@@ -6360,8 +6547,18 @@ var $author$project$Main$FileSelected = function (a) {
 var $author$project$Main$RefreshTask = function (a) {
 	return { $: 'RefreshTask', a: a };
 };
+var $author$project$Main$RemovePlanningItem = function (a) {
+	return { $: 'RemovePlanningItem', a: a };
+};
+var $author$project$Main$SavePlanning = { $: 'SavePlanning' };
 var $author$project$Main$SetStatusFilter = function (a) {
 	return { $: 'SetStatusFilter', a: a };
+};
+var $author$project$Main$UpdatePlanningDraft = function (a) {
+	return { $: 'UpdatePlanningDraft', a: a };
+};
+var $author$project$Main$UpdatePlanningItemDraft = function (a) {
+	return { $: 'UpdatePlanningItemDraft', a: a };
 };
 var $author$project$Main$UpdateTaskStatus = function (a) {
 	return { $: 'UpdateTaskStatus', a: a };
@@ -6417,24 +6614,30 @@ var $author$project$View$Dashboard$statusMatches$ = function(a, b) {
 	return false;
 };
 var $author$project$View$Dashboard$statusMatches = F2($author$project$View$Dashboard$statusMatches$);
+var $author$project$Api$taskStatus = function(task) {
+	if (task.$ === 'DescriptionOnly') {
+		var t = task.a;
+		return t.status;
+	} else {
+		var t = task.a;
+		return t.status;
+	}
+};
 var $author$project$View$Dashboard$countByStatus$ = function(status, tasks) {
 	return A3($gren_lang$core$Array$foldl, F2(function(task, count) {
-				return $author$project$View$Dashboard$statusMatches$(task.status, status) ? (count + 1) : count;
+				return $author$project$View$Dashboard$statusMatches$($author$project$Api$taskStatus(task), status) ? (count + 1) : count;
 			}), 0, tasks);
 };
 var $author$project$View$Dashboard$countByStatus = F2($author$project$View$Dashboard$countByStatus$);
 var $author$project$View$Dashboard$countFailed = function(tasks) {
 	return A3($gren_lang$core$Array$foldl, F2(function(task, count) {
-				var _v0 = task.status;
+				var _v0 = $author$project$Api$taskStatus(task);
 				if (_v0.$ === 'Failed') {
 					return count + 1;
 				} else {
 					return count;
 				}
 			}), 0, tasks);
-};
-var $gren_lang$core$Array$isEmpty = function(array) {
-	return $gren_lang$core$Array$length(array) === 0;
 };
 var $gren_lang$browser$Html$h3 = $gren_lang$browser$Html$node('h3');
 var $gren_lang$core$Basics$negate = function(n) {
@@ -6449,6 +6652,15 @@ var $gren_lang$core$Array$takeFirst$ = function(n, array) {
 	return A3($gren_lang$core$Array$slice, 0, n, array);
 };
 var $gren_lang$core$Array$takeFirst = F2($gren_lang$core$Array$takeFirst$);
+var $author$project$Api$taskUpdatedAt = function(task) {
+	if (task.$ === 'DescriptionOnly') {
+		var t = task.a;
+		return t.updatedAt;
+	} else {
+		var t = task.a;
+		return t.updatedAt;
+	}
+};
 var $gren_lang$browser$Html$ul = $gren_lang$browser$Html$node('ul');
 var $gren_lang$browser$Html$li = $gren_lang$browser$Html$node('li');
 var $author$project$Api$statusToString = function(status) {
@@ -6465,12 +6677,21 @@ var $author$project$Api$statusToString = function(status) {
 			return 'failed';
 	}
 };
+var $author$project$Api$taskDescription = function(task) {
+	if (task.$ === 'DescriptionOnly') {
+		var t = task.a;
+		return t.description;
+	} else {
+		var t = task.a;
+		return t.description;
+	}
+};
 var $author$project$View$Dashboard$viewRecentTask = function(task) {
-	return A2($gren_lang$browser$Html$li, [ $gren_lang$browser$Html$Attributes$class('task-item-compact') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks/' + task.id) ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-' + $author$project$Api$statusToString(task.status)) ], [ $gren_lang$browser$Html$text($author$project$Api$statusToString(task.status)) ]), A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('task-description task-description-truncate') ], [ $gren_lang$browser$Html$text(task.description) ]) ]) ]);
+	return A2($gren_lang$browser$Html$li, [ $gren_lang$browser$Html$Attributes$class('task-item-compact') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks/' + $author$project$Api$taskId(task)) ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-' + $author$project$Api$statusToString($author$project$Api$taskStatus(task))) ], [ $gren_lang$browser$Html$text($author$project$Api$statusToString($author$project$Api$taskStatus(task))) ]), A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('task-description task-description-truncate') ], [ $gren_lang$browser$Html$text($author$project$Api$taskDescription(task)) ]) ]) ]);
 };
 var $author$project$View$Dashboard$viewRecentTasks = function(tasks) {
 	var recentTasks = $gren_lang$core$Array$takeFirst$(5, A2($gren_lang$core$Array$sortBy, function(t) {
-				return -$gren_lang$core$Time$posixToMillis(t.updatedAt);
+				return -$gren_lang$core$Time$posixToMillis($author$project$Api$taskUpdatedAt(t));
 			}, tasks));
 	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('recent-tasks') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text('Recent Activity') ]), $gren_lang$core$Array$isEmpty(recentTasks) ? A2($gren_lang$browser$Html$p, [ $gren_lang$browser$Html$Attributes$class('empty-state') ], [ $gren_lang$browser$Html$text('No tasks yet') ]) : A2($gren_lang$browser$Html$ul, [ $gren_lang$browser$Html$Attributes$class('task-list-compact') ], A2($gren_lang$core$Array$map, $author$project$View$Dashboard$viewRecentTask, recentTasks)) ]);
 };
@@ -6490,6 +6711,15 @@ var $gren_lang$browser$Html$input = $gren_lang$browser$Html$node('input');
 var $gren_lang$browser$Html$label = $gren_lang$browser$Html$node('label');
 var $gren_lang$browser$VirtualDom$style = _VirtualDom_style;
 var $gren_lang$browser$Html$Attributes$style = $gren_lang$browser$VirtualDom$style;
+var $author$project$Api$taskAttachments = function(task) {
+	if (task.$ === 'DescriptionOnly') {
+		var t = task.a;
+		return t.attachments;
+	} else {
+		var t = task.a;
+		return t.attachments;
+	}
+};
 var $gren_lang$browser$Html$Attributes$type_ = $gren_lang$browser$Html$Attributes$stringProperty('type');
 var $gren_lang$core$Basics$idiv = _Basics_idiv;
 var $gren_lang$core$Basics$mul = _Basics_mul;
@@ -6505,29 +6735,143 @@ var $author$project$View$TaskDetail$viewAttachment$ = function(props, taskId, at
 };
 var $author$project$View$TaskDetail$viewAttachment = F3($author$project$View$TaskDetail$viewAttachment$);
 var $author$project$View$TaskDetail$viewAttachments$ = function(props, task) {
-	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-attachments card') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text('Attachments') ]), $gren_lang$core$Array$isEmpty(task.attachments) ? A2($gren_lang$browser$Html$p, [ $gren_lang$browser$Html$Attributes$class('empty-state') ], [ $gren_lang$browser$Html$text('No attachments') ]) : A2($gren_lang$browser$Html$ul, [ $gren_lang$browser$Html$Attributes$class('attachment-list') ], A2($gren_lang$core$Array$map, A2($author$project$View$TaskDetail$viewAttachment, props, task.id), task.attachments)), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('attachment-upload') ], [ A2($gren_lang$browser$Html$label, [ $gren_lang$browser$Html$Attributes$class('btn btn-secondary') ], [ $gren_lang$browser$Html$text('Upload File'), A2($gren_lang$browser$Html$input, [ $gren_lang$browser$Html$Attributes$type_('file'), A2($gren_lang$browser$Html$Attributes$style, 'display', 'none'), $gren_lang$browser$Html$Events$on$('change', A2($gren_lang$core$Json$Decode$map, props.onFileSelected, $gren_lang$core$Json$Decode$at$([ 'target', 'files', '0' ], $gren_lang$browser$File$decoder))) ], [  ]) ]) ]) ]);
+	var tid = $author$project$Api$taskId(task);
+	var attachments = $author$project$Api$taskAttachments(task);
+	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-attachments card') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text('Attachments') ]), $gren_lang$core$Array$isEmpty(attachments) ? A2($gren_lang$browser$Html$p, [ $gren_lang$browser$Html$Attributes$class('empty-state') ], [ $gren_lang$browser$Html$text('No attachments') ]) : A2($gren_lang$browser$Html$ul, [ $gren_lang$browser$Html$Attributes$class('attachment-list') ], A2($gren_lang$core$Array$map, A2($author$project$View$TaskDetail$viewAttachment, props, tid), attachments)), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('attachment-upload') ], [ A2($gren_lang$browser$Html$label, [ $gren_lang$browser$Html$Attributes$class('btn btn-secondary') ], [ $gren_lang$browser$Html$text('Upload File'), A2($gren_lang$browser$Html$input, [ $gren_lang$browser$Html$Attributes$type_('file'), A2($gren_lang$browser$Html$Attributes$style, 'display', 'none'), $gren_lang$browser$Html$Events$on$('change', A2($gren_lang$core$Json$Decode$map, props.onFileSelected, $gren_lang$core$Json$Decode$at$([ 'target', 'files', '0' ], $gren_lang$browser$File$decoder))) ], [  ]) ]) ]) ]);
 };
 var $author$project$View$TaskDetail$viewAttachments = F2($author$project$View$TaskDetail$viewAttachments$);
+var $author$project$View$TaskDetail$PlanningAcceptanceCriteria = { $: 'PlanningAcceptanceCriteria' };
+var $author$project$View$TaskDetail$PlanningPlan = { $: 'PlanningPlan' };
+var $author$project$View$TaskDetail$PlanningRequirements = { $: 'PlanningRequirements' };
+var $author$project$View$TaskDetail$PlanningSummary = { $: 'PlanningSummary' };
+var $gren_lang$browser$Html$ol = $gren_lang$browser$Html$node('ol');
+var $gren_lang$browser$Html$Events$alwaysStop = function(msg) {
+	return { message: msg, stopPropagation: true };
+};
+var $gren_lang$browser$VirtualDom$MayStopPropagation = function (a) {
+	return { $: 'MayStopPropagation', a: a };
+};
+var $gren_lang$browser$Html$Events$stopPropagationOn$ = function(event, decoder) {
+	return A2($gren_lang$browser$VirtualDom$on, event, $gren_lang$browser$VirtualDom$MayStopPropagation(decoder));
+};
+var $gren_lang$browser$Html$Events$stopPropagationOn = F2($gren_lang$browser$Html$Events$stopPropagationOn$);
+var $gren_lang$browser$Html$Events$targetValue = $gren_lang$core$Json$Decode$at$([ 'target', 'value' ], $gren_lang$core$Json$Decode$string);
+var $gren_lang$browser$Html$Events$onInput = function(tagger) {
+	return $gren_lang$browser$Html$Events$stopPropagationOn$('input', A2($gren_lang$core$Json$Decode$map, $gren_lang$browser$Html$Events$alwaysStop, A2($gren_lang$core$Json$Decode$map, tagger, $gren_lang$browser$Html$Events$targetValue)));
+};
+var $gren_lang$browser$VirtualDom$attribute$ = function(key, value) {
+	return A2(_VirtualDom_attribute, _VirtualDom_noOnOrFormAction(key), _VirtualDom_noJavaScriptOrHtmlUri(value));
+};
+var $gren_lang$browser$VirtualDom$attribute = F2($gren_lang$browser$VirtualDom$attribute$);
+var $gren_lang$browser$Html$Attributes$attribute = $gren_lang$browser$VirtualDom$attribute;
+var $gren_lang$browser$Html$Attributes$rows = function(n) {
+	return A2($gren_lang$browser$Html$Attributes$attribute, 'rows', $gren_lang$core$String$fromInt(n));
+};
+var $author$project$View$TaskDetail$sectionEquals$ = function(a, b) {
+	return _Utils_eq(a, b);
+};
+var $author$project$View$TaskDetail$sectionEquals = F2($author$project$View$TaskDetail$sectionEquals$);
+var $gren_lang$browser$Html$textarea = $gren_lang$browser$Html$node('textarea');
+var $gren_lang$browser$Html$Attributes$value = $gren_lang$browser$Html$Attributes$stringProperty('value');
+var $author$project$View$TaskDetail$viewListSection$ = function(props, task, title, section, items, placeholder) {
+	var isEditing = function () {
+		var _v1 = props.editingPlanning;
+		if (_v1.$ === 'Just') {
+			var state = _v1.a;
+			return $author$project$View$TaskDetail$sectionEquals$(state.section, section);
+		} else {
+			return false;
+		}
+	}();
+	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-section card') ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-section-header') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text(title) ]), (!isEditing) ? A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(props.onEditPlanningSection(section)) ], [ $gren_lang$browser$Html$text('Edit') ]) : $gren_lang$browser$Html$text('') ]), function () {
+			if (isEditing) {
+				var _v0 = props.editingPlanning;
+				if (_v0.$ === 'Just') {
+					var state = _v0.a;
+					return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-edit') ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-item-list') ], A2($gren_lang$core$Array$indexedMap, F2(function(index, item) {
+										return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-item-edit') ], [ A2($gren_lang$browser$Html$textarea, [ $gren_lang$browser$Html$Attributes$class('planning-textarea'), $gren_lang$browser$Html$Attributes$value(item), $gren_lang$browser$Html$Events$onInput(function(v) {
+														return props.onUpdatePlanningItemDraft({ index: index, value: v });
+													}), $gren_lang$browser$Html$Attributes$rows(2) ], [  ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-danger planning-remove-btn'), $gren_lang$browser$Html$Events$onClick(props.onRemovePlanningItem(index)) ], [ $gren_lang$browser$Html$text('Remove') ]) ]);
+									}), state.draftItems)), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary planning-add-btn'), $gren_lang$browser$Html$Events$onClick(props.onAddPlanningItem) ], [ $gren_lang$browser$Html$text('+ Add Item') ]), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-edit-actions') ], [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(props.onCancelPlanningEdit) ], [ $gren_lang$browser$Html$text('Cancel') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-primary'), $gren_lang$browser$Html$Events$onClick(props.onSavePlanning) ], [ $gren_lang$browser$Html$text('Save') ]) ]) ]);
+				} else {
+					return $gren_lang$browser$Html$text('');
+				}
+			} else {
+				if ($gren_lang$core$Array$isEmpty(items)) {
+					return A2($gren_lang$browser$Html$p, [ $gren_lang$browser$Html$Attributes$class('empty-state-text') ], [ $gren_lang$browser$Html$text(placeholder) ]);
+				} else {
+					return A2($gren_lang$browser$Html$ol, [ $gren_lang$browser$Html$Attributes$class('planning-numbered-list') ], A2($gren_lang$core$Array$map, function(item) {
+								return A2($gren_lang$browser$Html$li, [  ], [ $gren_lang$browser$Html$text(item) ]);
+							}, items));
+				}
+			}
+		}() ]);
+};
+var $author$project$View$TaskDetail$viewListSection = F6($author$project$View$TaskDetail$viewListSection$);
+var $author$project$View$TaskDetail$viewSummarySection$ = function(props, task, summary) {
+	var isEditing = function () {
+		var _v1 = props.editingPlanning;
+		if (_v1.$ === 'Just') {
+			var state = _v1.a;
+			var _v2 = state.section;
+			if (_v2.$ === 'PlanningSummary') {
+				return true;
+			} else {
+				return false;
+			}
+		} else {
+			return false;
+		}
+	}();
+	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-section card') ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-section-header') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text('Summary') ]), (!isEditing) ? A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(props.onEditPlanningSection($author$project$View$TaskDetail$PlanningSummary)) ], [ $gren_lang$browser$Html$text('Edit') ]) : $gren_lang$browser$Html$text('') ]), function () {
+			if (isEditing) {
+				var _v0 = props.editingPlanning;
+				if (_v0.$ === 'Just') {
+					var state = _v0.a;
+					return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-edit') ], [ A2($gren_lang$browser$Html$textarea, [ $gren_lang$browser$Html$Attributes$class('planning-textarea'), $gren_lang$browser$Html$Attributes$value(state.draftSummary), $gren_lang$browser$Html$Events$onInput(props.onUpdatePlanningDraft), $gren_lang$browser$Html$Attributes$rows(3) ], [  ]), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-edit-actions') ], [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(props.onCancelPlanningEdit) ], [ $gren_lang$browser$Html$text('Cancel') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-primary'), $gren_lang$browser$Html$Events$onClick(props.onSavePlanning) ], [ $gren_lang$browser$Html$text('Save') ]) ]) ]);
+				} else {
+					return $gren_lang$browser$Html$text('');
+				}
+			} else {
+				if ($gren_lang$core$String$isEmpty(summary)) {
+					return A2($gren_lang$browser$Html$p, [ $gren_lang$browser$Html$Attributes$class('empty-state-text') ], [ $gren_lang$browser$Html$text('No summary') ]);
+				} else {
+					return A2($gren_lang$browser$Html$p, [ $gren_lang$browser$Html$Attributes$class('planning-text') ], [ $gren_lang$browser$Html$text(summary) ]);
+				}
+			}
+		}() ]);
+};
+var $author$project$View$TaskDetail$viewSummarySection = F3($author$project$View$TaskDetail$viewSummarySection$);
+var $author$project$View$TaskDetail$viewPlanningSections$ = function(props, task) {
+	if (task.$ === 'DescriptionOnly') {
+		return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-sections') ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-section card') ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-section-header') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text('Planning') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-primary'), $gren_lang$browser$Html$Events$onClick(props.onEditPlanningSection($author$project$View$TaskDetail$PlanningSummary)) ], [ $gren_lang$browser$Html$text('Add Planning') ]) ]), A2($gren_lang$browser$Html$p, [ $gren_lang$browser$Html$Attributes$class('empty-state-text') ], [ $gren_lang$browser$Html$text('Not yet planned') ]) ]) ]);
+	} else {
+		var t = task.a;
+		return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('planning-sections') ], [ $author$project$View$TaskDetail$viewSummarySection$(props, task, t.summary), $author$project$View$TaskDetail$viewListSection$(props, task, 'Requirements', $author$project$View$TaskDetail$PlanningRequirements, t.requirements, 'No requirements'), $author$project$View$TaskDetail$viewListSection$(props, task, 'Acceptance Criteria', $author$project$View$TaskDetail$PlanningAcceptanceCriteria, t.acceptanceCriteria, 'No acceptance criteria'), $author$project$View$TaskDetail$viewListSection$(props, task, 'Plan', $author$project$View$TaskDetail$PlanningPlan, t.plan, 'No plan') ]);
+	}
+};
+var $author$project$View$TaskDetail$viewPlanningSections = F2($author$project$View$TaskDetail$viewPlanningSections$);
 var $author$project$View$TaskDetail$viewStatusActions$ = function(props, task) {
+	var tid = $author$project$Api$taskId(task);
 	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('status-actions') ], function () {
-			var _v0 = task.status;
+			var _v0 = $author$project$Api$taskStatus(task);
 			switch (_v0.$) {
 				case 'Pending':
-					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-primary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'active')) ], [ $gren_lang$browser$Html$text('Start Task') ]) ];
+					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-primary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'active')) ], [ $gren_lang$browser$Html$text('Start Task') ]) ];
 				case 'Active':
-					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-secondary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'waiting')) ], [ $gren_lang$browser$Html$text('Pause') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-success'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'completed')) ], [ $gren_lang$browser$Html$text('Mark Complete') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-danger'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'failed')) ], [ $gren_lang$browser$Html$text('Mark Failed') ]) ];
+					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-secondary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'waiting')) ], [ $gren_lang$browser$Html$text('Pause') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-success'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'completed')) ], [ $gren_lang$browser$Html$text('Mark Complete') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-danger'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'failed')) ], [ $gren_lang$browser$Html$text('Mark Failed') ]) ];
 				case 'Waiting':
-					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-primary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'active')) ], [ $gren_lang$browser$Html$text('Resume') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-success'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'completed')) ], [ $gren_lang$browser$Html$text('Mark Complete') ]) ];
+					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-primary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'active')) ], [ $gren_lang$browser$Html$text('Resume') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-success'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'completed')) ], [ $gren_lang$browser$Html$text('Mark Complete') ]) ];
 				case 'Completed':
-					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-secondary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'pending')) ], [ $gren_lang$browser$Html$text('Reopen') ]) ];
+					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-secondary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'pending')) ], [ $gren_lang$browser$Html$text('Reopen') ]) ];
 				default:
-					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-secondary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'pending')) ], [ $gren_lang$browser$Html$text('Retry') ]) ];
+					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-secondary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'pending')) ], [ $gren_lang$browser$Html$text('Retry') ]) ];
 			}
 		}());
 };
 var $author$project$View$TaskDetail$viewStatusActions = F2($author$project$View$TaskDetail$viewStatusActions$);
 var $author$project$View$TaskDetail$viewTaskHeader$ = function(props, task) {
-	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-detail-header') ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-title-row') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks'), $gren_lang$browser$Html$Attributes$class('back-link') ], [ $gren_lang$browser$Html$text('< Back to Tasks') ]), A2($gren_lang$browser$Html$h2, [  ], [ $gren_lang$browser$Html$text(task.description) ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(props.onRefresh) ], [ $gren_lang$browser$Html$text('Refresh') ]) ]), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-meta') ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-large status-' + $author$project$Api$statusToString(task.status)) ], [ $gren_lang$browser$Html$text($author$project$Api$statusToString(task.status)) ]), $author$project$View$TaskDetail$viewStatusActions$(props, task) ]) ]);
+	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-detail-header') ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-title-row') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks'), $gren_lang$browser$Html$Attributes$class('back-link') ], [ $gren_lang$browser$Html$text('< Back to Tasks') ]), A2($gren_lang$browser$Html$h2, [  ], [ $gren_lang$browser$Html$text($author$project$Api$taskDescription(task)) ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(props.onRefresh) ], [ $gren_lang$browser$Html$text('Refresh') ]) ]), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-meta') ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-large status-' + $author$project$Api$statusToString($author$project$Api$taskStatus(task))) ], [ $gren_lang$browser$Html$text($author$project$Api$statusToString($author$project$Api$taskStatus(task))) ]), $author$project$View$TaskDetail$viewStatusActions$(props, task) ]) ]);
 };
 var $author$project$View$TaskDetail$viewTaskHeader = F2($author$project$View$TaskDetail$viewTaskHeader$);
 var $gren_lang$core$Array$reverse = _Array_reverse;
@@ -6556,6 +6900,42 @@ var $author$project$View$TaskDetail$viewTaskHistory = function(maybeHistory) {
 var $gren_lang$browser$Html$dd = $gren_lang$browser$Html$node('dd');
 var $gren_lang$browser$Html$dl = $gren_lang$browser$Html$node('dl');
 var $gren_lang$browser$Html$dt = $gren_lang$browser$Html$node('dt');
+var $author$project$Api$taskAgentWorkspace = function(task) {
+	if (task.$ === 'DescriptionOnly') {
+		var t = task.a;
+		return t.agentWorkspace;
+	} else {
+		var t = task.a;
+		return t.agentWorkspace;
+	}
+};
+var $author$project$Api$taskCreatedAt = function(task) {
+	if (task.$ === 'DescriptionOnly') {
+		var t = task.a;
+		return t.createdAt;
+	} else {
+		var t = task.a;
+		return t.createdAt;
+	}
+};
+var $author$project$Api$taskSessionId = function(task) {
+	if (task.$ === 'DescriptionOnly') {
+		var t = task.a;
+		return t.sessionId;
+	} else {
+		var t = task.a;
+		return t.sessionId;
+	}
+};
+var $author$project$Api$taskSource = function(task) {
+	if (task.$ === 'DescriptionOnly') {
+		var t = task.a;
+		return t.source;
+	} else {
+		var t = task.a;
+		return t.source;
+	}
+};
 var $gren_lang$core$Maybe$withDefault$ = function(_default, maybe) {
 	if (maybe.$ === 'Just') {
 		var value = maybe.a;
@@ -6566,7 +6946,8 @@ var $gren_lang$core$Maybe$withDefault$ = function(_default, maybe) {
 };
 var $gren_lang$core$Maybe$withDefault = F2($gren_lang$core$Maybe$withDefault$);
 var $author$project$View$TaskDetail$viewTaskInfo = function(task) {
-	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-info card') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text('Task Information') ]), A2($gren_lang$browser$Html$dl, [ $gren_lang$browser$Html$Attributes$class('info-list') ], [ A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('ID') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace') ], [ $gren_lang$browser$Html$text(task.id) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Source') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text(task.source.sourceType + (' / ' + task.source.userId)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Session ID') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace') ], [ $gren_lang$browser$Html$text($gren_lang$core$Maybe$withDefault$('None', task.sessionId)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Workspace') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace truncate') ], [ $gren_lang$browser$Html$text(task.agentWorkspace) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Created') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text($author$project$View$TaskDetail$formatTimestamp(task.createdAt)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Updated') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text($author$project$View$TaskDetail$formatTimestamp(task.updatedAt)) ]) ]) ]);
+	var source = $author$project$Api$taskSource(task);
+	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-info card') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text('Task Information') ]), A2($gren_lang$browser$Html$dl, [ $gren_lang$browser$Html$Attributes$class('info-list') ], [ A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('ID') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace') ], [ $gren_lang$browser$Html$text($author$project$Api$taskId(task)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Source') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text(source.sourceType + (' / ' + source.userId)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Session ID') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace') ], [ $gren_lang$browser$Html$text($gren_lang$core$Maybe$withDefault$('None', $author$project$Api$taskSessionId(task))) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Workspace') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace truncate') ], [ $gren_lang$browser$Html$text($author$project$Api$taskAgentWorkspace(task)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Created') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text($author$project$View$TaskDetail$formatTimestamp($author$project$Api$taskCreatedAt(task))) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Updated') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text($author$project$View$TaskDetail$formatTimestamp($author$project$Api$taskUpdatedAt(task))) ]) ]) ]);
 };
 var $author$project$View$TaskDetail$viewQueuedMessage = function(message) {
 	return A2($gren_lang$browser$Html$li, [ $gren_lang$browser$Html$Attributes$class('queue-item') ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('queue-item-header') ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('queue-item-id monospace') ], [ $gren_lang$browser$Html$text($gren_lang$core$String$takeFirst$(8, message.id)) ]), A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('queue-item-time') ], [ $gren_lang$browser$Html$text($author$project$View$TaskDetail$formatTimestamp(message.receivedAt)) ]) ]), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('queue-item-content') ], [ $gren_lang$browser$Html$text(message.content) ]) ]);
@@ -6582,7 +6963,7 @@ var $author$project$View$TaskDetail$viewTaskQueue = function(maybeQueue) {
 		}() ]);
 };
 var $author$project$View$TaskDetail$viewTask$ = function(props, task) {
-	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-detail') ], [ $author$project$View$TaskDetail$viewTaskHeader$(props, task), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-detail-grid') ], [ $author$project$View$TaskDetail$viewTaskInfo(task), $author$project$View$TaskDetail$viewAttachments$(props, task), $author$project$View$TaskDetail$viewTaskHistory(props.history), $author$project$View$TaskDetail$viewTaskQueue(props.queue) ]) ]);
+	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-detail') ], [ $author$project$View$TaskDetail$viewTaskHeader$(props, task), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-detail-grid') ], [ $author$project$View$TaskDetail$viewTaskInfo(task), $author$project$View$TaskDetail$viewPlanningSections$(props, task), $author$project$View$TaskDetail$viewAttachments$(props, task), $author$project$View$TaskDetail$viewTaskHistory(props.history), $author$project$View$TaskDetail$viewTaskQueue(props.queue) ]) ]);
 };
 var $author$project$View$TaskDetail$viewTask = F2($author$project$View$TaskDetail$viewTask$);
 var $author$project$View$TaskDetail$view = function(props) {
@@ -6598,20 +6979,6 @@ var $author$project$View$TaskDetail$view = function(props) {
 };
 var $gren_lang$browser$Html$Attributes$for = $gren_lang$browser$Html$Attributes$stringProperty('htmlFor');
 var $gren_lang$browser$Html$Attributes$id = $gren_lang$browser$Html$Attributes$stringProperty('id');
-var $gren_lang$browser$Html$Events$alwaysStop = function(msg) {
-	return { message: msg, stopPropagation: true };
-};
-var $gren_lang$browser$VirtualDom$MayStopPropagation = function (a) {
-	return { $: 'MayStopPropagation', a: a };
-};
-var $gren_lang$browser$Html$Events$stopPropagationOn$ = function(event, decoder) {
-	return A2($gren_lang$browser$VirtualDom$on, event, $gren_lang$browser$VirtualDom$MayStopPropagation(decoder));
-};
-var $gren_lang$browser$Html$Events$stopPropagationOn = F2($gren_lang$browser$Html$Events$stopPropagationOn$);
-var $gren_lang$browser$Html$Events$targetValue = $gren_lang$core$Json$Decode$at$([ 'target', 'value' ], $gren_lang$core$Json$Decode$string);
-var $gren_lang$browser$Html$Events$onInput = function(tagger) {
-	return $gren_lang$browser$Html$Events$stopPropagationOn$('input', A2($gren_lang$core$Json$Decode$map, $gren_lang$browser$Html$Events$alwaysStop, A2($gren_lang$core$Json$Decode$map, tagger, $gren_lang$browser$Html$Events$targetValue)));
-};
 var $gren_lang$browser$Html$option = $gren_lang$browser$Html$node('option');
 var $gren_lang$browser$Html$select = $gren_lang$browser$Html$node('select');
 var $gren_lang$core$Json$Encode$bool = _Json_wrap;
@@ -6620,7 +6987,6 @@ var $gren_lang$browser$Html$Attributes$boolProperty$ = function(key, bool) {
 };
 var $gren_lang$browser$Html$Attributes$boolProperty = F2($gren_lang$browser$Html$Attributes$boolProperty$);
 var $gren_lang$browser$Html$Attributes$selected = $gren_lang$browser$Html$Attributes$boolProperty('selected');
-var $gren_lang$browser$Html$Attributes$value = $gren_lang$browser$Html$Attributes$stringProperty('value');
 var $author$project$View$TaskList$viewFilterDropdown = function(props) {
 	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('filter-dropdown') ], [ A2($gren_lang$browser$Html$label, [ $gren_lang$browser$Html$Attributes$for('status-filter') ], [ $gren_lang$browser$Html$text('Filter by status:') ]), A2($gren_lang$browser$Html$select, [ $gren_lang$browser$Html$Attributes$id('status-filter'), $gren_lang$browser$Html$Events$onInput(function(val) {
 					return (val === 'all') ? props.onFilterChange($gren_lang$core$Maybe$Nothing) : props.onFilterChange($gren_lang$core$Maybe$Just(val));
@@ -6637,25 +7003,27 @@ var $author$project$View$TaskList$formatTimestamp = function(posix) {
 };
 var $gren_lang$browser$Html$td = $gren_lang$browser$Html$node('td');
 var $author$project$View$TaskList$viewStatusActions$ = function(props, task) {
+	var tid = $author$project$Api$taskId(task);
 	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('action-buttons') ], function () {
-			var _v0 = task.status;
+			var _v0 = $author$project$Api$taskStatus(task);
 			switch (_v0.$) {
 				case 'Pending':
-					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-primary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'active')) ], [ $gren_lang$browser$Html$text('Start') ]) ];
+					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-primary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'active')) ], [ $gren_lang$browser$Html$text('Start') ]) ];
 				case 'Active':
-					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'waiting')) ], [ $gren_lang$browser$Html$text('Pause') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-success'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'completed')) ], [ $gren_lang$browser$Html$text('Complete') ]) ];
+					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'waiting')) ], [ $gren_lang$browser$Html$text('Pause') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-success'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'completed')) ], [ $gren_lang$browser$Html$text('Complete') ]) ];
 				case 'Waiting':
-					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-primary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'active')) ], [ $gren_lang$browser$Html$text('Resume') ]) ];
+					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-primary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'active')) ], [ $gren_lang$browser$Html$text('Resume') ]) ];
 				case 'Completed':
 					return [  ];
 				default:
-					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, task.id, 'pending')) ], [ $gren_lang$browser$Html$text('Retry') ]) ];
+					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'pending')) ], [ $gren_lang$browser$Html$text('Retry') ]) ];
 			}
 		}());
 };
 var $author$project$View$TaskList$viewStatusActions = F2($author$project$View$TaskList$viewStatusActions$);
 var $author$project$View$TaskList$viewTaskRow$ = function(props, task) {
-	return A2($gren_lang$browser$Html$tr, [ $gren_lang$browser$Html$Attributes$class('task-row') ], [ A2($gren_lang$browser$Html$td, [  ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-' + $author$project$Api$statusToString(task.status)) ], [ $gren_lang$browser$Html$text($author$project$Api$statusToString(task.status)) ]) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('task-description-cell') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks/' + task.id), $gren_lang$browser$Html$Attributes$class('task-link task-description-truncate') ], [ $gren_lang$browser$Html$text(task.description) ]) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('source-info') ], [ $gren_lang$browser$Html$text(task.source.sourceType + (' / ' + task.source.userId)) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('timestamp') ], [ $gren_lang$browser$Html$text($author$project$View$TaskList$formatTimestamp(task.updatedAt)) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('actions') ], [ $author$project$View$TaskList$viewStatusActions$(props, task) ]) ]);
+	var source = $author$project$Api$taskSource(task);
+	return A2($gren_lang$browser$Html$tr, [ $gren_lang$browser$Html$Attributes$class('task-row') ], [ A2($gren_lang$browser$Html$td, [  ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-' + $author$project$Api$statusToString($author$project$Api$taskStatus(task))) ], [ $gren_lang$browser$Html$text($author$project$Api$statusToString($author$project$Api$taskStatus(task))) ]) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('task-description-cell') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks/' + $author$project$Api$taskId(task)), $gren_lang$browser$Html$Attributes$class('task-link task-description-truncate') ], [ $gren_lang$browser$Html$text($author$project$Api$taskDescription(task)) ]) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('source-info') ], [ $gren_lang$browser$Html$text(source.sourceType + (' / ' + source.userId)) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('timestamp') ], [ $gren_lang$browser$Html$text($author$project$View$TaskList$formatTimestamp($author$project$Api$taskUpdatedAt(task))) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('actions') ], [ $author$project$View$TaskList$viewStatusActions$(props, task) ]) ]);
 };
 var $author$project$View$TaskList$viewTaskRow = F2($author$project$View$TaskList$viewTaskRow$);
 var $author$project$View$TaskList$viewTaskTable = function(props) {
@@ -6685,15 +7053,6 @@ var $gren_lang$browser$Html$Events$onSubmit = function(msg) {
 	return $gren_lang$browser$Html$Events$preventDefaultOn$('submit', A2($gren_lang$core$Json$Decode$map, $gren_lang$browser$Html$Events$alwaysPreventDefault, $gren_lang$core$Json$Decode$succeed(msg)));
 };
 var $gren_lang$browser$Html$Attributes$placeholder = $gren_lang$browser$Html$Attributes$stringProperty('placeholder');
-var $gren_lang$browser$VirtualDom$attribute$ = function(key, value) {
-	return A2(_VirtualDom_attribute, _VirtualDom_noOnOrFormAction(key), _VirtualDom_noJavaScriptOrHtmlUri(value));
-};
-var $gren_lang$browser$VirtualDom$attribute = F2($gren_lang$browser$VirtualDom$attribute$);
-var $gren_lang$browser$Html$Attributes$attribute = $gren_lang$browser$VirtualDom$attribute;
-var $gren_lang$browser$Html$Attributes$rows = function(n) {
-	return A2($gren_lang$browser$Html$Attributes$attribute, 'rows', $gren_lang$core$String$fromInt(n));
-};
-var $gren_lang$browser$Html$textarea = $gren_lang$browser$Html$node('textarea');
 var $author$project$Main$viewCreateModal = function(model) {
 	return model.createForm.isOpen ? A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('modal-overlay'), $gren_lang$browser$Html$Events$onClick($author$project$Main$CloseCreateForm) ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('modal'), $gren_lang$browser$Html$Events$stopPropagationOn$('click', $gren_lang$core$Json$Decode$succeed({ message: $author$project$Main$ClearError, stopPropagation: true })) ], [ A2($gren_lang$browser$Html$h2, [  ], [ $gren_lang$browser$Html$text('Create New Task') ]), A2($gren_lang$browser$Html$form, [ $gren_lang$browser$Html$Events$onSubmit($author$project$Main$SubmitCreateForm) ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('form-group') ], [ A2($gren_lang$browser$Html$label, [ $gren_lang$browser$Html$Attributes$for('description') ], [ $gren_lang$browser$Html$text('Description') ]), A2($gren_lang$browser$Html$textarea, [ $gren_lang$browser$Html$Attributes$id('description'), $gren_lang$browser$Html$Attributes$value(model.createForm.description), $gren_lang$browser$Html$Events$onInput($author$project$Main$UpdateCreateDescription), $gren_lang$browser$Html$Attributes$placeholder('Enter task description...'), $gren_lang$browser$Html$Attributes$rows(4), $gren_lang$browser$Html$Attributes$autofocus(true) ], [  ]) ]), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('form-actions') ], [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$type_('button'), $gren_lang$browser$Html$Attributes$class('btn btn-secondary'), $gren_lang$browser$Html$Events$onClick($author$project$Main$CloseCreateForm) ], [ $gren_lang$browser$Html$text('Cancel') ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$type_('submit'), $gren_lang$browser$Html$Attributes$class('btn btn-primary') ], [ $gren_lang$browser$Html$text('Create') ]) ]) ]) ]) ]) : $gren_lang$browser$Html$text('');
 };
@@ -6709,11 +7068,13 @@ var $author$project$Main$viewMain = function(model) {
 								}), statusFilter: model.statusFilter, tasks: model.tasks }), $author$project$Main$viewCreateModal(model) ]);
 				case 'TaskDetailPage':
 					var taskId = _v0.a;
-					return $author$project$View$TaskDetail$view({ history: model.taskHistory, loading: model.loading, onDeleteAttachment: function(filename) {
+					return $author$project$View$TaskDetail$view({ editingPlanning: model.editingPlanning, history: model.taskHistory, loading: model.loading, onAddPlanningItem: $author$project$Main$AddPlanningItem, onCancelPlanningEdit: $author$project$Main$CancelPlanningEdit, onDeleteAttachment: function(filename) {
 							return $author$project$Main$DeleteAttachment({ filename: filename, taskId: taskId });
-						}, onFileSelected: $author$project$Main$FileSelected, onRefresh: $author$project$Main$RefreshTask(taskId), onStatusUpdate: F2(function(tid, status) {
+						}, onEditPlanningSection: $author$project$Main$EditPlanningSection, onFileSelected: $author$project$Main$FileSelected, onRefresh: $author$project$Main$RefreshTask(taskId), onRemovePlanningItem: $author$project$Main$RemovePlanningItem, onSavePlanning: $author$project$Main$SavePlanning, onStatusUpdate: F2(function(tid, status) {
 								return $author$project$Main$UpdateTaskStatus({ status: status, taskId: tid });
-							}), queue: model.taskQueue, task: model.selectedTask });
+							}), onUpdatePlanningDraft: $author$project$Main$UpdatePlanningDraft, onUpdatePlanningItemDraft: function(args) {
+							return $author$project$Main$UpdatePlanningItemDraft(args);
+						}, queue: model.taskQueue, task: model.selectedTask });
 				default:
 					return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('not-found') ], [ A2($gren_lang$browser$Html$h2, [  ], [ $gren_lang$browser$Html$text('Page Not Found') ]), A2($gren_lang$browser$Html$p, [  ], [ $gren_lang$browser$Html$text('The page you requested does not exist.') ]), A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/') ], [ $gren_lang$browser$Html$text('Go to Dashboard') ]) ]);
 			}

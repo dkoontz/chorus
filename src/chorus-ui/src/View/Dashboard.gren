@@ -47,7 +47,7 @@ viewRecentTasks tasks =
     let
         recentTasks =
             tasks
-                |> Array.sortBy (\t -> negate (Time.posixToMillis t.updatedAt))
+                |> Array.sortBy (\t -> negate (Time.posixToMillis (Api.taskUpdatedAt t)))
                 |> Array.takeFirst 5
     in
     div [ class "recent-tasks" ]
@@ -63,10 +63,10 @@ viewRecentTasks tasks =
 viewRecentTask : Api.Task -> Html msg
 viewRecentTask task =
     li [ class "task-item-compact" ]
-        [ a [ href ("/tasks/" ++ task.id) ]
-            [ span [ class ("status-badge status-" ++ Api.statusToString task.status) ]
-                [ text (Api.statusToString task.status) ]
-            , span [ class "task-description task-description-truncate" ] [ text task.description ]
+        [ a [ href ("/tasks/" ++ Api.taskId task) ]
+            [ span [ class ("status-badge status-" ++ Api.statusToString (Api.taskStatus task)) ]
+                [ text (Api.statusToString (Api.taskStatus task)) ]
+            , span [ class "task-description task-description-truncate" ] [ text (Api.taskDescription task) ]
             ]
         ]
 
@@ -75,7 +75,7 @@ countByStatus : Api.TaskStatus -> Array Api.Task -> Int
 countByStatus status tasks =
     Array.foldl
         (\task count ->
-            if statusMatches task.status status then
+            if statusMatches (Api.taskStatus task) status then
                 count + 1
             else
                 count
@@ -88,7 +88,7 @@ countFailed : Array Api.Task -> Int
 countFailed tasks =
     Array.foldl
         (\task count ->
-            when task.status is
+            when Api.taskStatus task is
                 Api.Failed _ ->
                     count + 1
 

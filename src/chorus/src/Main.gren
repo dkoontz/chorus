@@ -370,6 +370,14 @@ handleRoute model route request response =
                                 Err errMsg ->
                                     sendBadRequest response errMsg
 
+                        Router.UpdateTaskPlanning taskId ->
+                            when parseUpdatePlanningBody request is
+                                Ok params ->
+                                    Api.requestUpdatePlanning ctx taskId params toMsg
+
+                                Err errMsg ->
+                                    sendBadRequest response errMsg
+
                         Router.GetTaskHistory taskId ->
                             Api.requestHistory ctx taskId toMsg
 
@@ -478,33 +486,77 @@ parseCreateTaskBody request =
 
 
 {-| Parse the body for PUT /api/tasks/:id/status.
+
+    The frontend sends status as a nested object matching the encoding format:
+    {"status": {"type": "active"}} or {"status": {"type": "failed", "message": "..."}}
+    We also accept the flat format {"status": "active"} for backward compatibility
+    with direct API callers.
 -}
 parseStatusBody : HttpServer.Request -> Result String Registry.TaskStatus
 parseStatusBody request =
     let
-        decoder =
+        -- Nested object format: {"status": {"type": "active"}}
+        nestedDecoder =
+            Decode.field "status"
+                (Decode.field "type" Decode.string
+                    |> Decode.andThen
+                        (\statusType ->
+                            when statusType is
+                                "pending" ->
+                                    Decode.succeed Registry.Pending
+
+                                "active" ->
+                                    Decode.succeed Registry.Active
+
+                                "waiting" ->
+                                    Decode.succeed Registry.Waiting
+
+                                "completed" ->
+                                    Decode.succeed Registry.Completed
+
+                                "failed" ->
+                                    Decode.oneOf
+                                        [ Decode.field "message" Decode.string
+                                            |> Decode.map Registry.Failed
+                                        , Decode.succeed (Registry.Failed "")
+                                        ]
+
+                                _ ->
+                                    Decode.fail ("Unknown status type: " ++ statusType)
+                        )
+                )
+
+        -- Flat string format: {"status": "active"} (backward compatibility)
+        flatDecoder =
             Decode.field "status" Decode.string
+                |> Decode.andThen
+                    (\statusStr ->
+                        when statusStr is
+                            "pending" ->
+                                Decode.succeed Registry.Pending
+
+                            "active" ->
+                                Decode.succeed Registry.Active
+
+                            "waiting" ->
+                                Decode.succeed Registry.Waiting
+
+                            "completed" ->
+                                Decode.succeed Registry.Completed
+
+                            "failed" ->
+                                Decode.succeed (Registry.Failed "")
+
+                            _ ->
+                                Decode.fail ("Unknown status: " ++ statusStr)
+                    )
+
+        decoder =
+            Decode.oneOf [ nestedDecoder, flatDecoder ]
     in
     when HttpServer.bodyFromJson decoder request is
-        Ok statusStr ->
-            when statusStr is
-                "pending" ->
-                    Ok Registry.Pending
-
-                "active" ->
-                    Ok Registry.Active
-
-                "waiting" ->
-                    Ok Registry.Waiting
-
-                "completed" ->
-                    Ok Registry.Completed
-
-                "failed" ->
-                    Ok (Registry.Failed "")
-
-                _ ->
-                    Err ("Unknown status: " ++ statusStr)
+        Ok status ->
+            Ok status
 
         Err _ ->
             Err "Invalid JSON body for status update"
@@ -524,6 +576,33 @@ parseEnqueueBody request =
 
         Err _ ->
             Err "Invalid JSON body for enqueue"
+
+
+{-| Parse the body for PUT /api/tasks/:id/planning.
+-}
+parseUpdatePlanningBody : HttpServer.Request -> Result String Api.UpdatePlanningParams
+parseUpdatePlanningBody request =
+    let
+        decoder =
+            Decode.map4
+                (\summary requirements acceptanceCriteria plan ->
+                    { summary = summary
+                    , requirements = requirements
+                    , acceptanceCriteria = acceptanceCriteria
+                    , plan = plan
+                    }
+                )
+                (Decode.maybe (Decode.field "summary" Decode.string))
+                (Decode.maybe (Decode.field "requirements" (Decode.array Decode.string)))
+                (Decode.maybe (Decode.field "acceptanceCriteria" (Decode.array Decode.string)))
+                (Decode.maybe (Decode.field "plan" (Decode.array Decode.string)))
+    in
+    when HttpServer.bodyFromJson decoder request is
+        Ok params ->
+            Ok params
+
+        Err _ ->
+            Err "Invalid JSON body for planning update"
 
 
 

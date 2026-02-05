@@ -105,19 +105,23 @@ viewTaskTable props =
 
 viewTaskRow : Props msg -> Api.Task -> Html msg
 viewTaskRow props task =
+    let
+        source =
+            Api.taskSource task
+    in
     tr [ class "task-row" ]
         [ td []
-            [ span [ class ("status-badge status-" ++ Api.statusToString task.status) ]
-                [ text (Api.statusToString task.status) ]
+            [ span [ class ("status-badge status-" ++ Api.statusToString (Api.taskStatus task)) ]
+                [ text (Api.statusToString (Api.taskStatus task)) ]
             ]
         , td [ class "task-description-cell" ]
-            [ a [ href ("/tasks/" ++ task.id), class "task-link task-description-truncate" ]
-                [ text task.description ]
+            [ a [ href ("/tasks/" ++ Api.taskId task), class "task-link task-description-truncate" ]
+                [ text (Api.taskDescription task) ]
             ]
         , td [ class "source-info" ]
-            [ text (task.source.sourceType ++ " / " ++ task.source.userId) ]
+            [ text (source.sourceType ++ " / " ++ source.userId) ]
         , td [ class "timestamp" ]
-            [ text (formatTimestamp task.updatedAt) ]
+            [ text (formatTimestamp (Api.taskUpdatedAt task)) ]
         , td [ class "actions" ]
             [ viewStatusActions props task ]
         ]
@@ -125,12 +129,16 @@ viewTaskRow props task =
 
 viewStatusActions : Props msg -> Api.Task -> Html msg
 viewStatusActions props task =
+    let
+        tid =
+            Api.taskId task
+    in
     div [ class "action-buttons" ]
-        (when task.status is
+        (when Api.taskStatus task is
             Api.Pending ->
                 [ button
                     [ class "btn btn-small btn-primary"
-                    , onClick (props.onStatusUpdate task.id "active")
+                    , onClick (props.onStatusUpdate tid "active")
                     ]
                     [ text "Start" ]
                 ]
@@ -138,12 +146,12 @@ viewStatusActions props task =
             Api.Active ->
                 [ button
                     [ class "btn btn-small btn-secondary"
-                    , onClick (props.onStatusUpdate task.id "waiting")
+                    , onClick (props.onStatusUpdate tid "waiting")
                     ]
                     [ text "Pause" ]
                 , button
                     [ class "btn btn-small btn-success"
-                    , onClick (props.onStatusUpdate task.id "completed")
+                    , onClick (props.onStatusUpdate tid "completed")
                     ]
                     [ text "Complete" ]
                 ]
@@ -151,7 +159,7 @@ viewStatusActions props task =
             Api.Waiting ->
                 [ button
                     [ class "btn btn-small btn-primary"
-                    , onClick (props.onStatusUpdate task.id "active")
+                    , onClick (props.onStatusUpdate tid "active")
                     ]
                     [ text "Resume" ]
                 ]
@@ -162,7 +170,7 @@ viewStatusActions props task =
             Api.Failed _ ->
                 [ button
                     [ class "btn btn-small btn-secondary"
-                    , onClick (props.onStatusUpdate task.id "pending")
+                    , onClick (props.onStatusUpdate tid "pending")
                     ]
                     [ text "Retry" ]
                 ]

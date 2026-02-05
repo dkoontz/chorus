@@ -6,7 +6,7 @@ module RegistryTests exposing (tests)
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task
-import Task.Registry as Registry exposing (Task, TaskStatus(..), SourceInfo, Attachment)
+import Task.Registry as Registry exposing (Task(..), TaskStatus(..), SourceInfo, Attachment)
 import Time
 
 
@@ -21,6 +21,10 @@ tests =
     , testBackwardCompatMissingAttachments
     , testMalformedAttachmentMissingField
     , testMalformedAttachmentWrongType
+    , testTaskEncodeDecodeWithPlanningFields
+    , testTaskDecodeBackwardCompatibility
+    , testTaskDecodeBackwardCompatWithPlanningFields
+    , testDescriptionOnlyRoundTrip
     ]
 
 
@@ -49,20 +53,21 @@ testTaskEncodeDecode =
     , run =
         let
             task =
-                { id = "test-id-123"
-                , description = "Test Task"
-                , status = Pending
-                , createdAt = Time.millisToPosix 1707048600000
-                , updatedAt = Time.millisToPosix 1707048600000
-                , sessionId = Nothing
-                , source =
-                    { sourceType = "terminal"
-                    , userId = "testuser"
-                    , conversationId = Nothing
+                DescriptionOnly
+                    { id = "test-id-123"
+                    , description = "Test Task"
+                    , status = Pending
+                    , createdAt = Time.millisToPosix 1707048600000
+                    , updatedAt = Time.millisToPosix 1707048600000
+                    , sessionId = Nothing
+                    , source =
+                        { sourceType = "terminal"
+                        , userId = "testuser"
+                        , conversationId = Nothing
+                        }
+                    , agentWorkspace = "/tmp/workspace"
+                    , attachments = []
                     }
-                , agentWorkspace = "/tmp/workspace"
-                , attachments = []
-                }
 
             encoded =
                 Registry.encodeTask task
@@ -110,20 +115,21 @@ testStatusRoundTrip : TaskStatus -> Task.Task String {}
 testStatusRoundTrip status =
     let
         task =
-            { id = "test"
-            , description = "Test"
-            , status = status
-            , createdAt = Time.millisToPosix 0
-            , updatedAt = Time.millisToPosix 0
-            , sessionId = Nothing
-            , source =
-                { sourceType = "test"
-                , userId = "test"
-                , conversationId = Nothing
+            DescriptionOnly
+                { id = "test"
+                , description = "Test"
+                , status = status
+                , createdAt = Time.millisToPosix 0
+                , updatedAt = Time.millisToPosix 0
+                , sessionId = Nothing
+                , source =
+                    { sourceType = "test"
+                    , userId = "test"
+                    , conversationId = Nothing
+                    }
+                , agentWorkspace = "/tmp"
+                , attachments = []
                 }
-            , agentWorkspace = "/tmp"
-            , attachments = []
-            }
 
         encoded =
             Registry.encodeTask task
@@ -136,7 +142,7 @@ testStatusRoundTrip status =
     in
     when decoded is
         Ok decodedTask ->
-            expectEqual status decodedTask.status
+            expectEqual status (Registry.taskStatus decodedTask)
 
         Err err ->
             Task.fail ("Decode failed: " ++ Decode.errorToString err)
@@ -148,20 +154,21 @@ testSourceInfoEncodeDecode =
     , run =
         let
             task =
-                { id = "test"
-                , description = "Test"
-                , status = Pending
-                , createdAt = Time.millisToPosix 0
-                , updatedAt = Time.millisToPosix 0
-                , sessionId = Just "session-123"
-                , source =
-                    { sourceType = "xmpp"
-                    , userId = "user@example.com"
-                    , conversationId = Just "thread-456"
+                DescriptionOnly
+                    { id = "test"
+                    , description = "Test"
+                    , status = Pending
+                    , createdAt = Time.millisToPosix 0
+                    , updatedAt = Time.millisToPosix 0
+                    , sessionId = Just "session-123"
+                    , source =
+                        { sourceType = "xmpp"
+                        , userId = "user@example.com"
+                        , conversationId = Just "thread-456"
+                        }
+                    , agentWorkspace = "/tmp"
+                    , attachments = []
                     }
-                , agentWorkspace = "/tmp"
-                , attachments = []
-                }
 
             encoded =
                 Registry.encodeTask task
@@ -174,7 +181,7 @@ testSourceInfoEncodeDecode =
         in
         when decoded is
             Ok decodedTask ->
-                if decodedTask.sessionId == Just "session-123" && decodedTask.source.conversationId == Just "thread-456" then
+                if Registry.taskSessionId decodedTask == Just "session-123" && (Registry.taskSource decodedTask).conversationId == Just "thread-456" then
                     Task.succeed {}
                 else
                     Task.fail "sessionId or conversationId mismatch"
@@ -204,20 +211,21 @@ testAttachmentRoundTrip =
                 }
 
             task =
-                { id = "test-attach"
-                , description = "Task with attachments"
-                , status = Pending
-                , createdAt = Time.millisToPosix 1707048600000
-                , updatedAt = Time.millisToPosix 1707048600000
-                , sessionId = Nothing
-                , source =
-                    { sourceType = "terminal"
-                    , userId = "testuser"
-                    , conversationId = Nothing
+                DescriptionOnly
+                    { id = "test-attach"
+                    , description = "Task with attachments"
+                    , status = Pending
+                    , createdAt = Time.millisToPosix 1707048600000
+                    , updatedAt = Time.millisToPosix 1707048600000
+                    , sessionId = Nothing
+                    , source =
+                        { sourceType = "terminal"
+                        , userId = "testuser"
+                        , conversationId = Nothing
+                        }
+                    , agentWorkspace = "/tmp/workspace"
+                    , attachments = [ attachment1, attachment2 ]
                     }
-                , agentWorkspace = "/tmp/workspace"
-                , attachments = [ attachment1, attachment2 ]
-                }
 
             encoded =
                 Registry.encodeTask task
@@ -230,10 +238,14 @@ testAttachmentRoundTrip =
         in
         when decoded is
             Ok decodedTask ->
-                expectEqual 2 (Array.length decodedTask.attachments)
+                let
+                    decodedAttachments =
+                        Registry.taskAttachments decodedTask
+                in
+                expectEqual 2 (Array.length decodedAttachments)
                     |> Task.andThen
                         (\_ ->
-                            when Array.first decodedTask.attachments is
+                            when Array.first decodedAttachments is
                                 Just a ->
                                     expectEqual "readme.md" a.filename
                                         |> Task.andThen (\_ -> expectEqual 1024 a.size)
@@ -245,7 +257,7 @@ testAttachmentRoundTrip =
                         )
                     |> Task.andThen
                         (\_ ->
-                            when Array.get 1 decodedTask.attachments is
+                            when Array.get 1 decodedAttachments is
                                 Just a ->
                                     expectEqual "data.csv" a.filename
                                         |> Task.andThen (\_ -> expectEqual 2048 a.size)
@@ -275,9 +287,10 @@ testBackwardCompatMissingAttachments =
         in
         when decoded is
             Ok decodedTask ->
-                expectEqual "old-task" decodedTask.id
-                    |> Task.andThen (\_ -> expectEqual "Legacy task" decodedTask.description)
-                    |> Task.andThen (\_ -> expectEqual [] decodedTask.attachments)
+                expectEqual "old-task" (Registry.taskId decodedTask)
+                    |> Task.andThen (\_ -> expectEqual "Legacy task" (Registry.taskDescription decodedTask))
+                    |> Task.andThen (\_ -> expectEqual [] (Registry.taskAttachments decodedTask))
+                    |> Task.andThen (\_ -> expectEqual False (Registry.isPlanned decodedTask))
 
             Err err ->
                 Task.fail ("Decode should have succeeded but failed: " ++ Decode.errorToString err)
@@ -300,8 +313,8 @@ testMalformedAttachmentMissingField =
         in
         when decoded is
             Ok decodedTask ->
-                expectEqual "bad-task" decodedTask.id
-                    |> Task.andThen (\_ -> expectEqual [] decodedTask.attachments)
+                expectEqual "bad-task" (Registry.taskId decodedTask)
+                    |> Task.andThen (\_ -> expectEqual [] (Registry.taskAttachments decodedTask))
 
             Err err ->
                 Task.fail ("Decode failed unexpectedly: " ++ Decode.errorToString err)
@@ -324,9 +337,147 @@ testMalformedAttachmentWrongType =
         in
         when decoded is
             Ok decodedTask ->
-                expectEqual "bad-task" decodedTask.id
-                    |> Task.andThen (\_ -> expectEqual [] decodedTask.attachments)
+                expectEqual "bad-task" (Registry.taskId decodedTask)
+                    |> Task.andThen (\_ -> expectEqual [] (Registry.taskAttachments decodedTask))
 
             Err err ->
                 Task.fail ("Decode failed unexpectedly: " ++ Decode.errorToString err)
+    }
+
+
+testTaskEncodeDecodeWithPlanningFields : { name : String, run : Task.Task String {} }
+testTaskEncodeDecodeWithPlanningFields =
+    { name = "Task with planning fields encodes and decodes correctly"
+    , run =
+        let
+            task =
+                Planned
+                    { id = "plan-task-1"
+                    , description = "Task with planning data"
+                    , status = Pending
+                    , createdAt = Time.millisToPosix 1707048600000
+                    , updatedAt = Time.millisToPosix 1707048600000
+                    , sessionId = Nothing
+                    , source =
+                        { sourceType = "terminal"
+                        , userId = "testuser"
+                        , conversationId = Nothing
+                        }
+                    , agentWorkspace = "/tmp/workspace"
+                    , attachments = []
+                    , summary = "Build a REST API for task management"
+                    , requirements = [ "Support CRUD operations", "Use JSON format" ]
+                    , acceptanceCriteria = [ "All endpoints return valid JSON", "Error responses include error codes" ]
+                    , plan = [ "Define data types", "Implement handlers", "Add tests" ]
+                    }
+
+            encoded =
+                Registry.encodeTask task
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Registry.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                expectEqual task decodedTask
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testTaskDecodeBackwardCompatibility : { name : String, run : Task.Task String {} }
+testTaskDecodeBackwardCompatibility =
+    { name = "Task JSON without planning fields decodes as DescriptionOnly"
+    , run =
+        let
+            -- JSON that omits summary, requirements, acceptanceCriteria, plan, and taskType fields
+            json =
+                "{\"id\":\"legacy-task\",\"description\":\"Old task\",\"status\":{\"type\":\"pending\"},\"createdAt\":1707048600000,\"updatedAt\":1707048600000,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"tester\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[]}"
+
+            decoded =
+                Decode.decodeString Registry.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                expectEqual "legacy-task" (Registry.taskId decodedTask)
+                    |> Task.andThen (\_ -> expectEqual False (Registry.isPlanned decodedTask))
+
+            Err err ->
+                Task.fail ("Decode should have succeeded but failed: " ++ Decode.errorToString err)
+    }
+
+
+testTaskDecodeBackwardCompatWithPlanningFields : { name : String, run : Task.Task String {} }
+testTaskDecodeBackwardCompatWithPlanningFields =
+    { name = "Legacy task JSON with planning fields decodes as Planned"
+    , run =
+        let
+            -- JSON without taskType but with planning fields present
+            json =
+                "{\"id\":\"legacy-planned\",\"description\":\"Old planned task\",\"status\":{\"type\":\"pending\"},\"createdAt\":1707048600000,\"updatedAt\":1707048600000,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"tester\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[],\"summary\":\"My summary\",\"requirements\":[\"req1\"],\"acceptanceCriteria\":[],\"plan\":[]}"
+
+            decoded =
+                Decode.decodeString Registry.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                expectEqual "legacy-planned" (Registry.taskId decodedTask)
+                    |> Task.andThen (\_ -> expectEqual True (Registry.isPlanned decodedTask))
+                    |> Task.andThen
+                        (\_ ->
+                            when decodedTask is
+                                Planned t ->
+                                    expectEqual "My summary" t.summary
+                                        |> Task.andThen (\_ -> expectEqual [ "req1" ] t.requirements)
+
+                                DescriptionOnly _ ->
+                                    Task.fail "Expected Planned but got DescriptionOnly"
+                        )
+
+            Err err ->
+                Task.fail ("Decode should have succeeded but failed: " ++ Decode.errorToString err)
+    }
+
+
+testDescriptionOnlyRoundTrip : { name : String, run : Task.Task String {} }
+testDescriptionOnlyRoundTrip =
+    { name = "DescriptionOnly task round-trips correctly"
+    , run =
+        let
+            task =
+                DescriptionOnly
+                    { id = "desc-only"
+                    , description = "Simple task"
+                    , status = Active
+                    , createdAt = Time.millisToPosix 1707048600000
+                    , updatedAt = Time.millisToPosix 1707048600000
+                    , sessionId = Just "sess-1"
+                    , source =
+                        { sourceType = "web"
+                        , userId = "user1"
+                        , conversationId = Nothing
+                        }
+                    , agentWorkspace = "/tmp/ws"
+                    , attachments = []
+                    }
+
+            encoded =
+                Registry.encodeTask task
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Registry.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                expectEqual task decodedTask
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
     }

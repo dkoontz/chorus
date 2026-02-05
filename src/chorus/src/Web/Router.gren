@@ -24,6 +24,7 @@ type Route
     | GetTask String                           -- GET /api/tasks/:id
     | CreateTask                               -- POST /api/tasks
     | UpdateTaskStatus String                  -- PUT /api/tasks/:id/status
+    | UpdateTaskPlanning String                -- PUT /api/tasks/:id/planning
     | GetTaskHistory String                    -- GET /api/tasks/:id/history
     | GetTaskQueue String                      -- GET /api/tasks/:id/queue
     | EnqueueMessage String                    -- POST /api/tasks/:id/queue
@@ -70,6 +71,9 @@ parseRoute method path =
 
         { method = PUT, segments = [ "api", "tasks", taskId, "status" ] } ->
             UpdateTaskStatus taskId
+
+        { method = PUT, segments = [ "api", "tasks", taskId, "planning" ] } ->
+            UpdateTaskPlanning taskId
 
         { method = GET, segments = [ "api", "tasks", taskId, "history" ] } ->
             GetTaskHistory taskId
@@ -212,6 +216,9 @@ routeToString route =
 
         UpdateTaskStatus id ->
             "UpdateTaskStatus(" ++ id ++ ")"
+
+        UpdateTaskPlanning id ->
+            "UpdateTaskPlanning(" ++ id ++ ")"
 
         GetTaskHistory id ->
             "GetTaskHistory(" ++ id ++ ")"

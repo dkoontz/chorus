@@ -5,6 +5,7 @@ module Web.Api exposing
     , requestTask
     , requestCreateTask
     , requestUpdateStatus
+    , requestUpdatePlanning
     , requestHistory
     , requestQueue
     , requestEnqueue
@@ -14,6 +15,7 @@ module Web.Api exposing
     , sendApiResponse
     , sendBinaryResponse
     , CreateTaskParams
+    , UpdatePlanningParams
     )
 
 {-| API request handlers for the Chorus web interface.
@@ -63,6 +65,17 @@ type ApiResult
 type alias CreateTaskParams =
     { description : String
     , source : Registry.SourceInfo
+    }
+
+
+{-| Parameters for updating task planning fields.
+    Each field is optional; only present fields are updated.
+-}
+type alias UpdatePlanningParams =
+    { summary : Maybe String
+    , requirements : Maybe (Array String)
+    , acceptanceCriteria : Maybe (Array String)
+    , plan : Maybe (Array String)
     }
 
 
@@ -178,6 +191,68 @@ requestUpdateStatus ctx taskId status toMsg =
                             let
                                 body =
                                     wrapResponse (Registry.encodeTask task) now
+                            in
+                            ApiSuccess { statusCode = 200, body = body }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                let
+                    { statusCode, message } =
+                        when err is
+                            Registry.TaskNotFound _ ->
+                                { statusCode = 404, message = "Task not found: " ++ taskId }
+
+                            _ ->
+                                { statusCode = 500, message = registryErrorToString err }
+                in
+                GrenTask.succeed (ApiError { statusCode = statusCode, code = "REGISTRY_ERROR", message = message })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| PUT /api/tasks/:id/planning - Update task planning fields.
+    Converts a DescriptionOnly task to Planned when planning fields are set.
+-}
+requestUpdatePlanning : ApiContext -> String -> UpdatePlanningParams -> (ApiResult -> msg) -> Cmd msg
+requestUpdatePlanning ctx taskId params toMsg =
+    Registry.updateTask ctx.registry taskId
+        (\task ->
+            let
+                -- Get current planning fields (empty defaults for DescriptionOnly)
+                currentFields =
+                    when task is
+                        Registry.DescriptionOnly _ ->
+                            { summary = ""
+                            , requirements = []
+                            , acceptanceCriteria = []
+                            , plan = []
+                            }
+
+                        Registry.Planned t ->
+                            { summary = t.summary
+                            , requirements = t.requirements
+                            , acceptanceCriteria = t.acceptanceCriteria
+                            , plan = t.plan
+                            }
+
+                newFields =
+                    { summary = Maybe.withDefault currentFields.summary params.summary
+                    , requirements = Maybe.withDefault currentFields.requirements params.requirements
+                    , acceptanceCriteria = Maybe.withDefault currentFields.acceptanceCriteria params.acceptanceCriteria
+                    , plan = Maybe.withDefault currentFields.plan params.plan
+                    }
+            in
+            Registry.planTask task newFields
+        )
+        |> GrenTask.andThen
+            (\updatedTask ->
+                Time.now
+                    |> GrenTask.map
+                        (\now ->
+                            let
+                                body =
+                                    wrapResponse (Registry.encodeTask updatedTask) now
                             in
                             ApiSuccess { statusCode = 200, body = body }
                         )
@@ -380,7 +455,9 @@ requestUploadAttachment ctx taskId filename fileBytes uploadDir toMsg =
                     -- Update the task to add the attachment metadata
                     Registry.updateTask ctx.registry taskId
                         (\task ->
-                            { task | attachments = Array.pushLast attachment task.attachments }
+                            Registry.setAttachments
+                                (Array.pushLast attachment (Registry.taskAttachments task))
+                                task
                         )
                         |> GrenTask.map
                             (\updatedTask ->
@@ -426,7 +503,7 @@ requestDownloadAttachment ctx taskId filename uploadDir toMsg =
                     Just task ->
                         let
                             maybeAttachment =
-                                Array.findFirst (\a -> a.filename == filename) task.attachments
+                                Array.findFirst (\a -> a.filename == filename) (Registry.taskAttachments task)
                         in
                         when maybeAttachment is
                             Nothing ->
@@ -482,10 +559,9 @@ requestDeleteAttachment ctx taskId filename uploadDir toMsg =
                 -- Remove the attachment entry from the task
                 Registry.updateTask ctx.registry taskId
                     (\task ->
-                        { task
-                            | attachments =
-                                Array.keepIf (\a -> a.filename /= filename) task.attachments
-                        }
+                        Registry.setAttachments
+                            (Array.keepIf (\a -> a.filename /= filename) (Registry.taskAttachments task))
+                            task
                     )
             )
         |> GrenTask.andThen

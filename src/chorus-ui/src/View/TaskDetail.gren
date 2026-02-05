@@ -1,4 +1,8 @@
-module View.TaskDetail exposing (view)
+module View.TaskDetail exposing
+    ( view
+    , PlanningSection(..)
+    , PlanningEditState
+    )
 
 {-| Task detail view showing full task information, history, and queue.
 -}
@@ -8,9 +12,27 @@ import Dict exposing (Dict)
 import File
 import Html exposing (..)
 import Html.Attributes exposing (..)
-import Html.Events exposing (onClick, on)
+import Html.Events exposing (onClick, on, onInput)
 import Json.Decode
 import Time
+
+
+{-| Which planning section is being edited.
+-}
+type PlanningSection
+    = PlanningSummary
+    | PlanningRequirements
+    | PlanningAcceptanceCriteria
+    | PlanningPlan
+
+
+{-| Editing state for a planning section.
+-}
+type alias PlanningEditState =
+    { section : PlanningSection
+    , draftSummary : String
+    , draftItems : Array String
+    }
 
 
 type alias Props msg =
@@ -22,6 +44,14 @@ type alias Props msg =
     , onRefresh : msg
     , onFileSelected : File.File -> msg
     , onDeleteAttachment : String -> msg
+    , editingPlanning : Maybe PlanningEditState
+    , onEditPlanningSection : PlanningSection -> msg
+    , onUpdatePlanningDraft : String -> msg
+    , onUpdatePlanningItemDraft : { index : Int, value : String } -> msg
+    , onAddPlanningItem : msg
+    , onRemovePlanningItem : Int -> msg
+    , onSavePlanning : msg
+    , onCancelPlanningEdit : msg
     }
 
 
@@ -46,6 +76,7 @@ viewTask props task =
         [ viewTaskHeader props task
         , div [ class "task-detail-grid" ]
             [ viewTaskInfo task
+            , viewPlanningSections props task
             , viewAttachments props task
             , viewTaskHistory props.history
             , viewTaskQueue props.queue
@@ -58,7 +89,7 @@ viewTaskHeader props task =
     div [ class "task-detail-header" ]
         [ div [ class "task-title-row" ]
             [ a [ href "/tasks", class "back-link" ] [ text "< Back to Tasks" ]
-            , h2 [] [ text task.description ]
+            , h2 [] [ text (Api.taskDescription task) ]
             , button
                 [ class "btn btn-small btn-secondary"
                 , onClick props.onRefresh
@@ -66,8 +97,8 @@ viewTaskHeader props task =
                 [ text "Refresh" ]
             ]
         , div [ class "task-meta" ]
-            [ span [ class ("status-badge status-large status-" ++ Api.statusToString task.status) ]
-                [ text (Api.statusToString task.status) ]
+            [ span [ class ("status-badge status-large status-" ++ Api.statusToString (Api.taskStatus task)) ]
+                [ text (Api.statusToString (Api.taskStatus task)) ]
             , viewStatusActions props task
             ]
         ]
@@ -75,12 +106,16 @@ viewTaskHeader props task =
 
 viewStatusActions : Props msg -> Api.Task -> Html msg
 viewStatusActions props task =
+    let
+        tid =
+            Api.taskId task
+    in
     div [ class "status-actions" ]
-        (when task.status is
+        (when Api.taskStatus task is
             Api.Pending ->
                 [ button
                     [ class "btn btn-primary"
-                    , onClick (props.onStatusUpdate task.id "active")
+                    , onClick (props.onStatusUpdate tid "active")
                     ]
                     [ text "Start Task" ]
                 ]
@@ -88,17 +123,17 @@ viewStatusActions props task =
             Api.Active ->
                 [ button
                     [ class "btn btn-secondary"
-                    , onClick (props.onStatusUpdate task.id "waiting")
+                    , onClick (props.onStatusUpdate tid "waiting")
                     ]
                     [ text "Pause" ]
                 , button
                     [ class "btn btn-success"
-                    , onClick (props.onStatusUpdate task.id "completed")
+                    , onClick (props.onStatusUpdate tid "completed")
                     ]
                     [ text "Mark Complete" ]
                 , button
                     [ class "btn btn-danger"
-                    , onClick (props.onStatusUpdate task.id "failed")
+                    , onClick (props.onStatusUpdate tid "failed")
                     ]
                     [ text "Mark Failed" ]
                 ]
@@ -106,12 +141,12 @@ viewStatusActions props task =
             Api.Waiting ->
                 [ button
                     [ class "btn btn-primary"
-                    , onClick (props.onStatusUpdate task.id "active")
+                    , onClick (props.onStatusUpdate tid "active")
                     ]
                     [ text "Resume" ]
                 , button
                     [ class "btn btn-success"
-                    , onClick (props.onStatusUpdate task.id "completed")
+                    , onClick (props.onStatusUpdate tid "completed")
                     ]
                     [ text "Mark Complete" ]
                 ]
@@ -119,7 +154,7 @@ viewStatusActions props task =
             Api.Completed ->
                 [ button
                     [ class "btn btn-secondary"
-                    , onClick (props.onStatusUpdate task.id "pending")
+                    , onClick (props.onStatusUpdate tid "pending")
                     ]
                     [ text "Reopen" ]
                 ]
@@ -127,7 +162,7 @@ viewStatusActions props task =
             Api.Failed _ ->
                 [ button
                     [ class "btn btn-secondary"
-                    , onClick (props.onStatusUpdate task.id "pending")
+                    , onClick (props.onStatusUpdate tid "pending")
                     ]
                     [ text "Retry" ]
                 ]
@@ -136,35 +171,46 @@ viewStatusActions props task =
 
 viewTaskInfo : Api.Task -> Html msg
 viewTaskInfo task =
+    let
+        source =
+            Api.taskSource task
+    in
     div [ class "task-info card" ]
         [ h3 [] [ text "Task Information" ]
         , dl [ class "info-list" ]
             [ dt [] [ text "ID" ]
-            , dd [ class "monospace" ] [ text task.id ]
+            , dd [ class "monospace" ] [ text (Api.taskId task) ]
             , dt [] [ text "Source" ]
-            , dd [] [ text (task.source.sourceType ++ " / " ++ task.source.userId) ]
+            , dd [] [ text (source.sourceType ++ " / " ++ source.userId) ]
             , dt [] [ text "Session ID" ]
             , dd [ class "monospace" ]
-                [ text (Maybe.withDefault "None" task.sessionId) ]
+                [ text (Maybe.withDefault "None" (Api.taskSessionId task)) ]
             , dt [] [ text "Workspace" ]
-            , dd [ class "monospace truncate" ] [ text task.agentWorkspace ]
+            , dd [ class "monospace truncate" ] [ text (Api.taskAgentWorkspace task) ]
             , dt [] [ text "Created" ]
-            , dd [] [ text (formatTimestamp task.createdAt) ]
+            , dd [] [ text (formatTimestamp (Api.taskCreatedAt task)) ]
             , dt [] [ text "Updated" ]
-            , dd [] [ text (formatTimestamp task.updatedAt) ]
+            , dd [] [ text (formatTimestamp (Api.taskUpdatedAt task)) ]
             ]
         ]
 
 
 viewAttachments : Props msg -> Api.Task -> Html msg
 viewAttachments props task =
+    let
+        attachments =
+            Api.taskAttachments task
+
+        tid =
+            Api.taskId task
+    in
     div [ class "task-attachments card" ]
         [ h3 [] [ text "Attachments" ]
-        , if Array.isEmpty task.attachments then
+        , if Array.isEmpty attachments then
             p [ class "empty-state" ] [ text "No attachments" ]
           else
             ul [ class "attachment-list" ]
-                (Array.map (viewAttachment props task.id) task.attachments)
+                (Array.map (viewAttachment props tid) attachments)
         , div [ class "attachment-upload" ]
             [ label [ class "btn btn-secondary" ]
                 [ text "Upload File"
@@ -211,6 +257,177 @@ formatFileSize bytes =
         String.fromInt (bytes // 1024) ++ " KB"
     else
         String.fromInt (bytes // (1024 * 1024)) ++ " MB"
+
+
+viewPlanningSections : Props msg -> Api.Task -> Html msg
+viewPlanningSections props task =
+    when task is
+        Api.DescriptionOnly _ ->
+            -- Not yet planned: show a "Not yet planned" state with an Add Planning button
+            div [ class "planning-sections" ]
+                [ div [ class "planning-section card" ]
+                    [ div [ class "planning-section-header" ]
+                        [ h3 [] [ text "Planning" ]
+                        , button
+                            [ class "btn btn-small btn-primary"
+                            , onClick (props.onEditPlanningSection PlanningSummary)
+                            ]
+                            [ text "Add Planning" ]
+                        ]
+                    , p [ class "empty-state-text" ] [ text "Not yet planned" ]
+                    ]
+                ]
+
+        Api.Planned t ->
+            div [ class "planning-sections" ]
+                [ viewSummarySection props task t.summary
+                , viewListSection props task "Requirements" PlanningRequirements t.requirements "No requirements"
+                , viewListSection props task "Acceptance Criteria" PlanningAcceptanceCriteria t.acceptanceCriteria "No acceptance criteria"
+                , viewListSection props task "Plan" PlanningPlan t.plan "No plan"
+                ]
+
+
+viewSummarySection : Props msg -> Api.Task -> String -> Html msg
+viewSummarySection props task summary =
+    let
+        isEditing =
+            when props.editingPlanning is
+                Just state ->
+                    when state.section is
+                        PlanningSummary ->
+                            True
+
+                        _ ->
+                            False
+
+                Nothing ->
+                    False
+    in
+    div [ class "planning-section card" ]
+        [ div [ class "planning-section-header" ]
+            [ h3 [] [ text "Summary" ]
+            , if not isEditing then
+                button
+                    [ class "btn btn-small btn-secondary"
+                    , onClick (props.onEditPlanningSection PlanningSummary)
+                    ]
+                    [ text "Edit" ]
+              else
+                text ""
+            ]
+        , if isEditing then
+            when props.editingPlanning is
+                Just state ->
+                    div [ class "planning-edit" ]
+                        [ textarea
+                            [ class "planning-textarea"
+                            , value state.draftSummary
+                            , onInput props.onUpdatePlanningDraft
+                            , Html.Attributes.rows 3
+                            ]
+                            []
+                        , div [ class "planning-edit-actions" ]
+                            [ button
+                                [ class "btn btn-small btn-secondary"
+                                , onClick props.onCancelPlanningEdit
+                                ]
+                                [ text "Cancel" ]
+                            , button
+                                [ class "btn btn-small btn-primary"
+                                , onClick props.onSavePlanning
+                                ]
+                                [ text "Save" ]
+                            ]
+                        ]
+
+                Nothing ->
+                    text ""
+          else if String.isEmpty summary then
+            p [ class "empty-state-text" ] [ text "No summary" ]
+          else
+            p [ class "planning-text" ] [ text summary ]
+        ]
+
+
+viewListSection : Props msg -> Api.Task -> String -> PlanningSection -> Array String -> String -> Html msg
+viewListSection props task title section items placeholder =
+    let
+        isEditing =
+            when props.editingPlanning is
+                Just state ->
+                    sectionEquals state.section section
+
+                Nothing ->
+                    False
+    in
+    div [ class "planning-section card" ]
+        [ div [ class "planning-section-header" ]
+            [ h3 [] [ text title ]
+            , if not isEditing then
+                button
+                    [ class "btn btn-small btn-secondary"
+                    , onClick (props.onEditPlanningSection section)
+                    ]
+                    [ text "Edit" ]
+              else
+                text ""
+            ]
+        , if isEditing then
+            when props.editingPlanning is
+                Just state ->
+                    div [ class "planning-edit" ]
+                        [ div [ class "planning-item-list" ]
+                            (Array.indexedMap
+                                (\index item ->
+                                    div [ class "planning-item-edit" ]
+                                        [ textarea
+                                            [ class "planning-textarea"
+                                            , value item
+                                            , onInput (\v -> props.onUpdatePlanningItemDraft { index = index, value = v })
+                                            , Html.Attributes.rows 2
+                                            ]
+                                            []
+                                        , button
+                                            [ class "btn btn-small btn-danger planning-remove-btn"
+                                            , onClick (props.onRemovePlanningItem index)
+                                            ]
+                                            [ text "Remove" ]
+                                        ]
+                                )
+                                state.draftItems
+                            )
+                        , button
+                            [ class "btn btn-small btn-secondary planning-add-btn"
+                            , onClick props.onAddPlanningItem
+                            ]
+                            [ text "+ Add Item" ]
+                        , div [ class "planning-edit-actions" ]
+                            [ button
+                                [ class "btn btn-small btn-secondary"
+                                , onClick props.onCancelPlanningEdit
+                                ]
+                                [ text "Cancel" ]
+                            , button
+                                [ class "btn btn-small btn-primary"
+                                , onClick props.onSavePlanning
+                                ]
+                                [ text "Save" ]
+                            ]
+                        ]
+
+                Nothing ->
+                    text ""
+          else if Array.isEmpty items then
+            p [ class "empty-state-text" ] [ text placeholder ]
+          else
+            ol [ class "planning-numbered-list" ]
+                (Array.map (\item -> li [] [ text item ]) items)
+        ]
+
+
+sectionEquals : PlanningSection -> PlanningSection -> Bool
+sectionEquals a b =
+    a == b
 
 
 viewTaskHistory : Maybe Api.History -> Html msg

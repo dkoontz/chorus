@@ -362,10 +362,14 @@ testCreateTaskCreatesTask ctx subdir =
         |> GrenTask.andThen
             (\task ->
                 -- UUID should be 36 characters (8-4-4-4-12 format)
-                if String.unitLength task.id == 36 then
+                let
+                    tid =
+                        Registry.taskId task
+                in
+                if String.unitLength tid == 36 then
                     GrenTask.succeed {}
                 else
-                    GrenTask.fail ("Expected UUID to be 36 chars, got " ++ String.fromInt (String.unitLength task.id))
+                    GrenTask.fail ("Expected UUID to be 36 chars, got " ++ String.fromInt (String.unitLength tid))
             )
 
 
@@ -388,7 +392,7 @@ testCreateTaskWritesTaskJson ctx subdir =
             (\task ->
                 let
                     taskJsonPath =
-                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ task.id ++ "/task.json")) ctx.tempDir
+                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Registry.taskId task ++ "/task.json")) ctx.tempDir
                 in
                 assertFileExists ctx.fsPermission taskJsonPath
             )
@@ -413,7 +417,7 @@ testCreateTaskWritesQueueJson ctx subdir =
             (\task ->
                 let
                     queueJsonPath =
-                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ task.id ++ "/queue.json")) ctx.tempDir
+                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Registry.taskId task ++ "/queue.json")) ctx.tempDir
                 in
                 assertFileExists ctx.fsPermission queueJsonPath
             )
@@ -438,7 +442,7 @@ testCreateTaskWritesHistoryJson ctx subdir =
             (\task ->
                 let
                     historyJsonPath =
-                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ task.id ++ "/history.json")) ctx.tempDir
+                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Registry.taskId task ++ "/history.json")) ctx.tempDir
                 in
                 assertFileExists ctx.fsPermission historyJsonPath
             )
@@ -462,12 +466,12 @@ testGetTaskReturnsTask ctx subdir =
             )
         |> GrenTask.andThen
             (\{ registry, task } ->
-                Registry.getTask registry task.id
+                Registry.getTask registry (Registry.taskId task)
                     |> GrenTask.mapError registryErrorToString
                     |> GrenTask.andThen (assertJust "getTask")
                     |> GrenTask.andThen
                         (\retrieved ->
-                            assertEqual "task description" task.description retrieved.description
+                            assertEqual "task description" (Registry.taskDescription task) (Registry.taskDescription retrieved)
                         )
             )
 
@@ -501,17 +505,17 @@ testUpdateTaskModifiesStatus ctx subdir =
             )
         |> GrenTask.andThen
             (\{ registry, task } ->
-                Registry.updateStatus registry task.id Active
+                Registry.updateStatus registry (Registry.taskId task) Active
                     |> GrenTask.mapError registryErrorToString
             )
         |> GrenTask.andThen
             (\updatedTask ->
-                when updatedTask.status is
+                when Registry.taskStatus updatedTask is
                     Active ->
                         GrenTask.succeed {}
 
                     _ ->
-                        GrenTask.fail ("Expected Active status, got " ++ Debug.toString updatedTask.status)
+                        GrenTask.fail ("Expected Active status, got " ++ Debug.toString (Registry.taskStatus updatedTask))
             )
 
 
@@ -573,7 +577,7 @@ testListTasksFiltersByStatus ctx subdir =
                     |> GrenTask.mapError registryErrorToString
                     |> GrenTask.andThen
                         (\task ->
-                            Registry.updateStatus registry task.id Active
+                            Registry.updateStatus registry (Registry.taskId task) Active
                                 |> GrenTask.mapError registryErrorToString
                                 |> GrenTask.map (\_ -> registry)
                         )
@@ -621,7 +625,7 @@ testRecordEventAppendsToHistory ctx subdir =
             )
         |> GrenTask.andThen
             (\{ registry, task } ->
-                Registry.recordEvent registry task.id
+                Registry.recordEvent registry (Registry.taskId task)
                     { eventType = "test_event"
                     , data = Dict.singleton "key" "value"
                     }
@@ -633,7 +637,7 @@ testRecordEventAppendsToHistory ctx subdir =
                 -- Read the history file and verify it has 2 events (created + test_event)
                 let
                     historyPath =
-                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ task.id ++ "/history.json")) ctx.tempDir
+                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Registry.taskId task ++ "/history.json")) ctx.tempDir
                 in
                 FileSystem.readFile ctx.fsPermission historyPath
                     |> GrenTask.mapError (\e -> "Failed to read history: " ++ FileSystem.errorToString e)
@@ -702,9 +706,9 @@ testEnqueueAddsMessage ctx subdir =
             (\task ->
                 let
                     taskDir =
-                        getTaskDir ctx subdir task.id
+                        getTaskDir ctx subdir (Registry.taskId task)
                 in
-                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir task.id "Hello, world!"
+                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir (Registry.taskId task) "Hello, world!"
                     |> GrenTask.mapError queueErrorToString
             )
         |> GrenTask.andThen
@@ -735,15 +739,18 @@ testDequeueFIFO ctx subdir =
         |> GrenTask.andThen
             (\task ->
                 let
+                    tid =
+                        Registry.taskId task
+
                     taskDir =
-                        getTaskDir ctx subdir task.id
+                        getTaskDir ctx subdir tid
                 in
                 -- Enqueue two messages
-                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir task.id "First message"
+                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir tid "First message"
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen
                         (\_ ->
-                            Queue.enqueue ctx.fsPermission ctx.secureContext taskDir task.id "Second message"
+                            Queue.enqueue ctx.fsPermission ctx.secureContext taskDir tid "Second message"
                                 |> GrenTask.mapError queueErrorToString
                         )
                     |> GrenTask.map (\_ -> taskDir)
@@ -799,7 +806,7 @@ testDequeueEmptyQueue ctx subdir =
             (\task ->
                 let
                     taskDir =
-                        getTaskDir ctx subdir task.id
+                        getTaskDir ctx subdir (Registry.taskId task)
                 in
                 Queue.dequeue ctx.fsPermission taskDir
                     |> GrenTask.mapError queueErrorToString
@@ -826,9 +833,9 @@ testPeekDoesNotRemove ctx subdir =
             (\task ->
                 let
                     taskDir =
-                        getTaskDir ctx subdir task.id
+                        getTaskDir ctx subdir (Registry.taskId task)
                 in
-                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir task.id "Peek me"
+                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir (Registry.taskId task) "Peek me"
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.map (\_ -> taskDir)
             )
@@ -883,7 +890,7 @@ testIsEmpty ctx subdir =
             (\task ->
                 let
                     taskDir =
-                        getTaskDir ctx subdir task.id
+                        getTaskDir ctx subdir (Registry.taskId task)
                 in
                 -- Should be empty initially
                 Queue.isEmpty ctx.fsPermission taskDir
@@ -936,14 +943,17 @@ testQueueLength ctx subdir =
         |> GrenTask.andThen
             (\task ->
                 let
+                    tid =
+                        Registry.taskId task
+
                     taskDir =
-                        getTaskDir ctx subdir task.id
+                        getTaskDir ctx subdir tid
                 in
                 -- Should be 0 initially
                 Queue.length ctx.fsPermission taskDir
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen (assertEqual "initial length" 0)
-                    |> GrenTask.map (\_ -> { taskDir = taskDir, taskId = task.id })
+                    |> GrenTask.map (\_ -> { taskDir = taskDir, taskId = tid })
             )
         |> GrenTask.andThen
             (\{ taskDir, taskId } ->

@@ -1,5 +1,7 @@
 module Api exposing
-    ( Task
+    ( Task(..)
+    , DescriptionOnlyTask
+    , PlannedTask
     , TaskStatus(..)
     , SourceInfo
     , Attachment
@@ -11,12 +13,23 @@ module Api exposing
     , getTask
     , createTask
     , updateTaskStatus
+    , updateTaskPlanning
     , getTaskHistory
     , getTaskQueue
     , uploadAttachment
     , deleteAttachment
     , statusToString
     , statusFromString
+    , taskId
+    , taskDescription
+    , taskStatus
+    , taskCreatedAt
+    , taskUpdatedAt
+    , taskSessionId
+    , taskSource
+    , taskAgentWorkspace
+    , taskAttachments
+    , isPlanned
     )
 
 {-| HTTP client for the Chorus API.
@@ -36,9 +49,16 @@ import Time
 -- TYPES
 
 
-{-| A task in the registry.
+{-| A task in the registry. Either description-only or fully planned.
 -}
-type alias Task =
+type Task
+    = DescriptionOnly DescriptionOnlyTask
+    | Planned PlannedTask
+
+
+{-| A task that has only a description and no planning data.
+-}
+type alias DescriptionOnlyTask =
     { id : String
     , description : String
     , status : TaskStatus
@@ -48,6 +68,25 @@ type alias Task =
     , source : SourceInfo
     , agentWorkspace : String
     , attachments : Array Attachment
+    }
+
+
+{-| A task that has been planned with summary, requirements, criteria, and steps.
+-}
+type alias PlannedTask =
+    { id : String
+    , description : String
+    , status : TaskStatus
+    , createdAt : Time.Posix
+    , updatedAt : Time.Posix
+    , sessionId : Maybe String
+    , source : SourceInfo
+    , agentWorkspace : String
+    , attachments : Array Attachment
+    , summary : String
+    , requirements : Array String
+    , acceptanceCriteria : Array String
+    , plan : Array String
     }
 
 
@@ -113,6 +152,100 @@ type alias QueuedMessage =
 
 
 
+-- TASK ACCESSORS
+
+
+{-| Get the ID of a task.
+-}
+taskId : Task -> String
+taskId task =
+    when task is
+        DescriptionOnly t -> t.id
+        Planned t -> t.id
+
+
+{-| Get the description of a task.
+-}
+taskDescription : Task -> String
+taskDescription task =
+    when task is
+        DescriptionOnly t -> t.description
+        Planned t -> t.description
+
+
+{-| Get the status of a task.
+-}
+taskStatus : Task -> TaskStatus
+taskStatus task =
+    when task is
+        DescriptionOnly t -> t.status
+        Planned t -> t.status
+
+
+{-| Get the creation time of a task.
+-}
+taskCreatedAt : Task -> Time.Posix
+taskCreatedAt task =
+    when task is
+        DescriptionOnly t -> t.createdAt
+        Planned t -> t.createdAt
+
+
+{-| Get the last update time of a task.
+-}
+taskUpdatedAt : Task -> Time.Posix
+taskUpdatedAt task =
+    when task is
+        DescriptionOnly t -> t.updatedAt
+        Planned t -> t.updatedAt
+
+
+{-| Get the session ID of a task.
+-}
+taskSessionId : Task -> Maybe String
+taskSessionId task =
+    when task is
+        DescriptionOnly t -> t.sessionId
+        Planned t -> t.sessionId
+
+
+{-| Get the source info of a task.
+-}
+taskSource : Task -> SourceInfo
+taskSource task =
+    when task is
+        DescriptionOnly t -> t.source
+        Planned t -> t.source
+
+
+{-| Get the agent workspace of a task.
+-}
+taskAgentWorkspace : Task -> String
+taskAgentWorkspace task =
+    when task is
+        DescriptionOnly t -> t.agentWorkspace
+        Planned t -> t.agentWorkspace
+
+
+{-| Get the attachments of a task.
+-}
+taskAttachments : Task -> Array Attachment
+taskAttachments task =
+    when task is
+        DescriptionOnly t -> t.attachments
+        Planned t -> t.attachments
+
+
+{-| Check if a task has been planned.
+-}
+isPlanned : Task -> Bool
+isPlanned task =
+    when task is
+        DescriptionOnly _ -> False
+        Planned _ -> True
+
+
+
 -- API FUNCTIONS
 
 
@@ -138,9 +271,9 @@ getTasks maybeStatus toMsg =
 {-| Get a single task by ID.
 -}
 getTask : String -> (Result Http.Error Task -> msg) -> Cmd msg
-getTask taskId toMsg =
+getTask tid toMsg =
     Http.get
-        { url = "/api/tasks/" ++ taskId
+        { url = "/api/tasks/" ++ tid
         , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
         }
 
@@ -172,7 +305,7 @@ updateTaskStatus :
     -> String
     -> (Result Http.Error Task -> msg)
     -> Cmd msg
-updateTaskStatus taskId statusStr toMsg =
+updateTaskStatus tid statusStr toMsg =
     let
         statusValue =
             when statusStr is
@@ -190,7 +323,7 @@ updateTaskStatus taskId statusStr toMsg =
     Http.request
         { method = "PUT"
         , headers = []
-        , url = "/api/tasks/" ++ taskId ++ "/status"
+        , url = "/api/tasks/" ++ tid ++ "/status"
         , body =
             Http.jsonBody
                 (Encode.object
@@ -203,12 +336,54 @@ updateTaskStatus taskId statusStr toMsg =
         }
 
 
+{-| Update task planning fields (summary, requirements, acceptanceCriteria, plan).
+    Only the fields present in the record are sent; omitted fields are unchanged.
+-}
+updateTaskPlanning :
+    String
+    -> { summary : Maybe String
+       , requirements : Maybe (Array String)
+       , acceptanceCriteria : Maybe (Array String)
+       , plan : Maybe (Array String)
+       }
+    -> (Result Http.Error Task -> msg)
+    -> Cmd msg
+updateTaskPlanning tid params toMsg =
+    let
+        encodeMaybeField : String -> (a -> Encode.Value) -> Maybe a -> Array { key : String, value : Encode.Value }
+        encodeMaybeField key encoder maybeVal =
+            when maybeVal is
+                Just val ->
+                    [ { key = key, value = encoder val } ]
+
+                Nothing ->
+                    []
+
+        fields =
+            Array.flatten
+                [ encodeMaybeField "summary" Encode.string params.summary
+                , encodeMaybeField "requirements" (Encode.array Encode.string) params.requirements
+                , encodeMaybeField "acceptanceCriteria" (Encode.array Encode.string) params.acceptanceCriteria
+                , encodeMaybeField "plan" (Encode.array Encode.string) params.plan
+                ]
+    in
+    Http.request
+        { method = "PUT"
+        , headers = []
+        , url = "/api/tasks/" ++ tid ++ "/planning"
+        , body = Http.jsonBody (Encode.object fields)
+        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
 {-| Get task event history.
 -}
 getTaskHistory : String -> (Result Http.Error History -> msg) -> Cmd msg
-getTaskHistory taskId toMsg =
+getTaskHistory tid toMsg =
     Http.get
-        { url = "/api/tasks/" ++ taskId ++ "/history"
+        { url = "/api/tasks/" ++ tid ++ "/history"
         , expect = Http.expectJson toMsg (dataDecoder historyDecoder)
         }
 
@@ -216,9 +391,9 @@ getTaskHistory taskId toMsg =
 {-| Get task message queue.
 -}
 getTaskQueue : String -> (Result Http.Error Queue -> msg) -> Cmd msg
-getTaskQueue taskId toMsg =
+getTaskQueue tid toMsg =
     Http.get
-        { url = "/api/tasks/" ++ taskId ++ "/queue"
+        { url = "/api/tasks/" ++ tid ++ "/queue"
         , expect = Http.expectJson toMsg (dataDecoder queueDecoder)
         }
 
@@ -233,11 +408,11 @@ uploadAttachment :
     -> String
     -> (Result Http.Error Task -> msg)
     -> Cmd msg
-uploadAttachment taskId filename fileBytes contentType toMsg =
+uploadAttachment tid filename fileBytes contentType toMsg =
     Http.request
         { method = "POST"
         , headers = []
-        , url = "/api/tasks/" ++ taskId ++ "/attachments?filename=" ++ filename
+        , url = "/api/tasks/" ++ tid ++ "/attachments?filename=" ++ filename
         , body = Http.bytesBody contentType fileBytes
         , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
         , timeout = Nothing
@@ -252,11 +427,11 @@ deleteAttachment :
     -> String
     -> (Result Http.Error Task -> msg)
     -> Cmd msg
-deleteAttachment taskId filename toMsg =
+deleteAttachment tid filename toMsg =
     Http.request
         { method = "DELETE"
         , headers = []
-        , url = "/api/tasks/" ++ taskId ++ "/attachments/" ++ filename
+        , url = "/api/tasks/" ++ tid ++ "/attachments/" ++ filename
         , body = Http.emptyBody
         , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
         , timeout = Nothing
@@ -277,6 +452,24 @@ dataDecoder decoder =
 
 taskDecoder : Decoder Task
 taskDecoder =
+    Decode.oneOf
+        [ Decode.field "taskType" Decode.string
+            |> Decode.andThen
+                (\taskType ->
+                    when taskType is
+                        "planned" ->
+                            plannedTaskDecoder
+
+                        _ ->
+                            descriptionOnlyTaskDecoder
+                )
+        , -- Backward compatibility: no taskType field
+          legacyTaskDecoder
+        ]
+
+
+descriptionOnlyTaskDecoder : Decoder Task
+descriptionOnlyTaskDecoder =
     Decode.map8
         (\id description status createdAt updatedAt sessionId source agentWorkspace ->
             { id = id
@@ -304,7 +497,145 @@ taskDecoder =
                     [ Decode.field "attachments" (Decode.array attachmentDecoder)
                     , Decode.succeed []
                     ]
+                    |> Decode.map (\attachments -> DescriptionOnly { task | attachments = attachments })
+            )
+
+
+plannedTaskDecoder : Decoder Task
+plannedTaskDecoder =
+    Decode.map8
+        (\id description status createdAt updatedAt sessionId source agentWorkspace ->
+            { id = id
+            , description = description
+            , status = status
+            , createdAt = createdAt
+            , updatedAt = updatedAt
+            , sessionId = sessionId
+            , source = source
+            , agentWorkspace = agentWorkspace
+            , attachments = []
+            , summary = ""
+            , requirements = []
+            , acceptanceCriteria = []
+            , plan = []
+            }
+        )
+        (Decode.field "id" Decode.string)
+        (Decode.field "description" Decode.string)
+        (Decode.field "status" statusDecoder)
+        (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "sessionId" (Decode.maybe Decode.string))
+        (Decode.field "source" sourceInfoDecoder)
+        (Decode.field "agentWorkspace" Decode.string)
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "attachments" (Decode.array attachmentDecoder)
+                    , Decode.succeed []
+                    ]
                     |> Decode.map (\attachments -> { task | attachments = attachments })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "summary" Decode.string
+                    , Decode.succeed ""
+                    ]
+                    |> Decode.map (\summary -> { task | summary = summary })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "requirements" (Decode.array Decode.string)
+                    , Decode.succeed []
+                    ]
+                    |> Decode.map (\requirements -> { task | requirements = requirements })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "acceptanceCriteria" (Decode.array Decode.string)
+                    , Decode.succeed []
+                    ]
+                    |> Decode.map (\acceptanceCriteria -> { task | acceptanceCriteria = acceptanceCriteria })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "plan" (Decode.array Decode.string)
+                    , Decode.succeed []
+                    ]
+                    |> Decode.map (\plan -> Planned { task | plan = plan })
+            )
+
+
+legacyTaskDecoder : Decoder Task
+legacyTaskDecoder =
+    Decode.map8
+        (\id description status createdAt updatedAt sessionId source agentWorkspace ->
+            { id = id
+            , description = description
+            , status = status
+            , createdAt = createdAt
+            , updatedAt = updatedAt
+            , sessionId = sessionId
+            , source = source
+            , agentWorkspace = agentWorkspace
+            , attachments = []
+            }
+        )
+        (Decode.field "id" Decode.string)
+        (Decode.field "description" Decode.string)
+        (Decode.field "status" statusDecoder)
+        (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "sessionId" (Decode.maybe Decode.string))
+        (Decode.field "source" sourceInfoDecoder)
+        (Decode.field "agentWorkspace" Decode.string)
+        |> Decode.andThen
+            (\baseTask ->
+                Decode.oneOf
+                    [ Decode.field "attachments" (Decode.array attachmentDecoder)
+                    , Decode.succeed []
+                    ]
+                    |> Decode.map (\attachments -> { baseTask | attachments = attachments })
+            )
+        |> Decode.andThen
+            (\baseTask ->
+                Decode.map4
+                    (\summary requirements acceptanceCriteria plan ->
+                        { summary = summary
+                        , requirements = requirements
+                        , acceptanceCriteria = acceptanceCriteria
+                        , plan = plan
+                        }
+                    )
+                    (Decode.oneOf [ Decode.field "summary" Decode.string, Decode.succeed "" ])
+                    (Decode.oneOf [ Decode.field "requirements" (Decode.array Decode.string), Decode.succeed [] ])
+                    (Decode.oneOf [ Decode.field "acceptanceCriteria" (Decode.array Decode.string), Decode.succeed [] ])
+                    (Decode.oneOf [ Decode.field "plan" (Decode.array Decode.string), Decode.succeed [] ])
+                    |> Decode.map
+                        (\planningFields ->
+                            if String.isEmpty planningFields.summary && Array.isEmpty planningFields.requirements && Array.isEmpty planningFields.acceptanceCriteria && Array.isEmpty planningFields.plan then
+                                DescriptionOnly baseTask
+                            else
+                                Planned
+                                    { id = baseTask.id
+                                    , description = baseTask.description
+                                    , status = baseTask.status
+                                    , createdAt = baseTask.createdAt
+                                    , updatedAt = baseTask.updatedAt
+                                    , sessionId = baseTask.sessionId
+                                    , source = baseTask.source
+                                    , agentWorkspace = baseTask.agentWorkspace
+                                    , attachments = baseTask.attachments
+                                    , summary = planningFields.summary
+                                    , requirements = planningFields.requirements
+                                    , acceptanceCriteria = planningFields.acceptanceCriteria
+                                    , plan = planningFields.plan
+                                    }
+                        )
             )
 
 
