@@ -2,7 +2,8 @@
   "type": "application",
   "platform": "browser",
   "source-directories": [
-    "src"
+    "src",
+    "../shared"
   ],
   "gren-version": "0.6.3",
   "dependencies": {

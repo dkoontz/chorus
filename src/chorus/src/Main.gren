@@ -27,6 +27,7 @@ import Node
 import Stream
 import Task as GrenTask
 import Task.Registry as Registry
+import Types exposing (TaskStatus(..), SourceInfo)
 import Web.Api as Api
 import Web.Router as Router
 import Web.Server as Server
@@ -463,19 +464,7 @@ parseCreateTaskBody request =
                     }
                 )
                 (Decode.field "description" Decode.string)
-                (Decode.field "source" sourceDecoder)
-
-        sourceDecoder =
-            Decode.map3
-                (\sourceType userId conversationId ->
-                    { sourceType = sourceType
-                    , userId = userId
-                    , conversationId = conversationId
-                    }
-                )
-                (Decode.field "sourceType" Decode.string)
-                (Decode.field "userId" Decode.string)
-                (Decode.maybe (Decode.field "conversationId" Decode.string))
+                (Decode.field "source" Types.sourceInfoDecoder)
     in
     when HttpServer.bodyFromJson decoder request is
         Ok params ->
@@ -492,7 +481,7 @@ parseCreateTaskBody request =
     We also accept the flat format {"status": "active"} for backward compatibility
     with direct API callers.
 -}
-parseStatusBody : HttpServer.Request -> Result String Registry.TaskStatus
+parseStatusBody : HttpServer.Request -> Result String TaskStatus
 parseStatusBody request =
     let
         -- Nested object format: {"status": {"type": "active"}}
@@ -503,22 +492,22 @@ parseStatusBody request =
                         (\statusType ->
                             when statusType is
                                 "pending" ->
-                                    Decode.succeed Registry.Pending
+                                    Decode.succeed Pending
 
                                 "active" ->
-                                    Decode.succeed Registry.Active
+                                    Decode.succeed Active
 
                                 "waiting" ->
-                                    Decode.succeed Registry.Waiting
+                                    Decode.succeed Waiting
 
                                 "completed" ->
-                                    Decode.succeed Registry.Completed
+                                    Decode.succeed Completed
 
                                 "failed" ->
                                     Decode.oneOf
                                         [ Decode.field "message" Decode.string
-                                            |> Decode.map Registry.Failed
-                                        , Decode.succeed (Registry.Failed "")
+                                            |> Decode.map Failed
+                                        , Decode.succeed (Failed "")
                                         ]
 
                                 _ ->
@@ -533,19 +522,19 @@ parseStatusBody request =
                     (\statusStr ->
                         when statusStr is
                             "pending" ->
-                                Decode.succeed Registry.Pending
+                                Decode.succeed Pending
 
                             "active" ->
-                                Decode.succeed Registry.Active
+                                Decode.succeed Active
 
                             "waiting" ->
-                                Decode.succeed Registry.Waiting
+                                Decode.succeed Waiting
 
                             "completed" ->
-                                Decode.succeed Registry.Completed
+                                Decode.succeed Completed
 
                             "failed" ->
-                                Decode.succeed (Registry.Failed "")
+                                Decode.succeed (Failed "")
 
                             _ ->
                                 Decode.fail ("Unknown status: " ++ statusStr)

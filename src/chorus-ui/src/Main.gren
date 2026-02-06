@@ -25,6 +25,7 @@ import Http
 import Json.Decode
 import Task
 import Time
+import Types exposing (Task(..), TaskStatus(..))
 import Url exposing (Url)
 import View.Dashboard as Dashboard
 import View.History as History
@@ -54,10 +55,10 @@ main =
 type alias Model =
     { key : Nav.Key
     , page : Page
-    , tasks : Array Api.Task
-    , selectedTask : Maybe Api.Task
-    , taskHistory : Maybe Api.History
-    , taskQueue : Maybe Api.Queue
+    , tasks : Array Types.Task
+    , selectedTask : Maybe Types.Task
+    , taskHistory : Maybe Types.History
+    , taskQueue : Maybe Types.Queue
     , createForm : CreateTaskForm
     , statusFilter : Maybe String
     , loading : Bool
@@ -98,12 +99,12 @@ emptyCreateForm =
 type Msg
     = LinkClicked Browser.UrlRequest
     | UrlChanged Url
-    | GotTasks (Result Http.Error (Array Api.Task))
-    | GotTask (Result Http.Error Api.Task)
-    | GotHistory (Result Http.Error Api.History)
-    | GotQueue (Result Http.Error Api.Queue)
-    | TaskCreated (Result Http.Error Api.Task)
-    | StatusUpdated (Result Http.Error Api.Task)
+    | GotTasks (Result Http.Error (Array Types.Task))
+    | GotTask (Result Http.Error Types.Task)
+    | GotHistory (Result Http.Error Types.History)
+    | GotQueue (Result Http.Error Types.Queue)
+    | TaskCreated (Result Http.Error Types.Task)
+    | StatusUpdated (Result Http.Error Types.Task)
     | Poll Time.Posix
     | SetStatusFilter (Maybe String)
     | OpenCreateForm
@@ -115,9 +116,9 @@ type Msg
     | ClearError
     | FileSelected File
     | GotFileBytes { file : File, bytes : Bytes }
-    | FileUploaded (Result Http.Error Api.Task)
+    | FileUploaded (Result Http.Error Types.Task)
     | DeleteAttachment { taskId : String, filename : String }
-    | AttachmentDeleted (Result Http.Error Api.Task)
+    | AttachmentDeleted (Result Http.Error Types.Task)
     | EditPlanningSection PlanningSection
     | UpdatePlanningDraft String
     | UpdatePlanningItemDraft { index : Int, value : String }
@@ -125,7 +126,7 @@ type Msg
     | RemovePlanningItem Int
     | SavePlanning
     | CancelPlanningEdit
-    | PlanningUpdated (Result Http.Error Api.Task)
+    | PlanningUpdated (Result Http.Error Types.Task)
 
 
 
@@ -309,7 +310,7 @@ update msg model =
                 Ok updatedTask ->
                     let
                         updateTask t =
-                            if Api.taskId t == Api.taskId updatedTask then
+                            if Types.taskId t == Types.taskId updatedTask then
                                 updatedTask
                             else
                                 t
@@ -320,7 +321,7 @@ update msg model =
                         newSelected =
                             when model.selectedTask is
                                 Just selected ->
-                                    if Api.taskId selected == Api.taskId updatedTask then
+                                    if Types.taskId selected == Types.taskId updatedTask then
                                         Just updatedTask
                                     else
                                         model.selectedTask
@@ -492,14 +493,14 @@ update msg model =
                                 -- Get current planning values (empty for DescriptionOnly)
                                 planning =
                                     when task is
-                                        Api.DescriptionOnly _ ->
+                                        DescriptionOnly _ ->
                                             { summary = ""
                                             , requirements = []
                                             , acceptanceCriteria = []
                                             , plan = []
                                             }
 
-                                        Api.Planned t ->
+                                        Planned t ->
                                             { summary = t.summary
                                             , requirements = t.requirements
                                             , acceptanceCriteria = t.acceptanceCriteria
@@ -629,7 +630,7 @@ update msg model =
                                     }
                     in
                     { model = model
-                    , command = Api.updateTaskPlanning (Api.taskId task) params PlanningUpdated
+                    , command = Api.updateTaskPlanning (Types.taskId task) params PlanningUpdated
                     }
 
                 _ ->

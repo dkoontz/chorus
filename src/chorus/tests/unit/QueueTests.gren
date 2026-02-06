@@ -6,7 +6,7 @@ module QueueTests exposing (tests)
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task
-import Task.Queue as Queue exposing (QueuedMessage)
+import Types exposing (QueuedMessage)
 import Time
 
 
@@ -46,13 +46,13 @@ testEmptyQueueEncodeDecode =
                 { messages = [] }
 
             encoded =
-                Queue.encodeQueue queue
+                Types.encodeQueue queue
 
             json =
                 Encode.encode 0 encoded
 
             decoded =
-                Decode.decodeString Queue.queueDecoder json
+                Decode.decodeString Types.queueDecoder json
         in
         when decoded is
             Ok decodedQueue ->
@@ -82,13 +82,13 @@ testQueueWithMessagesEncodeDecode =
                 }
 
             encoded =
-                Queue.encodeQueue queue
+                Types.encodeQueue queue
 
             json =
                 Encode.encode 0 encoded
 
             decoded =
-                Decode.decodeString Queue.queueDecoder json
+                Decode.decodeString Types.queueDecoder json
         in
         when decoded is
             Ok decodedQueue ->
@@ -124,13 +124,13 @@ testMessageOrder =
                 }
 
             encoded =
-                Queue.encodeQueue queue
+                Types.encodeQueue queue
 
             json =
                 Encode.encode 0 encoded
 
             decoded =
-                Decode.decodeString Queue.queueDecoder json
+                Decode.decodeString Types.queueDecoder json
         in
         when decoded is
             Ok decodedQueue ->

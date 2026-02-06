@@ -5516,7 +5516,7 @@ var $gren_lang$browser$Http$get = function(r) {
 	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$emptyBody, expect: r.expect, headers: [  ], method: 'GET', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: r.url });
 };
 var $gren_lang$core$Json$Decode$andThen = _Json_andThen;
-var $author$project$Api$DescriptionOnly = function (a) {
+var $author$project$Types$DescriptionOnly = function (a) {
 	return { $: 'DescriptionOnly', a: a };
 };
 var $gren_lang$core$Json$Decode$array = _Json_decodeArray;
@@ -5527,7 +5527,7 @@ var $gren_lang$core$Time$Posix = function (a) {
 };
 var $gren_lang$core$Time$millisToPosix = $gren_lang$core$Time$Posix;
 var $gren_lang$core$Json$Decode$string = _Json_decodeString;
-var $author$project$Api$attachmentDecoder = A5($gren_lang$core$Json$Decode$map4, F4(function(filename, size, contentType, uploadedAt) {
+var $author$project$Types$attachmentDecoder = A5($gren_lang$core$Json$Decode$map4, F4(function(filename, size, contentType, uploadedAt) {
 			return { contentType: contentType, filename: filename, size: size, uploadedAt: uploadedAt };
 		}), A2($gren_lang$core$Json$Decode$field, 'filename', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'size', $gren_lang$core$Json$Decode$int), A2($gren_lang$core$Json$Decode$field, 'contentType', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'uploadedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)));
 var $gren_lang$core$Json$Decode$map8 = _Json_map8;
@@ -5536,62 +5536,62 @@ var $gren_lang$core$Json$Decode$maybe = function(decoder) {
 	return $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Maybe$Just, decoder), $gren_lang$core$Json$Decode$succeed($gren_lang$core$Maybe$Nothing) ]);
 };
 var $gren_lang$core$Json$Decode$map3 = _Json_map3;
-var $author$project$Api$sourceInfoDecoder = A4($gren_lang$core$Json$Decode$map3, F3(function(sourceType, userId, conversationId) {
+var $author$project$Types$sourceInfoDecoder = A4($gren_lang$core$Json$Decode$map3, F3(function(sourceType, userId, conversationId) {
 			return { conversationId: conversationId, sourceType: sourceType, userId: userId };
-		}), A2($gren_lang$core$Json$Decode$field, 'sourceType', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'userId', $gren_lang$core$Json$Decode$string), $gren_lang$core$Json$Decode$maybe(A2($gren_lang$core$Json$Decode$field, 'conversationId', $gren_lang$core$Json$Decode$string)));
-var $author$project$Api$Active = { $: 'Active' };
-var $author$project$Api$Completed = { $: 'Completed' };
-var $author$project$Api$Failed = function (a) {
+		}), A2($gren_lang$core$Json$Decode$field, 'sourceType', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'userId', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'conversationId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)));
+var $author$project$Types$Active = { $: 'Active' };
+var $author$project$Types$Completed = { $: 'Completed' };
+var $author$project$Types$Failed = function (a) {
 	return { $: 'Failed', a: a };
 };
-var $author$project$Api$Pending = { $: 'Pending' };
-var $author$project$Api$Waiting = { $: 'Waiting' };
+var $author$project$Types$Pending = { $: 'Pending' };
+var $author$project$Types$Waiting = { $: 'Waiting' };
 var $gren_lang$core$Json$Decode$fail = _Json_fail;
-var $author$project$Api$statusDecoder = A2($gren_lang$core$Json$Decode$andThen, function(statusType) {
+var $author$project$Types$statusDecoder = A2($gren_lang$core$Json$Decode$andThen, function(statusType) {
 		switch (statusType) {
 			case 'pending':
-				return $gren_lang$core$Json$Decode$succeed($author$project$Api$Pending);
+				return $gren_lang$core$Json$Decode$succeed($author$project$Types$Pending);
 			case 'active':
-				return $gren_lang$core$Json$Decode$succeed($author$project$Api$Active);
+				return $gren_lang$core$Json$Decode$succeed($author$project$Types$Active);
 			case 'waiting':
-				return $gren_lang$core$Json$Decode$succeed($author$project$Api$Waiting);
+				return $gren_lang$core$Json$Decode$succeed($author$project$Types$Waiting);
 			case 'completed':
-				return $gren_lang$core$Json$Decode$succeed($author$project$Api$Completed);
+				return $gren_lang$core$Json$Decode$succeed($author$project$Types$Completed);
 			case 'failed':
-				return A2($gren_lang$core$Json$Decode$map, $author$project$Api$Failed, A2($gren_lang$core$Json$Decode$field, 'message', $gren_lang$core$Json$Decode$string));
+				return A2($gren_lang$core$Json$Decode$map, $author$project$Types$Failed, A2($gren_lang$core$Json$Decode$field, 'message', $gren_lang$core$Json$Decode$string));
 			default:
 				return $gren_lang$core$Json$Decode$fail('Unknown status type: ' + statusType);
 		}
 	}, A2($gren_lang$core$Json$Decode$field, 'type', $gren_lang$core$Json$Decode$string));
-var $author$project$Api$descriptionOnlyTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(task) {
+var $author$project$Types$descriptionOnlyTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(task) {
 		return A2($gren_lang$core$Json$Decode$map, function(attachments) {
-				return $author$project$Api$DescriptionOnly(_Utils_update(task, { attachments: attachments }));
-			}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Api$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+				return $author$project$Types$DescriptionOnly(_Utils_update(task, { attachments: attachments }));
+			}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Types$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
 	}, A9($gren_lang$core$Json$Decode$map8, F8(function(id, description, status, createdAt, updatedAt, sessionId, source, agentWorkspace) {
 				return { agentWorkspace: agentWorkspace, attachments: [  ], createdAt: createdAt, description: description, id: id, sessionId: sessionId, source: source, status: status, updatedAt: updatedAt };
-			}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Api$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Api$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string)));
-var $author$project$Api$Planned = function (a) {
+			}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Types$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Types$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string)));
+var $author$project$Types$Planned = function (a) {
 	return { $: 'Planned', a: a };
 };
 var $gren_lang$core$Array$isEmpty = function(array) {
 	return $gren_lang$core$Array$length(array) === 0;
 };
-var $author$project$Api$legacyTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(baseTask) {
+var $author$project$Types$legacyTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(baseTask) {
 		return A2($gren_lang$core$Json$Decode$map, function(planningFields) {
-				return ($gren_lang$core$String$isEmpty(planningFields.summary) && ($gren_lang$core$Array$isEmpty(planningFields.requirements) && ($gren_lang$core$Array$isEmpty(planningFields.acceptanceCriteria) && $gren_lang$core$Array$isEmpty(planningFields.plan)))) ? $author$project$Api$DescriptionOnly(baseTask) : $author$project$Api$Planned({ acceptanceCriteria: planningFields.acceptanceCriteria, agentWorkspace: baseTask.agentWorkspace, attachments: baseTask.attachments, createdAt: baseTask.createdAt, description: baseTask.description, id: baseTask.id, plan: planningFields.plan, requirements: planningFields.requirements, sessionId: baseTask.sessionId, source: baseTask.source, status: baseTask.status, summary: planningFields.summary, updatedAt: baseTask.updatedAt });
+				return ($gren_lang$core$String$isEmpty(planningFields.summary) && ($gren_lang$core$Array$isEmpty(planningFields.requirements) && ($gren_lang$core$Array$isEmpty(planningFields.acceptanceCriteria) && $gren_lang$core$Array$isEmpty(planningFields.plan)))) ? $author$project$Types$DescriptionOnly(baseTask) : $author$project$Types$Planned({ acceptanceCriteria: planningFields.acceptanceCriteria, agentWorkspace: baseTask.agentWorkspace, attachments: baseTask.attachments, createdAt: baseTask.createdAt, description: baseTask.description, id: baseTask.id, plan: planningFields.plan, requirements: planningFields.requirements, sessionId: baseTask.sessionId, source: baseTask.source, status: baseTask.status, summary: planningFields.summary, updatedAt: baseTask.updatedAt });
 			}, A5($gren_lang$core$Json$Decode$map4, F4(function(summary, requirements, acceptanceCriteria, plan) {
 						return { acceptanceCriteria: acceptanceCriteria, plan: plan, requirements: requirements, summary: summary };
 					}), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'summary', $gren_lang$core$Json$Decode$string), $gren_lang$core$Json$Decode$succeed('') ]), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'requirements', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'acceptanceCriteria', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'plan', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ])));
 	}, A2($gren_lang$core$Json$Decode$andThen, function(baseTask) {
 			return A2($gren_lang$core$Json$Decode$map, function(attachments) {
 					return _Utils_update(baseTask, { attachments: attachments });
-				}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Api$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+				}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Types$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
 		}, A9($gren_lang$core$Json$Decode$map8, F8(function(id, description, status, createdAt, updatedAt, sessionId, source, agentWorkspace) {
 					return { agentWorkspace: agentWorkspace, attachments: [  ], createdAt: createdAt, description: description, id: id, sessionId: sessionId, source: source, status: status, updatedAt: updatedAt };
-				}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Api$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Api$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string))));
-var $author$project$Api$plannedTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(task) {
+				}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Types$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Types$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string))));
+var $author$project$Types$plannedTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(task) {
 		return A2($gren_lang$core$Json$Decode$map, function(plan) {
-				return $author$project$Api$Planned(_Utils_update(task, { plan: plan }));
+				return $author$project$Types$Planned(_Utils_update(task, { plan: plan }));
 			}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'plan', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
 	}, A2($gren_lang$core$Json$Decode$andThen, function(task) {
 			return A2($gren_lang$core$Json$Decode$map, function(acceptanceCriteria) {
@@ -5608,19 +5608,19 @@ var $author$project$Api$plannedTaskDecoder = A2($gren_lang$core$Json$Decode$andT
 				}, A2($gren_lang$core$Json$Decode$andThen, function(task) {
 						return A2($gren_lang$core$Json$Decode$map, function(attachments) {
 								return _Utils_update(task, { attachments: attachments });
-							}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Api$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+							}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Types$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
 					}, A9($gren_lang$core$Json$Decode$map8, F8(function(id, description, status, createdAt, updatedAt, sessionId, source, agentWorkspace) {
 								return { acceptanceCriteria: [  ], agentWorkspace: agentWorkspace, attachments: [  ], createdAt: createdAt, description: description, id: id, plan: [  ], requirements: [  ], sessionId: sessionId, source: source, status: status, summary: '', updatedAt: updatedAt };
-							}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Api$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Api$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string)))))));
-var $author$project$Api$taskDecoder = $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$andThen, function(taskType) {
+							}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Types$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Types$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string)))))));
+var $author$project$Types$taskDecoder = $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$andThen, function(taskType) {
 			if (taskType === 'planned') {
-				return $author$project$Api$plannedTaskDecoder;
+				return $author$project$Types$plannedTaskDecoder;
 			} else {
-				return $author$project$Api$descriptionOnlyTaskDecoder;
+				return $author$project$Types$descriptionOnlyTaskDecoder;
 			}
-		}, A2($gren_lang$core$Json$Decode$field, 'taskType', $gren_lang$core$Json$Decode$string)), $author$project$Api$legacyTaskDecoder ]);
+		}, A2($gren_lang$core$Json$Decode$field, 'taskType', $gren_lang$core$Json$Decode$string)), $author$project$Types$legacyTaskDecoder ]);
 var $author$project$Api$getTask$ = function(tid, toMsg) {
-	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), url: '/api/tasks/' + tid });
+	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Types$taskDecoder)), url: '/api/tasks/' + tid });
 };
 var $author$project$Api$getTask = F2($author$project$Api$getTask$);
 var $gren_lang$core$Array$foldl = _Array_foldl;
@@ -5632,24 +5632,24 @@ var $gren_lang$core$Json$Decode$dict = function(decoder) {
 					}), $gren_lang$core$Dict$empty, pairs);
 		}, $gren_lang$core$Json$Decode$keyValuePairs(decoder));
 };
-var $author$project$Api$eventDecoder = A4($gren_lang$core$Json$Decode$map3, F3(function(timestamp, eventType, data) {
+var $author$project$Types$eventDecoder = A4($gren_lang$core$Json$Decode$map3, F3(function(timestamp, eventType, data) {
 			return { data: data, eventType: eventType, timestamp: timestamp };
 		}), A2($gren_lang$core$Json$Decode$field, 'timestamp', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'eventType', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'data', $gren_lang$core$Json$Decode$dict($gren_lang$core$Json$Decode$string)));
-var $author$project$Api$historyDecoder = A2($gren_lang$core$Json$Decode$map, function(events) {
+var $author$project$Types$historyDecoder = A2($gren_lang$core$Json$Decode$map, function(events) {
 		return { events: events };
-	}, A2($gren_lang$core$Json$Decode$field, 'events', $gren_lang$core$Json$Decode$array($author$project$Api$eventDecoder)));
+	}, A2($gren_lang$core$Json$Decode$field, 'events', $gren_lang$core$Json$Decode$array($author$project$Types$eventDecoder)));
 var $author$project$Api$getTaskHistory$ = function(tid, toMsg) {
-	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$historyDecoder)), url: '/api/tasks/' + (tid + '/history') });
+	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Types$historyDecoder)), url: '/api/tasks/' + (tid + '/history') });
 };
 var $author$project$Api$getTaskHistory = F2($author$project$Api$getTaskHistory$);
-var $author$project$Api$messageDecoder = A4($gren_lang$core$Json$Decode$map3, F3(function(id, content, receivedAt) {
+var $author$project$Types$messageDecoder = A4($gren_lang$core$Json$Decode$map3, F3(function(id, content, receivedAt) {
 			return { content: content, id: id, receivedAt: receivedAt };
 		}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'content', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'receivedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)));
-var $author$project$Api$queueDecoder = A2($gren_lang$core$Json$Decode$map, function(messages) {
+var $author$project$Types$queueDecoder = A2($gren_lang$core$Json$Decode$map, function(messages) {
 		return { messages: messages };
-	}, A2($gren_lang$core$Json$Decode$field, 'messages', $gren_lang$core$Json$Decode$array($author$project$Api$messageDecoder)));
+	}, A2($gren_lang$core$Json$Decode$field, 'messages', $gren_lang$core$Json$Decode$array($author$project$Types$messageDecoder)));
 var $author$project$Api$getTaskQueue$ = function(tid, toMsg) {
-	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$queueDecoder)), url: '/api/tasks/' + (tid + '/queue') });
+	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Types$queueDecoder)), url: '/api/tasks/' + (tid + '/queue') });
 };
 var $author$project$Api$getTaskQueue = F2($author$project$Api$getTaskQueue$);
 var $author$project$Api$getTasks$ = function(maybeStatus, toMsg) {
@@ -5661,7 +5661,7 @@ var $author$project$Api$getTasks$ = function(maybeStatus, toMsg) {
 			return '/api/tasks';
 		}
 	}();
-	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($gren_lang$core$Json$Decode$array($author$project$Api$taskDecoder))), url: url });
+	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($gren_lang$core$Json$Decode$array($author$project$Types$taskDecoder))), url: url });
 };
 var $author$project$Api$getTasks = F2($author$project$Api$getTasks$);
 var $gren_lang$core$Platform$Cmd$none = $gren_lang$core$Platform$Cmd$batch([  ]);
@@ -5892,6 +5892,15 @@ var $author$project$Main$TaskCreated = function (a) {
 	return { $: 'TaskCreated', a: a };
 };
 var $gren_lang$core$Json$Encode$null = _Json_encodeNull;
+var $author$project$Types$encodeMaybe$ = function(encoder, maybeValue) {
+	if (maybeValue.$ === 'Just') {
+		var value = maybeValue.a;
+		return encoder(value);
+	} else {
+		return $gren_lang$core$Json$Encode$null;
+	}
+};
+var $author$project$Types$encodeMaybe = F2($author$project$Types$encodeMaybe$);
 var $gren_lang$core$Json$Encode$object = function(pairs) {
 	return _Json_wrap(A3($gren_lang$core$Array$foldl, F2(function(_v0, obj) {
 					var key = _v0.key;
@@ -5900,16 +5909,8 @@ var $gren_lang$core$Json$Encode$object = function(pairs) {
 				}), _Json_emptyObject({  }), pairs));
 };
 var $gren_lang$core$Json$Encode$string = _Json_wrap;
-var $author$project$Api$encodeSourceInfo = function(source) {
-	return $gren_lang$core$Json$Encode$object([ { key: 'sourceType', value: $gren_lang$core$Json$Encode$string(source.sourceType) }, { key: 'userId', value: $gren_lang$core$Json$Encode$string(source.userId) }, { key: 'conversationId', value: function () {
-			var _v0 = source.conversationId;
-			if (_v0.$ === 'Just') {
-				var id = _v0.a;
-				return $gren_lang$core$Json$Encode$string(id);
-			} else {
-				return $gren_lang$core$Json$Encode$null;
-			}
-		}() } ]);
+var $author$project$Types$encodeSourceInfo = function(source) {
+	return $gren_lang$core$Json$Encode$object([ { key: 'sourceType', value: $gren_lang$core$Json$Encode$string(source.sourceType) }, { key: 'userId', value: $gren_lang$core$Json$Encode$string(source.userId) }, { key: 'conversationId', value: $author$project$Types$encodeMaybe$($gren_lang$core$Json$Encode$string, source.conversationId) } ]);
 };
 var $gren_lang$browser$Http$jsonBody = function(value) {
 	return A2(_Http_pair, 'application/json', A2($gren_lang$core$Json$Encode$encode, 0, value));
@@ -5920,11 +5921,11 @@ var $gren_lang$browser$Http$post = function(r) {
 var $author$project$Api$createTask$ = function(_v0, toMsg) {
 	var description = _v0.description;
 	var source = _v0.source;
-	return $gren_lang$browser$Http$post({ body: $gren_lang$browser$Http$jsonBody($gren_lang$core$Json$Encode$object([ { key: 'description', value: $gren_lang$core$Json$Encode$string(description) }, { key: 'source', value: $author$project$Api$encodeSourceInfo(source) } ])), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), url: '/api/tasks' });
+	return $gren_lang$browser$Http$post({ body: $gren_lang$browser$Http$jsonBody($gren_lang$core$Json$Encode$object([ { key: 'description', value: $gren_lang$core$Json$Encode$string(description) }, { key: 'source', value: $author$project$Types$encodeSourceInfo(source) } ])), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Types$taskDecoder)), url: '/api/tasks' });
 };
 var $author$project$Api$createTask = F2($author$project$Api$createTask$);
 var $author$project$Api$deleteAttachment$ = function(tid, filename, toMsg) {
-	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$emptyBody, expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), headers: [  ], method: 'DELETE', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + ('/attachments/' + filename)) });
+	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$emptyBody, expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Types$taskDecoder)), headers: [  ], method: 'DELETE', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + ('/attachments/' + filename)) });
 };
 var $author$project$Api$deleteAttachment = F3($author$project$Api$deleteAttachment$);
 var $author$project$Main$httpErrorToString = function(error) {
@@ -6142,7 +6143,7 @@ var $gren_lang$browser$File$name = _File_name;
 var $gren_lang$core$Basics$neq = _Utils_notEqual;
 var $gren_lang$browser$Browser$Navigation$pushUrl = _Browser_pushUrl;
 var $gren_lang$core$Array$set = _Array_set;
-var $author$project$Api$taskId = function(task) {
+var $author$project$Types$taskId = function(task) {
 	if (task.$ === 'DescriptionOnly') {
 		var t = task.a;
 		return t.id;
@@ -6197,23 +6198,56 @@ var $author$project$Api$updateTaskPlanning$ = function(tid, params, toMsg) {
 			}
 		});
 	var fields = $gren_lang$core$Array$flatten([ A3(encodeMaybeField, 'summary', $gren_lang$core$Json$Encode$string, params.summary), A3(encodeMaybeField, 'requirements', $gren_lang$core$Json$Encode$array($gren_lang$core$Json$Encode$string), params.requirements), A3(encodeMaybeField, 'acceptanceCriteria', $gren_lang$core$Json$Encode$array($gren_lang$core$Json$Encode$string), params.acceptanceCriteria), A3(encodeMaybeField, 'plan', $gren_lang$core$Json$Encode$array($gren_lang$core$Json$Encode$string), params.plan) ]);
-	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$jsonBody($gren_lang$core$Json$Encode$object(fields)), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), headers: [  ], method: 'PUT', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + '/planning') });
+	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$jsonBody($gren_lang$core$Json$Encode$object(fields)), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Types$taskDecoder)), headers: [  ], method: 'PUT', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + '/planning') });
 };
 var $author$project$Api$updateTaskPlanning = F3($author$project$Api$updateTaskPlanning$);
+var $author$project$Types$encodeStatus = function(status) {
+	switch (status.$) {
+		case 'Pending':
+			return $gren_lang$core$Json$Encode$object([ { key: 'type', value: $gren_lang$core$Json$Encode$string('pending') } ]);
+		case 'Active':
+			return $gren_lang$core$Json$Encode$object([ { key: 'type', value: $gren_lang$core$Json$Encode$string('active') } ]);
+		case 'Waiting':
+			return $gren_lang$core$Json$Encode$object([ { key: 'type', value: $gren_lang$core$Json$Encode$string('waiting') } ]);
+		case 'Completed':
+			return $gren_lang$core$Json$Encode$object([ { key: 'type', value: $gren_lang$core$Json$Encode$string('completed') } ]);
+		default:
+			var message = status.a;
+			return $gren_lang$core$Json$Encode$object([ { key: 'type', value: $gren_lang$core$Json$Encode$string('failed') }, { key: 'message', value: $gren_lang$core$Json$Encode$string(message) } ]);
+	}
+};
+var $author$project$Types$statusFromString = function(str) {
+	switch (str) {
+		case 'pending':
+			return $gren_lang$core$Maybe$Just($author$project$Types$Pending);
+		case 'active':
+			return $gren_lang$core$Maybe$Just($author$project$Types$Active);
+		case 'waiting':
+			return $gren_lang$core$Maybe$Just($author$project$Types$Waiting);
+		case 'completed':
+			return $gren_lang$core$Maybe$Just($author$project$Types$Completed);
+		case 'failed':
+			return $gren_lang$core$Maybe$Just($author$project$Types$Failed(''));
+		default:
+			return $gren_lang$core$Maybe$Nothing;
+	}
+};
 var $author$project$Api$updateTaskStatus$ = function(tid, statusStr, toMsg) {
 	var statusValue = function () {
-		if (statusStr === 'failed') {
-			return $gren_lang$core$Json$Encode$object([ { key: 'type', value: $gren_lang$core$Json$Encode$string('failed') }, { key: 'message', value: $gren_lang$core$Json$Encode$string('') } ]);
+		var _v0 = $author$project$Types$statusFromString(statusStr);
+		if (_v0.$ === 'Just') {
+			var status = _v0.a;
+			return $author$project$Types$encodeStatus(status);
 		} else {
 			return $gren_lang$core$Json$Encode$object([ { key: 'type', value: $gren_lang$core$Json$Encode$string(statusStr) } ]);
 		}
 	}();
-	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$jsonBody($gren_lang$core$Json$Encode$object([ { key: 'status', value: statusValue } ])), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), headers: [  ], method: 'PUT', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + '/status') });
+	return $gren_lang$browser$Http$request({ body: $gren_lang$browser$Http$jsonBody($gren_lang$core$Json$Encode$object([ { key: 'status', value: statusValue } ])), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Types$taskDecoder)), headers: [  ], method: 'PUT', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + '/status') });
 };
 var $author$project$Api$updateTaskStatus = F3($author$project$Api$updateTaskStatus$);
 var $gren_lang$browser$Http$bytesBody = _Http_pair;
 var $author$project$Api$uploadAttachment$ = function(tid, filename, fileBytes, contentType, toMsg) {
-	return $gren_lang$browser$Http$request({ body: A2($gren_lang$browser$Http$bytesBody, contentType, fileBytes), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Api$taskDecoder)), headers: [  ], method: 'POST', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + ('/attachments?filename=' + filename)) });
+	return $gren_lang$browser$Http$request({ body: A2($gren_lang$browser$Http$bytesBody, contentType, fileBytes), expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Types$taskDecoder)), headers: [  ], method: 'POST', timeout: $gren_lang$core$Maybe$Nothing, tracker: $gren_lang$core$Maybe$Nothing, url: '/api/tasks/' + (tid + ('/attachments?filename=' + filename)) });
 };
 var $author$project$Api$uploadAttachment = F5($author$project$Api$uploadAttachment$);
 var $author$project$Main$update$ = function(msg, model) {
@@ -6279,14 +6313,14 @@ var $author$project$Main$update$ = function(msg, model) {
 			if (result.$ === 'Ok') {
 				var updatedTask = result.a;
 				var updateTask = function(t) {
-					return _Utils_eq($author$project$Api$taskId(t), $author$project$Api$taskId(updatedTask)) ? updatedTask : t;
+					return _Utils_eq($author$project$Types$taskId(t), $author$project$Types$taskId(updatedTask)) ? updatedTask : t;
 				};
 				var newTasks = A2($gren_lang$core$Array$map, updateTask, model.tasks);
 				var newSelected = function () {
 					var _v8 = model.selectedTask;
 					if (_v8.$ === 'Just') {
 						var selected = _v8.a;
-						return _Utils_eq($author$project$Api$taskId(selected), $author$project$Api$taskId(updatedTask)) ? $gren_lang$core$Maybe$Just(updatedTask) : model.selectedTask;
+						return _Utils_eq($author$project$Types$taskId(selected), $author$project$Types$taskId(updatedTask)) ? $gren_lang$core$Maybe$Just(updatedTask) : model.selectedTask;
 					} else {
 						return $gren_lang$core$Maybe$Nothing;
 					}
@@ -6448,7 +6482,7 @@ var $author$project$Main$update$ = function(msg, model) {
 							return { acceptanceCriteria: $gren_lang$core$Maybe$Nothing, plan: $gren_lang$core$Maybe$Just(editState.draftItems), requirements: $gren_lang$core$Maybe$Nothing, summary: $gren_lang$core$Maybe$Nothing };
 					}
 				}();
-				return { command: $author$project$Api$updateTaskPlanning$($author$project$Api$taskId(task), params, $author$project$Main$PlanningUpdated), model: model };
+				return { command: $author$project$Api$updateTaskPlanning$($author$project$Types$taskId(task), params, $author$project$Main$PlanningUpdated), model: model };
 			} else {
 				return { command: $gren_lang$core$Platform$Cmd$none, model: model };
 			}
@@ -6614,7 +6648,7 @@ var $author$project$View$Dashboard$statusMatches$ = function(a, b) {
 	return false;
 };
 var $author$project$View$Dashboard$statusMatches = F2($author$project$View$Dashboard$statusMatches$);
-var $author$project$Api$taskStatus = function(task) {
+var $author$project$Types$taskStatus = function(task) {
 	if (task.$ === 'DescriptionOnly') {
 		var t = task.a;
 		return t.status;
@@ -6625,13 +6659,13 @@ var $author$project$Api$taskStatus = function(task) {
 };
 var $author$project$View$Dashboard$countByStatus$ = function(status, tasks) {
 	return A3($gren_lang$core$Array$foldl, F2(function(task, count) {
-				return $author$project$View$Dashboard$statusMatches$($author$project$Api$taskStatus(task), status) ? (count + 1) : count;
+				return $author$project$View$Dashboard$statusMatches$($author$project$Types$taskStatus(task), status) ? (count + 1) : count;
 			}), 0, tasks);
 };
 var $author$project$View$Dashboard$countByStatus = F2($author$project$View$Dashboard$countByStatus$);
 var $author$project$View$Dashboard$countFailed = function(tasks) {
 	return A3($gren_lang$core$Array$foldl, F2(function(task, count) {
-				var _v0 = $author$project$Api$taskStatus(task);
+				var _v0 = $author$project$Types$taskStatus(task);
 				if (_v0.$ === 'Failed') {
 					return count + 1;
 				} else {
@@ -6652,7 +6686,7 @@ var $gren_lang$core$Array$takeFirst$ = function(n, array) {
 	return A3($gren_lang$core$Array$slice, 0, n, array);
 };
 var $gren_lang$core$Array$takeFirst = F2($gren_lang$core$Array$takeFirst$);
-var $author$project$Api$taskUpdatedAt = function(task) {
+var $author$project$Types$taskUpdatedAt = function(task) {
 	if (task.$ === 'DescriptionOnly') {
 		var t = task.a;
 		return t.updatedAt;
@@ -6663,7 +6697,7 @@ var $author$project$Api$taskUpdatedAt = function(task) {
 };
 var $gren_lang$browser$Html$ul = $gren_lang$browser$Html$node('ul');
 var $gren_lang$browser$Html$li = $gren_lang$browser$Html$node('li');
-var $author$project$Api$statusToString = function(status) {
+var $author$project$Types$statusToString = function(status) {
 	switch (status.$) {
 		case 'Pending':
 			return 'pending';
@@ -6677,7 +6711,7 @@ var $author$project$Api$statusToString = function(status) {
 			return 'failed';
 	}
 };
-var $author$project$Api$taskDescription = function(task) {
+var $author$project$Types$taskDescription = function(task) {
 	if (task.$ === 'DescriptionOnly') {
 		var t = task.a;
 		return t.description;
@@ -6687,11 +6721,11 @@ var $author$project$Api$taskDescription = function(task) {
 	}
 };
 var $author$project$View$Dashboard$viewRecentTask = function(task) {
-	return A2($gren_lang$browser$Html$li, [ $gren_lang$browser$Html$Attributes$class('task-item-compact') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks/' + $author$project$Api$taskId(task)) ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-' + $author$project$Api$statusToString($author$project$Api$taskStatus(task))) ], [ $gren_lang$browser$Html$text($author$project$Api$statusToString($author$project$Api$taskStatus(task))) ]), A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('task-description task-description-truncate') ], [ $gren_lang$browser$Html$text($author$project$Api$taskDescription(task)) ]) ]) ]);
+	return A2($gren_lang$browser$Html$li, [ $gren_lang$browser$Html$Attributes$class('task-item-compact') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks/' + $author$project$Types$taskId(task)) ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-' + $author$project$Types$statusToString($author$project$Types$taskStatus(task))) ], [ $gren_lang$browser$Html$text($author$project$Types$statusToString($author$project$Types$taskStatus(task))) ]), A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('task-description task-description-truncate') ], [ $gren_lang$browser$Html$text($author$project$Types$taskDescription(task)) ]) ]) ]);
 };
 var $author$project$View$Dashboard$viewRecentTasks = function(tasks) {
 	var recentTasks = $gren_lang$core$Array$takeFirst$(5, A2($gren_lang$core$Array$sortBy, function(t) {
-				return -$gren_lang$core$Time$posixToMillis($author$project$Api$taskUpdatedAt(t));
+				return -$gren_lang$core$Time$posixToMillis($author$project$Types$taskUpdatedAt(t));
 			}, tasks));
 	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('recent-tasks') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text('Recent Activity') ]), $gren_lang$core$Array$isEmpty(recentTasks) ? A2($gren_lang$browser$Html$p, [ $gren_lang$browser$Html$Attributes$class('empty-state') ], [ $gren_lang$browser$Html$text('No tasks yet') ]) : A2($gren_lang$browser$Html$ul, [ $gren_lang$browser$Html$Attributes$class('task-list-compact') ], A2($gren_lang$core$Array$map, $author$project$View$Dashboard$viewRecentTask, recentTasks)) ]);
 };
@@ -6700,7 +6734,7 @@ var $author$project$View$Dashboard$viewStatCard$ = function(label, value, classN
 };
 var $author$project$View$Dashboard$viewStatCard = F3($author$project$View$Dashboard$viewStatCard$);
 var $author$project$View$Dashboard$view = function(props) {
-	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('dashboard') ], [ A2($gren_lang$browser$Html$h2, [  ], [ $gren_lang$browser$Html$text('Dashboard') ]), (props.loading && $gren_lang$core$Array$isEmpty(props.tasks)) ? A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('loading') ], [ $gren_lang$browser$Html$text('Loading...') ]) : A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('stats-grid') ], [ $author$project$View$Dashboard$viewStatCard$('Total Tasks', $gren_lang$core$String$fromInt($gren_lang$core$Array$length(props.tasks)), 'stat-total'), $author$project$View$Dashboard$viewStatCard$('Pending', $gren_lang$core$String$fromInt($author$project$View$Dashboard$countByStatus$($author$project$Api$Pending, props.tasks)), 'stat-pending'), $author$project$View$Dashboard$viewStatCard$('Active', $gren_lang$core$String$fromInt($author$project$View$Dashboard$countByStatus$($author$project$Api$Active, props.tasks)), 'stat-active'), $author$project$View$Dashboard$viewStatCard$('Waiting', $gren_lang$core$String$fromInt($author$project$View$Dashboard$countByStatus$($author$project$Api$Waiting, props.tasks)), 'stat-waiting'), $author$project$View$Dashboard$viewStatCard$('Completed', $gren_lang$core$String$fromInt($author$project$View$Dashboard$countByStatus$($author$project$Api$Completed, props.tasks)), 'stat-completed'), $author$project$View$Dashboard$viewStatCard$('Failed', $gren_lang$core$String$fromInt($author$project$View$Dashboard$countFailed(props.tasks)), 'stat-failed') ]), $author$project$View$Dashboard$viewRecentTasks(props.tasks) ]);
+	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('dashboard') ], [ A2($gren_lang$browser$Html$h2, [  ], [ $gren_lang$browser$Html$text('Dashboard') ]), (props.loading && $gren_lang$core$Array$isEmpty(props.tasks)) ? A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('loading') ], [ $gren_lang$browser$Html$text('Loading...') ]) : A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('stats-grid') ], [ $author$project$View$Dashboard$viewStatCard$('Total Tasks', $gren_lang$core$String$fromInt($gren_lang$core$Array$length(props.tasks)), 'stat-total'), $author$project$View$Dashboard$viewStatCard$('Pending', $gren_lang$core$String$fromInt($author$project$View$Dashboard$countByStatus$($author$project$Types$Pending, props.tasks)), 'stat-pending'), $author$project$View$Dashboard$viewStatCard$('Active', $gren_lang$core$String$fromInt($author$project$View$Dashboard$countByStatus$($author$project$Types$Active, props.tasks)), 'stat-active'), $author$project$View$Dashboard$viewStatCard$('Waiting', $gren_lang$core$String$fromInt($author$project$View$Dashboard$countByStatus$($author$project$Types$Waiting, props.tasks)), 'stat-waiting'), $author$project$View$Dashboard$viewStatCard$('Completed', $gren_lang$core$String$fromInt($author$project$View$Dashboard$countByStatus$($author$project$Types$Completed, props.tasks)), 'stat-completed'), $author$project$View$Dashboard$viewStatCard$('Failed', $gren_lang$core$String$fromInt($author$project$View$Dashboard$countFailed(props.tasks)), 'stat-failed') ]), $author$project$View$Dashboard$viewRecentTasks(props.tasks) ]);
 };
 var $gren_lang$core$Json$Decode$at$ = function(fields, decoder) {
 	return A3($gren_lang$core$Array$foldr, $gren_lang$core$Json$Decode$field, decoder, fields);
@@ -6711,7 +6745,7 @@ var $gren_lang$browser$Html$input = $gren_lang$browser$Html$node('input');
 var $gren_lang$browser$Html$label = $gren_lang$browser$Html$node('label');
 var $gren_lang$browser$VirtualDom$style = _VirtualDom_style;
 var $gren_lang$browser$Html$Attributes$style = $gren_lang$browser$VirtualDom$style;
-var $author$project$Api$taskAttachments = function(task) {
+var $author$project$Types$taskAttachments = function(task) {
 	if (task.$ === 'DescriptionOnly') {
 		var t = task.a;
 		return t.attachments;
@@ -6735,8 +6769,8 @@ var $author$project$View$TaskDetail$viewAttachment$ = function(props, taskId, at
 };
 var $author$project$View$TaskDetail$viewAttachment = F3($author$project$View$TaskDetail$viewAttachment$);
 var $author$project$View$TaskDetail$viewAttachments$ = function(props, task) {
-	var tid = $author$project$Api$taskId(task);
-	var attachments = $author$project$Api$taskAttachments(task);
+	var tid = $author$project$Types$taskId(task);
+	var attachments = $author$project$Types$taskAttachments(task);
 	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-attachments card') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text('Attachments') ]), $gren_lang$core$Array$isEmpty(attachments) ? A2($gren_lang$browser$Html$p, [ $gren_lang$browser$Html$Attributes$class('empty-state') ], [ $gren_lang$browser$Html$text('No attachments') ]) : A2($gren_lang$browser$Html$ul, [ $gren_lang$browser$Html$Attributes$class('attachment-list') ], A2($gren_lang$core$Array$map, A2($author$project$View$TaskDetail$viewAttachment, props, tid), attachments)), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('attachment-upload') ], [ A2($gren_lang$browser$Html$label, [ $gren_lang$browser$Html$Attributes$class('btn btn-secondary') ], [ $gren_lang$browser$Html$text('Upload File'), A2($gren_lang$browser$Html$input, [ $gren_lang$browser$Html$Attributes$type_('file'), A2($gren_lang$browser$Html$Attributes$style, 'display', 'none'), $gren_lang$browser$Html$Events$on$('change', A2($gren_lang$core$Json$Decode$map, props.onFileSelected, $gren_lang$core$Json$Decode$at$([ 'target', 'files', '0' ], $gren_lang$browser$File$decoder))) ], [  ]) ]) ]) ]);
 };
 var $author$project$View$TaskDetail$viewAttachments = F2($author$project$View$TaskDetail$viewAttachments$);
@@ -6852,9 +6886,9 @@ var $author$project$View$TaskDetail$viewPlanningSections$ = function(props, task
 };
 var $author$project$View$TaskDetail$viewPlanningSections = F2($author$project$View$TaskDetail$viewPlanningSections$);
 var $author$project$View$TaskDetail$viewStatusActions$ = function(props, task) {
-	var tid = $author$project$Api$taskId(task);
+	var tid = $author$project$Types$taskId(task);
 	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('status-actions') ], function () {
-			var _v0 = $author$project$Api$taskStatus(task);
+			var _v0 = $author$project$Types$taskStatus(task);
 			switch (_v0.$) {
 				case 'Pending':
 					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-primary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'active')) ], [ $gren_lang$browser$Html$text('Start Task') ]) ];
@@ -6871,7 +6905,7 @@ var $author$project$View$TaskDetail$viewStatusActions$ = function(props, task) {
 };
 var $author$project$View$TaskDetail$viewStatusActions = F2($author$project$View$TaskDetail$viewStatusActions$);
 var $author$project$View$TaskDetail$viewTaskHeader$ = function(props, task) {
-	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-detail-header') ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-title-row') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks'), $gren_lang$browser$Html$Attributes$class('back-link') ], [ $gren_lang$browser$Html$text('< Back to Tasks') ]), A2($gren_lang$browser$Html$h2, [  ], [ $gren_lang$browser$Html$text($author$project$Api$taskDescription(task)) ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(props.onRefresh) ], [ $gren_lang$browser$Html$text('Refresh') ]) ]), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-meta') ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-large status-' + $author$project$Api$statusToString($author$project$Api$taskStatus(task))) ], [ $gren_lang$browser$Html$text($author$project$Api$statusToString($author$project$Api$taskStatus(task))) ]), $author$project$View$TaskDetail$viewStatusActions$(props, task) ]) ]);
+	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-detail-header') ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-title-row') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks'), $gren_lang$browser$Html$Attributes$class('back-link') ], [ $gren_lang$browser$Html$text('< Back to Tasks') ]), A2($gren_lang$browser$Html$h2, [  ], [ $gren_lang$browser$Html$text($author$project$Types$taskDescription(task)) ]), A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-secondary'), $gren_lang$browser$Html$Events$onClick(props.onRefresh) ], [ $gren_lang$browser$Html$text('Refresh') ]) ]), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-meta') ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-large status-' + $author$project$Types$statusToString($author$project$Types$taskStatus(task))) ], [ $gren_lang$browser$Html$text($author$project$Types$statusToString($author$project$Types$taskStatus(task))) ]), $author$project$View$TaskDetail$viewStatusActions$(props, task) ]) ]);
 };
 var $author$project$View$TaskDetail$viewTaskHeader = F2($author$project$View$TaskDetail$viewTaskHeader$);
 var $gren_lang$core$Array$reverse = _Array_reverse;
@@ -6900,7 +6934,7 @@ var $author$project$View$TaskDetail$viewTaskHistory = function(maybeHistory) {
 var $gren_lang$browser$Html$dd = $gren_lang$browser$Html$node('dd');
 var $gren_lang$browser$Html$dl = $gren_lang$browser$Html$node('dl');
 var $gren_lang$browser$Html$dt = $gren_lang$browser$Html$node('dt');
-var $author$project$Api$taskAgentWorkspace = function(task) {
+var $author$project$Types$taskAgentWorkspace = function(task) {
 	if (task.$ === 'DescriptionOnly') {
 		var t = task.a;
 		return t.agentWorkspace;
@@ -6909,7 +6943,7 @@ var $author$project$Api$taskAgentWorkspace = function(task) {
 		return t.agentWorkspace;
 	}
 };
-var $author$project$Api$taskCreatedAt = function(task) {
+var $author$project$Types$taskCreatedAt = function(task) {
 	if (task.$ === 'DescriptionOnly') {
 		var t = task.a;
 		return t.createdAt;
@@ -6918,7 +6952,7 @@ var $author$project$Api$taskCreatedAt = function(task) {
 		return t.createdAt;
 	}
 };
-var $author$project$Api$taskSessionId = function(task) {
+var $author$project$Types$taskSessionId = function(task) {
 	if (task.$ === 'DescriptionOnly') {
 		var t = task.a;
 		return t.sessionId;
@@ -6927,7 +6961,7 @@ var $author$project$Api$taskSessionId = function(task) {
 		return t.sessionId;
 	}
 };
-var $author$project$Api$taskSource = function(task) {
+var $author$project$Types$taskSource = function(task) {
 	if (task.$ === 'DescriptionOnly') {
 		var t = task.a;
 		return t.source;
@@ -6946,8 +6980,8 @@ var $gren_lang$core$Maybe$withDefault$ = function(_default, maybe) {
 };
 var $gren_lang$core$Maybe$withDefault = F2($gren_lang$core$Maybe$withDefault$);
 var $author$project$View$TaskDetail$viewTaskInfo = function(task) {
-	var source = $author$project$Api$taskSource(task);
-	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-info card') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text('Task Information') ]), A2($gren_lang$browser$Html$dl, [ $gren_lang$browser$Html$Attributes$class('info-list') ], [ A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('ID') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace') ], [ $gren_lang$browser$Html$text($author$project$Api$taskId(task)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Source') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text(source.sourceType + (' / ' + source.userId)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Session ID') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace') ], [ $gren_lang$browser$Html$text($gren_lang$core$Maybe$withDefault$('None', $author$project$Api$taskSessionId(task))) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Workspace') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace truncate') ], [ $gren_lang$browser$Html$text($author$project$Api$taskAgentWorkspace(task)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Created') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text($author$project$View$TaskDetail$formatTimestamp($author$project$Api$taskCreatedAt(task))) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Updated') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text($author$project$View$TaskDetail$formatTimestamp($author$project$Api$taskUpdatedAt(task))) ]) ]) ]);
+	var source = $author$project$Types$taskSource(task);
+	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('task-info card') ], [ A2($gren_lang$browser$Html$h3, [  ], [ $gren_lang$browser$Html$text('Task Information') ]), A2($gren_lang$browser$Html$dl, [ $gren_lang$browser$Html$Attributes$class('info-list') ], [ A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('ID') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace') ], [ $gren_lang$browser$Html$text($author$project$Types$taskId(task)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Source') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text(source.sourceType + (' / ' + source.userId)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Session ID') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace') ], [ $gren_lang$browser$Html$text($gren_lang$core$Maybe$withDefault$('None', $author$project$Types$taskSessionId(task))) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Workspace') ]), A2($gren_lang$browser$Html$dd, [ $gren_lang$browser$Html$Attributes$class('monospace truncate') ], [ $gren_lang$browser$Html$text($author$project$Types$taskAgentWorkspace(task)) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Created') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text($author$project$View$TaskDetail$formatTimestamp($author$project$Types$taskCreatedAt(task))) ]), A2($gren_lang$browser$Html$dt, [  ], [ $gren_lang$browser$Html$text('Updated') ]), A2($gren_lang$browser$Html$dd, [  ], [ $gren_lang$browser$Html$text($author$project$View$TaskDetail$formatTimestamp($author$project$Types$taskUpdatedAt(task))) ]) ]) ]);
 };
 var $author$project$View$TaskDetail$viewQueuedMessage = function(message) {
 	return A2($gren_lang$browser$Html$li, [ $gren_lang$browser$Html$Attributes$class('queue-item') ], [ A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('queue-item-header') ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('queue-item-id monospace') ], [ $gren_lang$browser$Html$text($gren_lang$core$String$takeFirst$(8, message.id)) ]), A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('queue-item-time') ], [ $gren_lang$browser$Html$text($author$project$View$TaskDetail$formatTimestamp(message.receivedAt)) ]) ]), A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('queue-item-content') ], [ $gren_lang$browser$Html$text(message.content) ]) ]);
@@ -7003,9 +7037,9 @@ var $author$project$View$TaskList$formatTimestamp = function(posix) {
 };
 var $gren_lang$browser$Html$td = $gren_lang$browser$Html$node('td');
 var $author$project$View$TaskList$viewStatusActions$ = function(props, task) {
-	var tid = $author$project$Api$taskId(task);
+	var tid = $author$project$Types$taskId(task);
 	return A2($gren_lang$browser$Html$div, [ $gren_lang$browser$Html$Attributes$class('action-buttons') ], function () {
-			var _v0 = $author$project$Api$taskStatus(task);
+			var _v0 = $author$project$Types$taskStatus(task);
 			switch (_v0.$) {
 				case 'Pending':
 					return [ A2($gren_lang$browser$Html$button, [ $gren_lang$browser$Html$Attributes$class('btn btn-small btn-primary'), $gren_lang$browser$Html$Events$onClick(A2(props.onStatusUpdate, tid, 'active')) ], [ $gren_lang$browser$Html$text('Start') ]) ];
@@ -7022,8 +7056,8 @@ var $author$project$View$TaskList$viewStatusActions$ = function(props, task) {
 };
 var $author$project$View$TaskList$viewStatusActions = F2($author$project$View$TaskList$viewStatusActions$);
 var $author$project$View$TaskList$viewTaskRow$ = function(props, task) {
-	var source = $author$project$Api$taskSource(task);
-	return A2($gren_lang$browser$Html$tr, [ $gren_lang$browser$Html$Attributes$class('task-row') ], [ A2($gren_lang$browser$Html$td, [  ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-' + $author$project$Api$statusToString($author$project$Api$taskStatus(task))) ], [ $gren_lang$browser$Html$text($author$project$Api$statusToString($author$project$Api$taskStatus(task))) ]) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('task-description-cell') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks/' + $author$project$Api$taskId(task)), $gren_lang$browser$Html$Attributes$class('task-link task-description-truncate') ], [ $gren_lang$browser$Html$text($author$project$Api$taskDescription(task)) ]) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('source-info') ], [ $gren_lang$browser$Html$text(source.sourceType + (' / ' + source.userId)) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('timestamp') ], [ $gren_lang$browser$Html$text($author$project$View$TaskList$formatTimestamp($author$project$Api$taskUpdatedAt(task))) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('actions') ], [ $author$project$View$TaskList$viewStatusActions$(props, task) ]) ]);
+	var source = $author$project$Types$taskSource(task);
+	return A2($gren_lang$browser$Html$tr, [ $gren_lang$browser$Html$Attributes$class('task-row') ], [ A2($gren_lang$browser$Html$td, [  ], [ A2($gren_lang$browser$Html$span, [ $gren_lang$browser$Html$Attributes$class('status-badge status-' + $author$project$Types$statusToString($author$project$Types$taskStatus(task))) ], [ $gren_lang$browser$Html$text($author$project$Types$statusToString($author$project$Types$taskStatus(task))) ]) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('task-description-cell') ], [ A2($gren_lang$browser$Html$a, [ $gren_lang$browser$Html$Attributes$href('/tasks/' + $author$project$Types$taskId(task)), $gren_lang$browser$Html$Attributes$class('task-link task-description-truncate') ], [ $gren_lang$browser$Html$text($author$project$Types$taskDescription(task)) ]) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('source-info') ], [ $gren_lang$browser$Html$text(source.sourceType + (' / ' + source.userId)) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('timestamp') ], [ $gren_lang$browser$Html$text($author$project$View$TaskList$formatTimestamp($author$project$Types$taskUpdatedAt(task))) ]), A2($gren_lang$browser$Html$td, [ $gren_lang$browser$Html$Attributes$class('actions') ], [ $author$project$View$TaskList$viewStatusActions$(props, task) ]) ]);
 };
 var $author$project$View$TaskList$viewTaskRow = F2($author$project$View$TaskList$viewTaskRow$);
 var $author$project$View$TaskList$viewTaskTable = function(props) {

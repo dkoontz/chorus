@@ -7,7 +7,6 @@ module View.TaskDetail exposing
 {-| Task detail view showing full task information, history, and queue.
 -}
 
-import Api
 import Dict exposing (Dict)
 import File
 import Html exposing (..)
@@ -15,6 +14,7 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, on, onInput)
 import Json.Decode
 import Time
+import Types exposing (Task(..), TaskStatus(..))
 
 
 {-| Which planning section is being edited.
@@ -36,9 +36,9 @@ type alias PlanningEditState =
 
 
 type alias Props msg =
-    { task : Maybe Api.Task
-    , history : Maybe Api.History
-    , queue : Maybe Api.Queue
+    { task : Maybe Types.Task
+    , history : Maybe Types.History
+    , queue : Maybe Types.Queue
     , loading : Bool
     , onStatusUpdate : String -> String -> msg
     , onRefresh : msg
@@ -70,7 +70,7 @@ view props =
         ]
 
 
-viewTask : Props msg -> Api.Task -> Html msg
+viewTask : Props msg -> Types.Task -> Html msg
 viewTask props task =
     div [ class "task-detail" ]
         [ viewTaskHeader props task
@@ -84,12 +84,12 @@ viewTask props task =
         ]
 
 
-viewTaskHeader : Props msg -> Api.Task -> Html msg
+viewTaskHeader : Props msg -> Types.Task -> Html msg
 viewTaskHeader props task =
     div [ class "task-detail-header" ]
         [ div [ class "task-title-row" ]
             [ a [ href "/tasks", class "back-link" ] [ text "< Back to Tasks" ]
-            , h2 [] [ text (Api.taskDescription task) ]
+            , h2 [] [ text (Types.taskDescription task) ]
             , button
                 [ class "btn btn-small btn-secondary"
                 , onClick props.onRefresh
@@ -97,22 +97,22 @@ viewTaskHeader props task =
                 [ text "Refresh" ]
             ]
         , div [ class "task-meta" ]
-            [ span [ class ("status-badge status-large status-" ++ Api.statusToString (Api.taskStatus task)) ]
-                [ text (Api.statusToString (Api.taskStatus task)) ]
+            [ span [ class ("status-badge status-large status-" ++ Types.statusToString (Types.taskStatus task)) ]
+                [ text (Types.statusToString (Types.taskStatus task)) ]
             , viewStatusActions props task
             ]
         ]
 
 
-viewStatusActions : Props msg -> Api.Task -> Html msg
+viewStatusActions : Props msg -> Types.Task -> Html msg
 viewStatusActions props task =
     let
         tid =
-            Api.taskId task
+            Types.taskId task
     in
     div [ class "status-actions" ]
-        (when Api.taskStatus task is
-            Api.Pending ->
+        (when Types.taskStatus task is
+            Pending ->
                 [ button
                     [ class "btn btn-primary"
                     , onClick (props.onStatusUpdate tid "active")
@@ -120,7 +120,7 @@ viewStatusActions props task =
                     [ text "Start Task" ]
                 ]
 
-            Api.Active ->
+            Active ->
                 [ button
                     [ class "btn btn-secondary"
                     , onClick (props.onStatusUpdate tid "waiting")
@@ -138,7 +138,7 @@ viewStatusActions props task =
                     [ text "Mark Failed" ]
                 ]
 
-            Api.Waiting ->
+            Waiting ->
                 [ button
                     [ class "btn btn-primary"
                     , onClick (props.onStatusUpdate tid "active")
@@ -151,7 +151,7 @@ viewStatusActions props task =
                     [ text "Mark Complete" ]
                 ]
 
-            Api.Completed ->
+            Completed ->
                 [ button
                     [ class "btn btn-secondary"
                     , onClick (props.onStatusUpdate tid "pending")
@@ -159,7 +159,7 @@ viewStatusActions props task =
                     [ text "Reopen" ]
                 ]
 
-            Api.Failed _ ->
+            Failed _ ->
                 [ button
                     [ class "btn btn-secondary"
                     , onClick (props.onStatusUpdate tid "pending")
@@ -169,40 +169,40 @@ viewStatusActions props task =
         )
 
 
-viewTaskInfo : Api.Task -> Html msg
+viewTaskInfo : Types.Task -> Html msg
 viewTaskInfo task =
     let
         source =
-            Api.taskSource task
+            Types.taskSource task
     in
     div [ class "task-info card" ]
         [ h3 [] [ text "Task Information" ]
         , dl [ class "info-list" ]
             [ dt [] [ text "ID" ]
-            , dd [ class "monospace" ] [ text (Api.taskId task) ]
+            , dd [ class "monospace" ] [ text (Types.taskId task) ]
             , dt [] [ text "Source" ]
             , dd [] [ text (source.sourceType ++ " / " ++ source.userId) ]
             , dt [] [ text "Session ID" ]
             , dd [ class "monospace" ]
-                [ text (Maybe.withDefault "None" (Api.taskSessionId task)) ]
+                [ text (Maybe.withDefault "None" (Types.taskSessionId task)) ]
             , dt [] [ text "Workspace" ]
-            , dd [ class "monospace truncate" ] [ text (Api.taskAgentWorkspace task) ]
+            , dd [ class "monospace truncate" ] [ text (Types.taskAgentWorkspace task) ]
             , dt [] [ text "Created" ]
-            , dd [] [ text (formatTimestamp (Api.taskCreatedAt task)) ]
+            , dd [] [ text (formatTimestamp (Types.taskCreatedAt task)) ]
             , dt [] [ text "Updated" ]
-            , dd [] [ text (formatTimestamp (Api.taskUpdatedAt task)) ]
+            , dd [] [ text (formatTimestamp (Types.taskUpdatedAt task)) ]
             ]
         ]
 
 
-viewAttachments : Props msg -> Api.Task -> Html msg
+viewAttachments : Props msg -> Types.Task -> Html msg
 viewAttachments props task =
     let
         attachments =
-            Api.taskAttachments task
+            Types.taskAttachments task
 
         tid =
-            Api.taskId task
+            Types.taskId task
     in
     div [ class "task-attachments card" ]
         [ h3 [] [ text "Attachments" ]
@@ -228,7 +228,7 @@ viewAttachments props task =
         ]
 
 
-viewAttachment : Props msg -> String -> Api.Attachment -> Html msg
+viewAttachment : Props msg -> String -> Types.Attachment -> Html msg
 viewAttachment props taskId attachment =
     li [ class "attachment-item" ]
         [ a
@@ -259,10 +259,10 @@ formatFileSize bytes =
         String.fromInt (bytes // (1024 * 1024)) ++ " MB"
 
 
-viewPlanningSections : Props msg -> Api.Task -> Html msg
+viewPlanningSections : Props msg -> Types.Task -> Html msg
 viewPlanningSections props task =
     when task is
-        Api.DescriptionOnly _ ->
+        DescriptionOnly _ ->
             -- Not yet planned: show a "Not yet planned" state with an Add Planning button
             div [ class "planning-sections" ]
                 [ div [ class "planning-section card" ]
@@ -278,7 +278,7 @@ viewPlanningSections props task =
                     ]
                 ]
 
-        Api.Planned t ->
+        Planned t ->
             div [ class "planning-sections" ]
                 [ viewSummarySection props task t.summary
                 , viewListSection props task "Requirements" PlanningRequirements t.requirements "No requirements"
@@ -287,7 +287,7 @@ viewPlanningSections props task =
                 ]
 
 
-viewSummarySection : Props msg -> Api.Task -> String -> Html msg
+viewSummarySection : Props msg -> Types.Task -> String -> Html msg
 viewSummarySection props task summary =
     let
         isEditing =
@@ -349,7 +349,7 @@ viewSummarySection props task summary =
         ]
 
 
-viewListSection : Props msg -> Api.Task -> String -> PlanningSection -> Array String -> String -> Html msg
+viewListSection : Props msg -> Types.Task -> String -> PlanningSection -> Array String -> String -> Html msg
 viewListSection props task title section items placeholder =
     let
         isEditing =
@@ -430,7 +430,7 @@ sectionEquals a b =
     a == b
 
 
-viewTaskHistory : Maybe Api.History -> Html msg
+viewTaskHistory : Maybe Types.History -> Html msg
 viewTaskHistory maybeHistory =
     div [ class "task-history card" ]
         [ h3 [] [ text "History" ]
@@ -447,7 +447,7 @@ viewTaskHistory maybeHistory =
         ]
 
 
-viewEvent : Api.Event -> Html msg
+viewEvent : Types.Event -> Html msg
 viewEvent event =
     li [ class "event-item" ]
         [ div [ class "event-header" ]
@@ -472,7 +472,7 @@ viewEvent event =
         ]
 
 
-viewTaskQueue : Maybe Api.Queue -> Html msg
+viewTaskQueue : Maybe Types.Queue -> Html msg
 viewTaskQueue maybeQueue =
     div [ class "task-queue card" ]
         [ h3 [] [ text "Message Queue" ]
@@ -494,7 +494,7 @@ viewTaskQueue maybeQueue =
         ]
 
 
-viewQueuedMessage : Api.QueuedMessage -> Html msg
+viewQueuedMessage : Types.QueuedMessage -> Html msg
 viewQueuedMessage message =
     li [ class "queue-item" ]
         [ div [ class "queue-item-header" ]

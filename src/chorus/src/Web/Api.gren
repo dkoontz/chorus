@@ -37,6 +37,7 @@ import Task as GrenTask exposing (Task)
 import Task.Queue as Queue
 import Task.Registry as Registry
 import Time
+import Types exposing (Task(..), TaskStatus(..), SourceInfo, PlanningFields)
 import Web.Router exposing (Route(..))
 
 
@@ -64,7 +65,7 @@ type ApiResult
 -}
 type alias CreateTaskParams =
     { description : String
-    , source : Registry.SourceInfo
+    , source : SourceInfo
     }
 
 
@@ -107,7 +108,7 @@ requestTasks ctx maybeStatus toMsg =
                         (\now ->
                             let
                                 tasksJson =
-                                    Encode.array Registry.encodeTask tasks
+                                    Encode.array Types.encodeTask tasks
 
                                 body =
                                     wrapResponse tasksJson now
@@ -139,7 +140,7 @@ requestTask ctx taskId toMsg =
                                 (\now ->
                                     let
                                         body =
-                                            wrapResponse (Registry.encodeTask task) now
+                                            wrapResponse (Types.encodeTask task) now
                                     in
                                     ApiSuccess { statusCode = 200, body = body }
                                 )
@@ -166,7 +167,7 @@ requestCreateTask ctx params toMsg =
                         (\now ->
                             let
                                 body =
-                                    wrapResponse (Registry.encodeTask task) now
+                                    wrapResponse (Types.encodeTask task) now
                             in
                             ApiSuccess { statusCode = 201, body = body }
                         )
@@ -180,7 +181,7 @@ requestCreateTask ctx params toMsg =
 
 {-| PUT /api/tasks/:id/status - Update task status.
 -}
-requestUpdateStatus : ApiContext -> String -> Registry.TaskStatus -> (ApiResult -> msg) -> Cmd msg
+requestUpdateStatus : ApiContext -> String -> TaskStatus -> (ApiResult -> msg) -> Cmd msg
 requestUpdateStatus ctx taskId status toMsg =
     Registry.updateStatus ctx.registry taskId status
         |> GrenTask.andThen
@@ -190,7 +191,7 @@ requestUpdateStatus ctx taskId status toMsg =
                         (\now ->
                             let
                                 body =
-                                    wrapResponse (Registry.encodeTask task) now
+                                    wrapResponse (Types.encodeTask task) now
                             in
                             ApiSuccess { statusCode = 200, body = body }
                         )
@@ -222,14 +223,14 @@ requestUpdatePlanning ctx taskId params toMsg =
                 -- Get current planning fields (empty defaults for DescriptionOnly)
                 currentFields =
                     when task is
-                        Registry.DescriptionOnly _ ->
+                        DescriptionOnly _ ->
                             { summary = ""
                             , requirements = []
                             , acceptanceCriteria = []
                             , plan = []
                             }
 
-                        Registry.Planned t ->
+                        Planned t ->
                             { summary = t.summary
                             , requirements = t.requirements
                             , acceptanceCriteria = t.acceptanceCriteria
@@ -243,7 +244,7 @@ requestUpdatePlanning ctx taskId params toMsg =
                     , plan = Maybe.withDefault currentFields.plan params.plan
                     }
             in
-            Registry.planTask task newFields
+            Types.planTask task newFields
         )
         |> GrenTask.andThen
             (\updatedTask ->
@@ -252,7 +253,7 @@ requestUpdatePlanning ctx taskId params toMsg =
                         (\now ->
                             let
                                 body =
-                                    wrapResponse (Registry.encodeTask updatedTask) now
+                                    wrapResponse (Types.encodeTask updatedTask) now
                             in
                             ApiSuccess { statusCode = 200, body = body }
                         )
@@ -455,8 +456,8 @@ requestUploadAttachment ctx taskId filename fileBytes uploadDir toMsg =
                     -- Update the task to add the attachment metadata
                     Registry.updateTask ctx.registry taskId
                         (\task ->
-                            Registry.setAttachments
-                                (Array.pushLast attachment (Registry.taskAttachments task))
+                            Types.setAttachments
+                                (Array.pushLast attachment (Types.taskAttachments task))
                                 task
                         )
                         |> GrenTask.map
@@ -464,7 +465,7 @@ requestUploadAttachment ctx taskId filename fileBytes uploadDir toMsg =
                                 ApiSuccess
                                     { statusCode = 200
                                     , body =
-                                        wrapResponse (Registry.encodeTask updatedTask) now
+                                        wrapResponse (Types.encodeTask updatedTask) now
                                     }
                             )
                 )
@@ -503,7 +504,7 @@ requestDownloadAttachment ctx taskId filename uploadDir toMsg =
                     Just task ->
                         let
                             maybeAttachment =
-                                Array.findFirst (\a -> a.filename == filename) (Registry.taskAttachments task)
+                                Array.findFirst (\a -> a.filename == filename) (Types.taskAttachments task)
                         in
                         when maybeAttachment is
                             Nothing ->
@@ -559,8 +560,8 @@ requestDeleteAttachment ctx taskId filename uploadDir toMsg =
                 -- Remove the attachment entry from the task
                 Registry.updateTask ctx.registry taskId
                     (\task ->
-                        Registry.setAttachments
-                            (Array.keepIf (\a -> a.filename /= filename) (Registry.taskAttachments task))
+                        Types.setAttachments
+                            (Array.keepIf (\a -> a.filename /= filename) (Types.taskAttachments task))
                             task
                     )
             )
@@ -573,7 +574,7 @@ requestDeleteAttachment ctx taskId filename uploadDir toMsg =
                             ApiSuccess
                                 { statusCode = 200
                                 , body =
-                                    wrapResponse (Registry.encodeTask updatedTask) now
+                                    wrapResponse (Types.encodeTask updatedTask) now
                                 }
                         )
             )
@@ -668,26 +669,9 @@ sendBinaryResponse response result =
 
 {-| Parse a status string to TaskStatus.
 -}
-parseStatus : String -> Maybe Registry.TaskStatus
+parseStatus : String -> Maybe TaskStatus
 parseStatus statusStr =
-    when statusStr is
-        "pending" ->
-            Just Registry.Pending
-
-        "active" ->
-            Just Registry.Active
-
-        "waiting" ->
-            Just Registry.Waiting
-
-        "completed" ->
-            Just Registry.Completed
-
-        "failed" ->
-            Just (Registry.Failed "")
-
-        _ ->
-            Nothing
+    Types.statusFromString statusStr
 
 
 {-| Wrap data in standard response format.

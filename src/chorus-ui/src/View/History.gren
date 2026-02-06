@@ -3,15 +3,15 @@ module View.History exposing (view)
 {-| Event history timeline view.
 -}
 
-import Api
 import Dict exposing (Dict)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Time
+import Types
 
 
 type alias Props =
-    { history : Maybe Api.History
+    { history : Maybe Types.History
     , loading : Bool
     }
 
@@ -32,7 +32,7 @@ view props =
         ]
 
 
-viewTimeline : Array Api.Event -> Html msg
+viewTimeline : Array Types.Event -> Html msg
 viewTimeline events =
     if Array.isEmpty events then
         p [ class "empty-state" ] [ text "No events recorded" ]
@@ -41,7 +41,7 @@ viewTimeline events =
             (Array.map viewTimelineEvent (Array.reverse events))
 
 
-viewTimelineEvent : Api.Event -> Html msg
+viewTimelineEvent : Types.Event -> Html msg
 viewTimelineEvent event =
     div [ class ("timeline-event event-" ++ eventTypeClass event.eventType) ]
         [ div [ class "timeline-marker" ] []

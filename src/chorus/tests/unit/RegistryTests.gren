@@ -6,7 +6,7 @@ module RegistryTests exposing (tests)
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task
-import Task.Registry as Registry exposing (Task(..), TaskStatus(..), SourceInfo, Attachment)
+import Types exposing (Task(..), TaskStatus(..), SourceInfo, Attachment)
 import Time
 
 
@@ -70,13 +70,13 @@ testTaskEncodeDecode =
                     }
 
             encoded =
-                Registry.encodeTask task
+                Types.encodeTask task
 
             json =
                 Encode.encode 0 encoded
 
             decoded =
-                Decode.decodeString Registry.taskDecoder json
+                Decode.decodeString Types.taskDecoder json
         in
         when decoded is
             Ok decodedTask ->
@@ -132,17 +132,17 @@ testStatusRoundTrip status =
                 }
 
         encoded =
-            Registry.encodeTask task
+            Types.encodeTask task
 
         json =
             Encode.encode 0 encoded
 
         decoded =
-            Decode.decodeString Registry.taskDecoder json
+            Decode.decodeString Types.taskDecoder json
     in
     when decoded is
         Ok decodedTask ->
-            expectEqual status (Registry.taskStatus decodedTask)
+            expectEqual status (Types.taskStatus decodedTask)
 
         Err err ->
             Task.fail ("Decode failed: " ++ Decode.errorToString err)
@@ -171,17 +171,17 @@ testSourceInfoEncodeDecode =
                     }
 
             encoded =
-                Registry.encodeTask task
+                Types.encodeTask task
 
             json =
                 Encode.encode 0 encoded
 
             decoded =
-                Decode.decodeString Registry.taskDecoder json
+                Decode.decodeString Types.taskDecoder json
         in
         when decoded is
             Ok decodedTask ->
-                if Registry.taskSessionId decodedTask == Just "session-123" && (Registry.taskSource decodedTask).conversationId == Just "thread-456" then
+                if Types.taskSessionId decodedTask == Just "session-123" && (Types.taskSource decodedTask).conversationId == Just "thread-456" then
                     Task.succeed {}
                 else
                     Task.fail "sessionId or conversationId mismatch"
@@ -228,19 +228,19 @@ testAttachmentRoundTrip =
                     }
 
             encoded =
-                Registry.encodeTask task
+                Types.encodeTask task
 
             json =
                 Encode.encode 0 encoded
 
             decoded =
-                Decode.decodeString Registry.taskDecoder json
+                Decode.decodeString Types.taskDecoder json
         in
         when decoded is
             Ok decodedTask ->
                 let
                     decodedAttachments =
-                        Registry.taskAttachments decodedTask
+                        Types.taskAttachments decodedTask
                 in
                 expectEqual 2 (Array.length decodedAttachments)
                     |> Task.andThen
@@ -283,14 +283,14 @@ testBackwardCompatMissingAttachments =
                 "{\"id\":\"old-task\",\"description\":\"Legacy task\",\"status\":{\"type\":\"pending\"},\"createdAt\":1707048600000,\"updatedAt\":1707048600000,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"tester\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\"}"
 
             decoded =
-                Decode.decodeString Registry.taskDecoder json
+                Decode.decodeString Types.taskDecoder json
         in
         when decoded is
             Ok decodedTask ->
-                expectEqual "old-task" (Registry.taskId decodedTask)
-                    |> Task.andThen (\_ -> expectEqual "Legacy task" (Registry.taskDescription decodedTask))
-                    |> Task.andThen (\_ -> expectEqual [] (Registry.taskAttachments decodedTask))
-                    |> Task.andThen (\_ -> expectEqual False (Registry.isPlanned decodedTask))
+                expectEqual "old-task" (Types.taskId decodedTask)
+                    |> Task.andThen (\_ -> expectEqual "Legacy task" (Types.taskDescription decodedTask))
+                    |> Task.andThen (\_ -> expectEqual [] (Types.taskAttachments decodedTask))
+                    |> Task.andThen (\_ -> expectEqual False (Types.isPlanned decodedTask))
 
             Err err ->
                 Task.fail ("Decode should have succeeded but failed: " ++ Decode.errorToString err)
@@ -309,12 +309,12 @@ testMalformedAttachmentMissingField =
                 "{\"id\":\"bad-task\",\"description\":\"Bad\",\"status\":{\"type\":\"pending\"},\"createdAt\":0,\"updatedAt\":0,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"test\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[{\"filename\":\"f.txt\",\"size\":100,\"uploadedAt\":0}]}"
 
             decoded =
-                Decode.decodeString Registry.taskDecoder json
+                Decode.decodeString Types.taskDecoder json
         in
         when decoded is
             Ok decodedTask ->
-                expectEqual "bad-task" (Registry.taskId decodedTask)
-                    |> Task.andThen (\_ -> expectEqual [] (Registry.taskAttachments decodedTask))
+                expectEqual "bad-task" (Types.taskId decodedTask)
+                    |> Task.andThen (\_ -> expectEqual [] (Types.taskAttachments decodedTask))
 
             Err err ->
                 Task.fail ("Decode failed unexpectedly: " ++ Decode.errorToString err)
@@ -333,12 +333,12 @@ testMalformedAttachmentWrongType =
                 "{\"id\":\"bad-task\",\"description\":\"Bad\",\"status\":{\"type\":\"pending\"},\"createdAt\":0,\"updatedAt\":0,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"test\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[{\"filename\":\"f.txt\",\"size\":\"not-a-number\",\"contentType\":\"text/plain\",\"uploadedAt\":0}]}"
 
             decoded =
-                Decode.decodeString Registry.taskDecoder json
+                Decode.decodeString Types.taskDecoder json
         in
         when decoded is
             Ok decodedTask ->
-                expectEqual "bad-task" (Registry.taskId decodedTask)
-                    |> Task.andThen (\_ -> expectEqual [] (Registry.taskAttachments decodedTask))
+                expectEqual "bad-task" (Types.taskId decodedTask)
+                    |> Task.andThen (\_ -> expectEqual [] (Types.taskAttachments decodedTask))
 
             Err err ->
                 Task.fail ("Decode failed unexpectedly: " ++ Decode.errorToString err)
@@ -372,13 +372,13 @@ testTaskEncodeDecodeWithPlanningFields =
                     }
 
             encoded =
-                Registry.encodeTask task
+                Types.encodeTask task
 
             json =
                 Encode.encode 0 encoded
 
             decoded =
-                Decode.decodeString Registry.taskDecoder json
+                Decode.decodeString Types.taskDecoder json
         in
         when decoded is
             Ok decodedTask ->
@@ -399,12 +399,12 @@ testTaskDecodeBackwardCompatibility =
                 "{\"id\":\"legacy-task\",\"description\":\"Old task\",\"status\":{\"type\":\"pending\"},\"createdAt\":1707048600000,\"updatedAt\":1707048600000,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"tester\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[]}"
 
             decoded =
-                Decode.decodeString Registry.taskDecoder json
+                Decode.decodeString Types.taskDecoder json
         in
         when decoded is
             Ok decodedTask ->
-                expectEqual "legacy-task" (Registry.taskId decodedTask)
-                    |> Task.andThen (\_ -> expectEqual False (Registry.isPlanned decodedTask))
+                expectEqual "legacy-task" (Types.taskId decodedTask)
+                    |> Task.andThen (\_ -> expectEqual False (Types.isPlanned decodedTask))
 
             Err err ->
                 Task.fail ("Decode should have succeeded but failed: " ++ Decode.errorToString err)
@@ -421,12 +421,12 @@ testTaskDecodeBackwardCompatWithPlanningFields =
                 "{\"id\":\"legacy-planned\",\"description\":\"Old planned task\",\"status\":{\"type\":\"pending\"},\"createdAt\":1707048600000,\"updatedAt\":1707048600000,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"tester\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[],\"summary\":\"My summary\",\"requirements\":[\"req1\"],\"acceptanceCriteria\":[],\"plan\":[]}"
 
             decoded =
-                Decode.decodeString Registry.taskDecoder json
+                Decode.decodeString Types.taskDecoder json
         in
         when decoded is
             Ok decodedTask ->
-                expectEqual "legacy-planned" (Registry.taskId decodedTask)
-                    |> Task.andThen (\_ -> expectEqual True (Registry.isPlanned decodedTask))
+                expectEqual "legacy-planned" (Types.taskId decodedTask)
+                    |> Task.andThen (\_ -> expectEqual True (Types.isPlanned decodedTask))
                     |> Task.andThen
                         (\_ ->
                             when decodedTask is
@@ -466,13 +466,13 @@ testDescriptionOnlyRoundTrip =
                     }
 
             encoded =
-                Registry.encodeTask task
+                Types.encodeTask task
 
             json =
                 Encode.encode 0 encoded
 
             decoded =
-                Decode.decodeString Registry.taskDecoder json
+                Decode.decodeString Types.taskDecoder json
         in
         when decoded is
             Ok decodedTask ->

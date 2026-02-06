@@ -1,13 +1,10 @@
 module Task.Queue exposing
-    ( QueuedMessage
-    , Error(..)
+    ( Error(..)
     , enqueue
     , dequeue
     , peek
     , isEmpty
     , length
-    , encodeQueue
-    , queueDecoder
     )
 
 {-| Message queue for tasks.
@@ -37,25 +34,10 @@ import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import Task as GrenTask
 import Time
+import Types exposing (QueuedMessage, Queue)
 
 
 -- TYPES
-
-
-{-| A message waiting to be processed.
--}
-type alias QueuedMessage =
-    { id : String
-    , content : String
-    , receivedAt : Time.Posix
-    }
-
-
-{-| Internal queue structure.
--}
-type alias Queue =
-    { messages : Array QueuedMessage
-    }
 
 
 {-| Queue operation errors.
@@ -202,7 +184,7 @@ readQueue fsPermission path =
                         GrenTask.fail (JsonDecodeError "Could not decode file as UTF-8")
 
                     Just content ->
-                        when Decode.decodeString queueDecoder content is
+                        when Decode.decodeString Types.queueDecoder content is
                             Ok queue ->
                                 GrenTask.succeed queue
 
@@ -217,7 +199,7 @@ writeQueue : FileSystem.Permission -> Path -> Queue -> GrenTask.Task Error {}
 writeQueue fsPermission path queue =
     let
         content =
-            encodeQueue queue
+            Types.encodeQueue queue
                 |> Encode.encode 2
 
         tempPath =
@@ -230,50 +212,3 @@ writeQueue fsPermission path queue =
         |> GrenTask.andThen (\_ -> FileSystem.move fsPermission path tempPath)
         |> GrenTask.map (\_ -> {})
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
-
-
-
--- JSON ENCODING/DECODING
-
-
-{-| Encode a queue to JSON.
--}
-encodeQueue : Queue -> Encode.Value
-encodeQueue queue =
-    Encode.object
-        [ { key = "messages"
-          , value = Encode.array encodeMessage queue.messages
-          }
-        ]
-
-
-encodeMessage : QueuedMessage -> Encode.Value
-encodeMessage msg =
-    Encode.object
-        [ { key = "id", value = Encode.string msg.id }
-        , { key = "content", value = Encode.string msg.content }
-        , { key = "receivedAt", value = Encode.int (Time.posixToMillis msg.receivedAt) }
-        ]
-
-
-{-| Decode a queue from JSON.
--}
-queueDecoder : Decoder Queue
-queueDecoder =
-    Decode.map
-        (\messages -> { messages = messages })
-        (Decode.field "messages" (Decode.array messageDecoder))
-
-
-messageDecoder : Decoder QueuedMessage
-messageDecoder =
-    Decode.map3
-        (\id content receivedAt ->
-            { id = id
-            , content = content
-            , receivedAt = receivedAt
-            }
-        )
-        (Decode.field "id" Decode.string)
-        (Decode.field "content" Decode.string)
-        (Decode.field "receivedAt" (Decode.map Time.millisToPosix Decode.int))

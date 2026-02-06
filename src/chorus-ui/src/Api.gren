@@ -1,15 +1,5 @@
 module Api exposing
-    ( Task(..)
-    , DescriptionOnlyTask
-    , PlannedTask
-    , TaskStatus(..)
-    , SourceInfo
-    , Attachment
-    , History
-    , Event
-    , Queue
-    , QueuedMessage
-    , getTasks
+    ( getTasks
     , getTask
     , createTask
     , updateTaskStatus
@@ -18,231 +8,21 @@ module Api exposing
     , getTaskQueue
     , uploadAttachment
     , deleteAttachment
-    , statusToString
-    , statusFromString
-    , taskId
-    , taskDescription
-    , taskStatus
-    , taskCreatedAt
-    , taskUpdatedAt
-    , taskSessionId
-    , taskSource
-    , taskAgentWorkspace
-    , taskAttachments
-    , isPlanned
+    , dataDecoder
     )
 
 {-| HTTP client for the Chorus API.
 
 Provides functions to interact with the backend REST API for task management.
+Types, decoders, encoders, and helpers live in the shared Types module.
 
 -}
 
 import Bytes exposing (Bytes)
-import Dict exposing (Dict)
 import Http
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
-import Time
-
-
--- TYPES
-
-
-{-| A task in the registry. Either description-only or fully planned.
--}
-type Task
-    = DescriptionOnly DescriptionOnlyTask
-    | Planned PlannedTask
-
-
-{-| A task that has only a description and no planning data.
--}
-type alias DescriptionOnlyTask =
-    { id : String
-    , description : String
-    , status : TaskStatus
-    , createdAt : Time.Posix
-    , updatedAt : Time.Posix
-    , sessionId : Maybe String
-    , source : SourceInfo
-    , agentWorkspace : String
-    , attachments : Array Attachment
-    }
-
-
-{-| A task that has been planned with summary, requirements, criteria, and steps.
--}
-type alias PlannedTask =
-    { id : String
-    , description : String
-    , status : TaskStatus
-    , createdAt : Time.Posix
-    , updatedAt : Time.Posix
-    , sessionId : Maybe String
-    , source : SourceInfo
-    , agentWorkspace : String
-    , attachments : Array Attachment
-    , summary : String
-    , requirements : Array String
-    , acceptanceCriteria : Array String
-    , plan : Array String
-    }
-
-
-{-| Metadata for a file attached to a task.
--}
-type alias Attachment =
-    { filename : String
-    , size : Int
-    , contentType : String
-    , uploadedAt : Time.Posix
-    }
-
-
-{-| Task lifecycle status.
--}
-type TaskStatus
-    = Pending
-    | Active
-    | Waiting
-    | Completed
-    | Failed String
-
-
-{-| Information about where the task originated.
--}
-type alias SourceInfo =
-    { sourceType : String
-    , userId : String
-    , conversationId : Maybe String
-    }
-
-
-{-| Task event history.
--}
-type alias History =
-    { events : Array Event
-    }
-
-
-{-| A single event in task history.
--}
-type alias Event =
-    { timestamp : Time.Posix
-    , eventType : String
-    , data : Dict String String
-    }
-
-
-{-| Task message queue.
--}
-type alias Queue =
-    { messages : Array QueuedMessage
-    }
-
-
-{-| A queued message.
--}
-type alias QueuedMessage =
-    { id : String
-    , content : String
-    , receivedAt : Time.Posix
-    }
-
-
-
--- TASK ACCESSORS
-
-
-{-| Get the ID of a task.
--}
-taskId : Task -> String
-taskId task =
-    when task is
-        DescriptionOnly t -> t.id
-        Planned t -> t.id
-
-
-{-| Get the description of a task.
--}
-taskDescription : Task -> String
-taskDescription task =
-    when task is
-        DescriptionOnly t -> t.description
-        Planned t -> t.description
-
-
-{-| Get the status of a task.
--}
-taskStatus : Task -> TaskStatus
-taskStatus task =
-    when task is
-        DescriptionOnly t -> t.status
-        Planned t -> t.status
-
-
-{-| Get the creation time of a task.
--}
-taskCreatedAt : Task -> Time.Posix
-taskCreatedAt task =
-    when task is
-        DescriptionOnly t -> t.createdAt
-        Planned t -> t.createdAt
-
-
-{-| Get the last update time of a task.
--}
-taskUpdatedAt : Task -> Time.Posix
-taskUpdatedAt task =
-    when task is
-        DescriptionOnly t -> t.updatedAt
-        Planned t -> t.updatedAt
-
-
-{-| Get the session ID of a task.
--}
-taskSessionId : Task -> Maybe String
-taskSessionId task =
-    when task is
-        DescriptionOnly t -> t.sessionId
-        Planned t -> t.sessionId
-
-
-{-| Get the source info of a task.
--}
-taskSource : Task -> SourceInfo
-taskSource task =
-    when task is
-        DescriptionOnly t -> t.source
-        Planned t -> t.source
-
-
-{-| Get the agent workspace of a task.
--}
-taskAgentWorkspace : Task -> String
-taskAgentWorkspace task =
-    when task is
-        DescriptionOnly t -> t.agentWorkspace
-        Planned t -> t.agentWorkspace
-
-
-{-| Get the attachments of a task.
--}
-taskAttachments : Task -> Array Attachment
-taskAttachments task =
-    when task is
-        DescriptionOnly t -> t.attachments
-        Planned t -> t.attachments
-
-
-{-| Check if a task has been planned.
--}
-isPlanned : Task -> Bool
-isPlanned task =
-    when task is
-        DescriptionOnly _ -> False
-        Planned _ -> True
+import Types exposing (History, Queue, SourceInfo, Task)
 
 
 
@@ -264,7 +44,7 @@ getTasks maybeStatus toMsg =
     in
     Http.get
         { url = url
-        , expect = Http.expectJson toMsg (dataDecoder (Decode.array taskDecoder))
+        , expect = Http.expectJson toMsg (dataDecoder (Decode.array Types.taskDecoder))
         }
 
 
@@ -274,7 +54,7 @@ getTask : String -> (Result Http.Error Task -> msg) -> Cmd msg
 getTask tid toMsg =
     Http.get
         { url = "/api/tasks/" ++ tid
-        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         }
 
 
@@ -291,10 +71,10 @@ createTask { description, source } toMsg =
             Http.jsonBody
                 (Encode.object
                     [ { key = "description", value = Encode.string description }
-                    , { key = "source", value = encodeSourceInfo source }
+                    , { key = "source", value = Types.encodeSourceInfo source }
                     ]
                 )
-        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         }
 
 
@@ -308,14 +88,11 @@ updateTaskStatus :
 updateTaskStatus tid statusStr toMsg =
     let
         statusValue =
-            when statusStr is
-                "failed" ->
-                    Encode.object
-                        [ { key = "type", value = Encode.string "failed" }
-                        , { key = "message", value = Encode.string "" }
-                        ]
+            when Types.statusFromString statusStr is
+                Just status ->
+                    Types.encodeStatus status
 
-                _ ->
+                Nothing ->
                     Encode.object
                         [ { key = "type", value = Encode.string statusStr }
                         ]
@@ -330,7 +107,7 @@ updateTaskStatus tid statusStr toMsg =
                     [ { key = "status", value = statusValue }
                     ]
                 )
-        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -372,7 +149,7 @@ updateTaskPlanning tid params toMsg =
         , headers = []
         , url = "/api/tasks/" ++ tid ++ "/planning"
         , body = Http.jsonBody (Encode.object fields)
-        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -384,7 +161,7 @@ getTaskHistory : String -> (Result Http.Error History -> msg) -> Cmd msg
 getTaskHistory tid toMsg =
     Http.get
         { url = "/api/tasks/" ++ tid ++ "/history"
-        , expect = Http.expectJson toMsg (dataDecoder historyDecoder)
+        , expect = Http.expectJson toMsg (dataDecoder Types.historyDecoder)
         }
 
 
@@ -394,9 +171,8 @@ getTaskQueue : String -> (Result Http.Error Queue -> msg) -> Cmd msg
 getTaskQueue tid toMsg =
     Http.get
         { url = "/api/tasks/" ++ tid ++ "/queue"
-        , expect = Http.expectJson toMsg (dataDecoder queueDecoder)
+        , expect = Http.expectJson toMsg (dataDecoder Types.queueDecoder)
         }
-
 
 
 {-| Upload a file attachment to a task.
@@ -414,7 +190,7 @@ uploadAttachment tid filename fileBytes contentType toMsg =
         , headers = []
         , url = "/api/tasks/" ++ tid ++ "/attachments?filename=" ++ filename
         , body = Http.bytesBody contentType fileBytes
-        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -433,7 +209,7 @@ deleteAttachment tid filename toMsg =
         , headers = []
         , url = "/api/tasks/" ++ tid ++ "/attachments/" ++ filename
         , body = Http.emptyBody
-        , expect = Http.expectJson toMsg (dataDecoder taskDecoder)
+        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -448,359 +224,3 @@ deleteAttachment tid filename toMsg =
 dataDecoder : Decoder a -> Decoder a
 dataDecoder decoder =
     Decode.field "data" decoder
-
-
-taskDecoder : Decoder Task
-taskDecoder =
-    Decode.oneOf
-        [ Decode.field "taskType" Decode.string
-            |> Decode.andThen
-                (\taskType ->
-                    when taskType is
-                        "planned" ->
-                            plannedTaskDecoder
-
-                        _ ->
-                            descriptionOnlyTaskDecoder
-                )
-        , -- Backward compatibility: no taskType field
-          legacyTaskDecoder
-        ]
-
-
-descriptionOnlyTaskDecoder : Decoder Task
-descriptionOnlyTaskDecoder =
-    Decode.map8
-        (\id description status createdAt updatedAt sessionId source agentWorkspace ->
-            { id = id
-            , description = description
-            , status = status
-            , createdAt = createdAt
-            , updatedAt = updatedAt
-            , sessionId = sessionId
-            , source = source
-            , agentWorkspace = agentWorkspace
-            , attachments = []
-            }
-        )
-        (Decode.field "id" Decode.string)
-        (Decode.field "description" Decode.string)
-        (Decode.field "status" statusDecoder)
-        (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "sessionId" (Decode.maybe Decode.string))
-        (Decode.field "source" sourceInfoDecoder)
-        (Decode.field "agentWorkspace" Decode.string)
-        |> Decode.andThen
-            (\task ->
-                Decode.oneOf
-                    [ Decode.field "attachments" (Decode.array attachmentDecoder)
-                    , Decode.succeed []
-                    ]
-                    |> Decode.map (\attachments -> DescriptionOnly { task | attachments = attachments })
-            )
-
-
-plannedTaskDecoder : Decoder Task
-plannedTaskDecoder =
-    Decode.map8
-        (\id description status createdAt updatedAt sessionId source agentWorkspace ->
-            { id = id
-            , description = description
-            , status = status
-            , createdAt = createdAt
-            , updatedAt = updatedAt
-            , sessionId = sessionId
-            , source = source
-            , agentWorkspace = agentWorkspace
-            , attachments = []
-            , summary = ""
-            , requirements = []
-            , acceptanceCriteria = []
-            , plan = []
-            }
-        )
-        (Decode.field "id" Decode.string)
-        (Decode.field "description" Decode.string)
-        (Decode.field "status" statusDecoder)
-        (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "sessionId" (Decode.maybe Decode.string))
-        (Decode.field "source" sourceInfoDecoder)
-        (Decode.field "agentWorkspace" Decode.string)
-        |> Decode.andThen
-            (\task ->
-                Decode.oneOf
-                    [ Decode.field "attachments" (Decode.array attachmentDecoder)
-                    , Decode.succeed []
-                    ]
-                    |> Decode.map (\attachments -> { task | attachments = attachments })
-            )
-        |> Decode.andThen
-            (\task ->
-                Decode.oneOf
-                    [ Decode.field "summary" Decode.string
-                    , Decode.succeed ""
-                    ]
-                    |> Decode.map (\summary -> { task | summary = summary })
-            )
-        |> Decode.andThen
-            (\task ->
-                Decode.oneOf
-                    [ Decode.field "requirements" (Decode.array Decode.string)
-                    , Decode.succeed []
-                    ]
-                    |> Decode.map (\requirements -> { task | requirements = requirements })
-            )
-        |> Decode.andThen
-            (\task ->
-                Decode.oneOf
-                    [ Decode.field "acceptanceCriteria" (Decode.array Decode.string)
-                    , Decode.succeed []
-                    ]
-                    |> Decode.map (\acceptanceCriteria -> { task | acceptanceCriteria = acceptanceCriteria })
-            )
-        |> Decode.andThen
-            (\task ->
-                Decode.oneOf
-                    [ Decode.field "plan" (Decode.array Decode.string)
-                    , Decode.succeed []
-                    ]
-                    |> Decode.map (\plan -> Planned { task | plan = plan })
-            )
-
-
-legacyTaskDecoder : Decoder Task
-legacyTaskDecoder =
-    Decode.map8
-        (\id description status createdAt updatedAt sessionId source agentWorkspace ->
-            { id = id
-            , description = description
-            , status = status
-            , createdAt = createdAt
-            , updatedAt = updatedAt
-            , sessionId = sessionId
-            , source = source
-            , agentWorkspace = agentWorkspace
-            , attachments = []
-            }
-        )
-        (Decode.field "id" Decode.string)
-        (Decode.field "description" Decode.string)
-        (Decode.field "status" statusDecoder)
-        (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "sessionId" (Decode.maybe Decode.string))
-        (Decode.field "source" sourceInfoDecoder)
-        (Decode.field "agentWorkspace" Decode.string)
-        |> Decode.andThen
-            (\baseTask ->
-                Decode.oneOf
-                    [ Decode.field "attachments" (Decode.array attachmentDecoder)
-                    , Decode.succeed []
-                    ]
-                    |> Decode.map (\attachments -> { baseTask | attachments = attachments })
-            )
-        |> Decode.andThen
-            (\baseTask ->
-                Decode.map4
-                    (\summary requirements acceptanceCriteria plan ->
-                        { summary = summary
-                        , requirements = requirements
-                        , acceptanceCriteria = acceptanceCriteria
-                        , plan = plan
-                        }
-                    )
-                    (Decode.oneOf [ Decode.field "summary" Decode.string, Decode.succeed "" ])
-                    (Decode.oneOf [ Decode.field "requirements" (Decode.array Decode.string), Decode.succeed [] ])
-                    (Decode.oneOf [ Decode.field "acceptanceCriteria" (Decode.array Decode.string), Decode.succeed [] ])
-                    (Decode.oneOf [ Decode.field "plan" (Decode.array Decode.string), Decode.succeed [] ])
-                    |> Decode.map
-                        (\planningFields ->
-                            if String.isEmpty planningFields.summary && Array.isEmpty planningFields.requirements && Array.isEmpty planningFields.acceptanceCriteria && Array.isEmpty planningFields.plan then
-                                DescriptionOnly baseTask
-                            else
-                                Planned
-                                    { id = baseTask.id
-                                    , description = baseTask.description
-                                    , status = baseTask.status
-                                    , createdAt = baseTask.createdAt
-                                    , updatedAt = baseTask.updatedAt
-                                    , sessionId = baseTask.sessionId
-                                    , source = baseTask.source
-                                    , agentWorkspace = baseTask.agentWorkspace
-                                    , attachments = baseTask.attachments
-                                    , summary = planningFields.summary
-                                    , requirements = planningFields.requirements
-                                    , acceptanceCriteria = planningFields.acceptanceCriteria
-                                    , plan = planningFields.plan
-                                    }
-                        )
-            )
-
-
-attachmentDecoder : Decoder Attachment
-attachmentDecoder =
-    Decode.map4
-        (\filename size contentType uploadedAt ->
-            { filename = filename
-            , size = size
-            , contentType = contentType
-            , uploadedAt = uploadedAt
-            }
-        )
-        (Decode.field "filename" Decode.string)
-        (Decode.field "size" Decode.int)
-        (Decode.field "contentType" Decode.string)
-        (Decode.field "uploadedAt" (Decode.map Time.millisToPosix Decode.int))
-
-
-statusDecoder : Decoder TaskStatus
-statusDecoder =
-    Decode.field "type" Decode.string
-        |> Decode.andThen
-            (\statusType ->
-                when statusType is
-                    "pending" ->
-                        Decode.succeed Pending
-
-                    "active" ->
-                        Decode.succeed Active
-
-                    "waiting" ->
-                        Decode.succeed Waiting
-
-                    "completed" ->
-                        Decode.succeed Completed
-
-                    "failed" ->
-                        Decode.field "message" Decode.string
-                            |> Decode.map Failed
-
-                    _ ->
-                        Decode.fail ("Unknown status type: " ++ statusType)
-            )
-
-
-sourceInfoDecoder : Decoder SourceInfo
-sourceInfoDecoder =
-    Decode.map3
-        (\sourceType userId conversationId ->
-            { sourceType = sourceType
-            , userId = userId
-            , conversationId = conversationId
-            }
-        )
-        (Decode.field "sourceType" Decode.string)
-        (Decode.field "userId" Decode.string)
-        (Decode.maybe (Decode.field "conversationId" Decode.string))
-
-
-historyDecoder : Decoder History
-historyDecoder =
-    Decode.map (\events -> { events = events })
-        (Decode.field "events" (Decode.array eventDecoder))
-
-
-eventDecoder : Decoder Event
-eventDecoder =
-    Decode.map3
-        (\timestamp eventType data ->
-            { timestamp = timestamp
-            , eventType = eventType
-            , data = data
-            }
-        )
-        (Decode.field "timestamp" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "eventType" Decode.string)
-        (Decode.field "data" (Decode.dict Decode.string))
-
-
-queueDecoder : Decoder Queue
-queueDecoder =
-    Decode.map (\messages -> { messages = messages })
-        (Decode.field "messages" (Decode.array messageDecoder))
-
-
-messageDecoder : Decoder QueuedMessage
-messageDecoder =
-    Decode.map3
-        (\id content receivedAt ->
-            { id = id
-            , content = content
-            , receivedAt = receivedAt
-            }
-        )
-        (Decode.field "id" Decode.string)
-        (Decode.field "content" Decode.string)
-        (Decode.field "receivedAt" (Decode.map Time.millisToPosix Decode.int))
-
-
-
--- ENCODERS
-
-
-encodeSourceInfo : SourceInfo -> Encode.Value
-encodeSourceInfo source =
-    Encode.object
-        [ { key = "sourceType", value = Encode.string source.sourceType }
-        , { key = "userId", value = Encode.string source.userId }
-        , { key = "conversationId"
-          , value =
-                when source.conversationId is
-                    Just id ->
-                        Encode.string id
-
-                    Nothing ->
-                        Encode.null
-          }
-        ]
-
-
-
--- HELPERS
-
-
-{-| Convert status to display string.
--}
-statusToString : TaskStatus -> String
-statusToString status =
-    when status is
-        Pending ->
-            "pending"
-
-        Active ->
-            "active"
-
-        Waiting ->
-            "waiting"
-
-        Completed ->
-            "completed"
-
-        Failed _ ->
-            "failed"
-
-
-{-| Parse status from string.
--}
-statusFromString : String -> Maybe TaskStatus
-statusFromString str =
-    when str is
-        "pending" ->
-            Just Pending
-
-        "active" ->
-            Just Active
-
-        "waiting" ->
-            Just Waiting
-
-        "completed" ->
-            Just Completed
-
-        "failed" ->
-            Just (Failed "")
-
-        _ ->
-            Nothing

@@ -3,15 +3,15 @@ module View.TaskList exposing (view)
 {-| Task list view with filtering and status updates.
 -}
 
-import Api
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput)
 import Time
+import Types exposing (Task(..), TaskStatus(..))
 
 
 type alias Props msg =
-    { tasks : Array Api.Task
+    { tasks : Array Types.Task
     , statusFilter : Maybe String
     , loading : Bool
     , onFilterChange : Maybe String -> msg
@@ -103,39 +103,39 @@ viewTaskTable props =
         ]
 
 
-viewTaskRow : Props msg -> Api.Task -> Html msg
+viewTaskRow : Props msg -> Types.Task -> Html msg
 viewTaskRow props task =
     let
         source =
-            Api.taskSource task
+            Types.taskSource task
     in
     tr [ class "task-row" ]
         [ td []
-            [ span [ class ("status-badge status-" ++ Api.statusToString (Api.taskStatus task)) ]
-                [ text (Api.statusToString (Api.taskStatus task)) ]
+            [ span [ class ("status-badge status-" ++ Types.statusToString (Types.taskStatus task)) ]
+                [ text (Types.statusToString (Types.taskStatus task)) ]
             ]
         , td [ class "task-description-cell" ]
-            [ a [ href ("/tasks/" ++ Api.taskId task), class "task-link task-description-truncate" ]
-                [ text (Api.taskDescription task) ]
+            [ a [ href ("/tasks/" ++ Types.taskId task), class "task-link task-description-truncate" ]
+                [ text (Types.taskDescription task) ]
             ]
         , td [ class "source-info" ]
             [ text (source.sourceType ++ " / " ++ source.userId) ]
         , td [ class "timestamp" ]
-            [ text (formatTimestamp (Api.taskUpdatedAt task)) ]
+            [ text (formatTimestamp (Types.taskUpdatedAt task)) ]
         , td [ class "actions" ]
             [ viewStatusActions props task ]
         ]
 
 
-viewStatusActions : Props msg -> Api.Task -> Html msg
+viewStatusActions : Props msg -> Types.Task -> Html msg
 viewStatusActions props task =
     let
         tid =
-            Api.taskId task
+            Types.taskId task
     in
     div [ class "action-buttons" ]
-        (when Api.taskStatus task is
-            Api.Pending ->
+        (when Types.taskStatus task is
+            Pending ->
                 [ button
                     [ class "btn btn-small btn-primary"
                     , onClick (props.onStatusUpdate tid "active")
@@ -143,7 +143,7 @@ viewStatusActions props task =
                     [ text "Start" ]
                 ]
 
-            Api.Active ->
+            Active ->
                 [ button
                     [ class "btn btn-small btn-secondary"
                     , onClick (props.onStatusUpdate tid "waiting")
@@ -156,7 +156,7 @@ viewStatusActions props task =
                     [ text "Complete" ]
                 ]
 
-            Api.Waiting ->
+            Waiting ->
                 [ button
                     [ class "btn btn-small btn-primary"
                     , onClick (props.onStatusUpdate tid "active")
@@ -164,10 +164,10 @@ viewStatusActions props task =
                     [ text "Resume" ]
                 ]
 
-            Api.Completed ->
+            Completed ->
                 []
 
-            Api.Failed _ ->
+            Failed _ ->
                 [ button
                     [ class "btn btn-small btn-secondary"
                     , onClick (props.onStatusUpdate tid "pending")

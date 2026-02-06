@@ -3,14 +3,14 @@ module View.Dashboard exposing (view)
 {-| Dashboard view showing an overview of task statistics.
 -}
 
-import Api
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Time
+import Types exposing (Task(..), TaskStatus(..))
 
 
 type alias Props =
-    { tasks : Array Api.Task
+    { tasks : Array Types.Task
     , loading : Bool
     }
 
@@ -24,10 +24,10 @@ view props =
           else
             div [ class "stats-grid" ]
                 [ viewStatCard "Total Tasks" (String.fromInt (Array.length props.tasks)) "stat-total"
-                , viewStatCard "Pending" (String.fromInt (countByStatus Api.Pending props.tasks)) "stat-pending"
-                , viewStatCard "Active" (String.fromInt (countByStatus Api.Active props.tasks)) "stat-active"
-                , viewStatCard "Waiting" (String.fromInt (countByStatus Api.Waiting props.tasks)) "stat-waiting"
-                , viewStatCard "Completed" (String.fromInt (countByStatus Api.Completed props.tasks)) "stat-completed"
+                , viewStatCard "Pending" (String.fromInt (countByStatus Pending props.tasks)) "stat-pending"
+                , viewStatCard "Active" (String.fromInt (countByStatus Active props.tasks)) "stat-active"
+                , viewStatCard "Waiting" (String.fromInt (countByStatus Waiting props.tasks)) "stat-waiting"
+                , viewStatCard "Completed" (String.fromInt (countByStatus Completed props.tasks)) "stat-completed"
                 , viewStatCard "Failed" (String.fromInt (countFailed props.tasks)) "stat-failed"
                 ]
         , viewRecentTasks props.tasks
@@ -42,12 +42,12 @@ viewStatCard label value className =
         ]
 
 
-viewRecentTasks : Array Api.Task -> Html msg
+viewRecentTasks : Array Types.Task -> Html msg
 viewRecentTasks tasks =
     let
         recentTasks =
             tasks
-                |> Array.sortBy (\t -> negate (Time.posixToMillis (Api.taskUpdatedAt t)))
+                |> Array.sortBy (\t -> negate (Time.posixToMillis (Types.taskUpdatedAt t)))
                 |> Array.takeFirst 5
     in
     div [ class "recent-tasks" ]
@@ -60,22 +60,22 @@ viewRecentTasks tasks =
         ]
 
 
-viewRecentTask : Api.Task -> Html msg
+viewRecentTask : Types.Task -> Html msg
 viewRecentTask task =
     li [ class "task-item-compact" ]
-        [ a [ href ("/tasks/" ++ Api.taskId task) ]
-            [ span [ class ("status-badge status-" ++ Api.statusToString (Api.taskStatus task)) ]
-                [ text (Api.statusToString (Api.taskStatus task)) ]
-            , span [ class "task-description task-description-truncate" ] [ text (Api.taskDescription task) ]
+        [ a [ href ("/tasks/" ++ Types.taskId task) ]
+            [ span [ class ("status-badge status-" ++ Types.statusToString (Types.taskStatus task)) ]
+                [ text (Types.statusToString (Types.taskStatus task)) ]
+            , span [ class "task-description task-description-truncate" ] [ text (Types.taskDescription task) ]
             ]
         ]
 
 
-countByStatus : Api.TaskStatus -> Array Api.Task -> Int
+countByStatus : Types.TaskStatus -> Array Types.Task -> Int
 countByStatus status tasks =
     Array.foldl
         (\task count ->
-            if statusMatches (Api.taskStatus task) status then
+            if statusMatches (Types.taskStatus task) status then
                 count + 1
             else
                 count
@@ -84,12 +84,12 @@ countByStatus status tasks =
         tasks
 
 
-countFailed : Array Api.Task -> Int
+countFailed : Array Types.Task -> Int
 countFailed tasks =
     Array.foldl
         (\task count ->
-            when Api.taskStatus task is
-                Api.Failed _ ->
+            when Types.taskStatus task is
+                Failed _ ->
                     count + 1
 
                 _ ->
@@ -99,22 +99,22 @@ countFailed tasks =
         tasks
 
 
-statusMatches : Api.TaskStatus -> Api.TaskStatus -> Bool
+statusMatches : Types.TaskStatus -> Types.TaskStatus -> Bool
 statusMatches a b =
     when { a = a, b = b } is
-        { a = Api.Pending, b = Api.Pending } ->
+        { a = Pending, b = Pending } ->
             True
 
-        { a = Api.Active, b = Api.Active } ->
+        { a = Active, b = Active } ->
             True
 
-        { a = Api.Waiting, b = Api.Waiting } ->
+        { a = Waiting, b = Waiting } ->
             True
 
-        { a = Api.Completed, b = Api.Completed } ->
+        { a = Completed, b = Completed } ->
             True
 
-        { a = Api.Failed _, b = Api.Failed _ } ->
+        { a = Failed _, b = Failed _ } ->
             True
 
         _ ->
