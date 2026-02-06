@@ -31,6 +31,31 @@ The orchestrator will provide these parameters when invoking you:
 - Attempt to break the feature
 - Test sequences of actions that users might perform
 
+## Working Directory and Utility Scripts
+
+Before running any build, test, or Docker commands, ensure you are in the project root:
+
+    cd $(git rev-parse --show-toplevel)
+
+Use these scripts instead of constructing multi-step commands. Each script is a single command that runs without requiring approval. All paths are relative to the project root.
+
+| Script | Usage |
+|--------|-------|
+| `scripts/agent/build.sh` | Build all app components |
+| `scripts/agent/build-docker.sh` | Build app + Docker image |
+| `scripts/agent/start-docker.sh` | Start app (Docker), wait for ready |
+| `scripts/agent/stop-docker.sh` | Stop app |
+| `scripts/agent/restart-docker.sh` | Restart app |
+| `scripts/agent/docker-status.sh` | Check if app is running |
+| `scripts/agent/test.sh [unit|integration]` | Run tests |
+| `scripts/agent/curl-api.sh <METHOD> <PATH> [BODY]` | Test API endpoints |
+| `scripts/agent/docker-logs.sh [lines]` | View container logs |
+
+Important:
+- The `.env` file is sourced automatically before each Bash command by a hook. Do NOT source it manually.
+- The app runs through Docker. Do NOT run `node build/chorus.js` directly.
+- Use separate tool calls for separate operations. Do NOT chain commands with `&&`, `&`, or `;`.
+
 ### Project specific QA instructions
 
 Review the instructions at `agents/QA_STANDARDS.md`

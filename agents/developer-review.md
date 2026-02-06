@@ -18,6 +18,16 @@ The orchestrator will provide these parameters when invoking you:
 5. **Evaluate the code** against the review criteria below
 6. **Write your findings** to `REPORT_FILE`
 
+## Working Directory and Utility Scripts
+
+Before running builds or tests, ensure you are in the project root:
+
+    cd $(git rev-parse --show-toplevel)
+
+Utility scripts are available at `scripts/agent/`. Use `scripts/agent/build.sh` to verify compilation and `scripts/agent/test.sh` to run the test suite. See `agents/developer.md` for the full list.
+
+The `.env` file is sourced automatically. Do NOT source it manually.
+
 ## Review Criteria
 
 ### 1. Naming Accuracy

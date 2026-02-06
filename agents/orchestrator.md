@@ -99,6 +99,9 @@ Task tool:
     STATUS_FILE: workspaces/{task-name}/status.md
     REPORT_FILE: workspaces/{task-name}/reports/developer-{N}.md
 
+    Before starting, navigate to the project root:
+        cd $(git rev-parse --show-toplevel)
+
     Read your instructions from agents/developer.md, then execute your workflow using the parameters above.
 ```
 
@@ -115,6 +118,9 @@ Task tool:
     STATUS_FILE: workspaces/{task-name}/status.md
     REPORT_FILE: workspaces/{task-name}/reports/developer-{N}.md
     REVIEW_REPORT: workspaces/{task-name}/reports/review-{N-1}.md
+
+    Before starting, navigate to the project root:
+        cd $(git rev-parse --show-toplevel)
 
     Read your instructions from agents/developer.md, then execute your workflow using the parameters above.
     Address the issues identified in REVIEW_REPORT.
@@ -134,6 +140,9 @@ Task tool:
     REPORT_FILE: workspaces/{task-name}/reports/developer-{N}.md
     QA_REPORT: workspaces/{task-name}/reports/qa-{N-1}.md
 
+    Before starting, navigate to the project root:
+        cd $(git rev-parse --show-toplevel)
+
     Read your instructions from agents/developer.md, then execute your workflow using the parameters above.
     Fix the failures identified in QA_REPORT.
 ```
@@ -151,6 +160,9 @@ Task tool:
     DEV_REPORT: workspaces/{task-name}/reports/developer-{N}.md
     REPORT_FILE: workspaces/{task-name}/reports/review-{N}.md
 
+    Before starting, navigate to the project root:
+        cd $(git rev-parse --show-toplevel)
+
     Read your instructions from agents/developer-review.md, then execute your workflow using the parameters above.
 ```
 
@@ -167,6 +179,9 @@ Task tool:
     DEV_REPORT: workspaces/{task-name}/reports/developer-{N}.md
     REPORT_FILE: workspaces/{task-name}/reports/qa-{N}.md
 
+    Before starting, navigate to the project root:
+        cd $(git rev-parse --show-toplevel)
+
     Read your instructions from agents/qa.md, then execute your workflow using the parameters above.
 ```
 
@@ -181,6 +196,9 @@ Task tool:
     ## Parameters
     TASK_NAME: {task-name}
     DESCRIPTION: {user's description}
+
+    Before starting, navigate to the project root:
+        cd $(git rev-parse --show-toplevel)
 
     Read your instructions from agents/planner.md, then execute your workflow using the parameters above.
 ```

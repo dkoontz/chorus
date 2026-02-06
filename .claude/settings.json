@@ -11,5 +11,52 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(scripts/agent/*)",
+      "Bash(cd:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run test:*)",
+      "Bash(npm run clean:*)",
+      "Bash(npm run docker:*)",
+      "Bash(npm test:*)",
+      "Bash(npm install)",
+      "Bash(npm run:*)",
+      "Bash(gren:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker build:*)",
+      "Bash(docker run *)",
+      "Bash(docker exec *)",
+      "Bash(docker logs *)",
+      "Bash(docker stop:*)",
+      "Bash(docker images *)",
+      "Bash(docker rm *)",
+      "Bash(docker info:*)",
+      "Bash(docker history *)",
+      "Bash(CHORUS_LOG_LEVEL=debug docker compose:*)",
+      "Bash(curl:*)",
+      "Bash(lsof:*)",
+      "Bash(kill:*)",
+      "Bash(pkill:*)",
+      "Bash(node:*)",
+      "Bash(jq:*)",
+      "Bash(ls:*)",
+      "Bash(fd:*)",
+      "Bash(tree:*)",
+      "Bash(rg:*)",
+      "Bash(echo:*)",
+      "Bash(env:*)",
+      "Bash(pwd)",
+      "Bash(claude:*)",
+      "Read(**)",
+      "Glob(**)",
+      "WebFetch(domain:gren-lang.org)",
+      "WebFetch(domain:packages.gren-lang.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebSearch"
+    ]
   }
 }
