@@ -34,6 +34,7 @@
       "Bash(docker rm *)",
       "Bash(docker info:*)",
       "Bash(docker history *)",
+      "Bash(docker ps *)",
       "Bash(CHORUS_LOG_LEVEL=debug docker compose:*)",
       "Bash(curl:*)",
       "Bash(lsof:*)",
