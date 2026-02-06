@@ -16,23 +16,23 @@ Extract duplicated type definitions, encoders, and decoders from the backend (`T
 
 ## Acceptance Criteria
 
-- [ ] `src/shared/Types.gren` exists as module `Types`, exposing shared types, encoders, decoders, accessors, and helpers
-- [ ] Types in `Types.gren`: `Task(..)`, `DescriptionOnlyTask`, `PlannedTask`, `PlanningFields`, `TaskStatus(..)`, `SourceInfo`, `Attachment`, `Event`, `History`, `QueuedMessage`, `Queue`
-- [ ] Encoders in `Types.gren`: `encodeTask`, `encodeStatus`, `encodeSourceInfo`, `encodeAttachment`, `encodeEvent`, `encodeHistory`, `encodeQueue`, `encodeMessage`, `encodeMaybe`
-- [ ] Decoders in `Types.gren`: `taskDecoder`, `statusDecoder`, `sourceInfoDecoder`, `attachmentDecoder`, `eventDecoder`, `historyDecoder`, `queueDecoder`, `messageDecoder` (with `legacyTaskDecoder` used internally)
-- [ ] Accessors in `Types.gren`: `taskId`, `taskDescription`, `taskStatus`, `taskCreatedAt`, `taskUpdatedAt`, `taskSessionId`, `taskSource`, `taskAgentWorkspace`, `taskAttachments`, `isPlanned`
-- [ ] Mutators in `Types.gren`: `planTask`, `setTaskStatus`, `setAttachments`
-- [ ] Helpers in `Types.gren`: `statusToString`, `statusFromString`, `statusEquals`
-- [ ] `src/chorus/gren.json` has `"source-directories": ["src", "../shared"]`
-- [ ] `src/chorus-ui/gren.json` has `"source-directories": ["src", "../shared"]`
-- [ ] `src/chorus/tests/unit/gren.json` includes `"../../../shared"` in source-directories
-- [ ] `src/chorus/tests/integration/gren.json` includes `"../../../shared"` in source-directories
-- [ ] `Task.Registry` no longer defines shared types/encoders/decoders — imports from `Types`
-- [ ] `Task.Queue` no longer defines `QueuedMessage`, `Queue`, or their codecs — imports from `Types`
-- [ ] `Api.gren` no longer defines shared types/decoders/accessors — imports from `Types`
-- [ ] All frontend view modules import types from `Types` instead of `Api`
-- [ ] `npm run build:app` succeeds (both chorus and chorus-ui compile)
-- [ ] `npm run test` passes (all unit and integration tests)
+- [x] `src/shared/Types.gren` exists as module `Types`, exposing shared types, encoders, decoders, accessors, and helpers
+- [x] Types in `Types.gren`: `Task(..)`, `DescriptionOnlyTask`, `PlannedTask`, `PlanningFields`, `TaskStatus(..)`, `SourceInfo`, `Attachment`, `Event`, `History`, `QueuedMessage`, `Queue`
+- [x] Encoders in `Types.gren`: `encodeTask`, `encodeStatus`, `encodeSourceInfo`, `encodeAttachment`, `encodeEvent`, `encodeHistory`, `encodeQueue`, `encodeMessage`, `encodeMaybe`
+- [x] Decoders in `Types.gren`: `taskDecoder`, `statusDecoder`, `sourceInfoDecoder`, `attachmentDecoder`, `eventDecoder`, `historyDecoder`, `queueDecoder`, `messageDecoder` (with `legacyTaskDecoder` used internally)
+- [x] Accessors in `Types.gren`: `taskId`, `taskDescription`, `taskStatus`, `taskCreatedAt`, `taskUpdatedAt`, `taskSessionId`, `taskSource`, `taskAgentWorkspace`, `taskAttachments`, `isPlanned`
+- [x] Mutators in `Types.gren`: `planTask`, `setTaskStatus`, `setAttachments`
+- [x] Helpers in `Types.gren`: `statusToString`, `statusFromString`, `statusEquals`
+- [x] `src/chorus/gren.json` has `"source-directories": ["src", "../shared"]`
+- [x] `src/chorus-ui/gren.json` has `"source-directories": ["src", "../shared"]`
+- [x] `src/chorus/tests/unit/gren.json` includes `"../../../shared"` in source-directories
+- [x] `src/chorus/tests/integration/gren.json` includes `"../../../shared"` in source-directories
+- [x] `Task.Registry` no longer defines shared types/encoders/decoders — imports from `Types`
+- [x] `Task.Queue` no longer defines `QueuedMessage`, `Queue`, or their codecs — imports from `Types`
+- [x] `Api.gren` no longer defines shared types/decoders/accessors — imports from `Types`
+- [x] All frontend view modules import types from `Types` instead of `Api`
+- [x] `npm run build:app` succeeds (both chorus and chorus-ui compile)
+- [x] `npm run test` passes (all unit and integration tests)
 
 ## Out of Scope
 

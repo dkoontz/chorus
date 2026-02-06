@@ -512,26 +512,20 @@ encodeMessage msg =
 -- JSON DECODING
 
 
-{-| Decode a task from JSON. Handles both the new union type format
-    (with "taskType" discriminator) and backward-compatible legacy format.
+{-| Decode a task from JSON. Requires the "taskType" discriminator field.
 -}
 taskDecoder : Decoder Task
 taskDecoder =
-    Decode.oneOf
-        [ Decode.field "taskType" Decode.string
-            |> Decode.andThen
-                (\taskType ->
-                    when taskType is
-                        "planned" ->
-                            plannedTaskDecoder
+    Decode.field "taskType" Decode.string
+        |> Decode.andThen
+            (\taskType ->
+                when taskType is
+                    "planned" ->
+                        plannedTaskDecoder
 
-                        _ ->
-                            descriptionOnlyTaskDecoder
-                )
-        , -- Backward compatibility: no taskType field.
-          -- Check if planning fields are present to decide variant.
-          legacyTaskDecoder
-        ]
+                    _ ->
+                        descriptionOnlyTaskDecoder
+            )
 
 
 descriptionOnlyTaskDecoder : Decoder Task
@@ -559,10 +553,7 @@ descriptionOnlyTaskDecoder =
         (Decode.field "agentWorkspace" Decode.string)
         |> Decode.andThen
             (\task ->
-                Decode.oneOf
-                    [ Decode.field "attachments" (Decode.array attachmentDecoder)
-                    , Decode.succeed []
-                    ]
+                Decode.field "attachments" (Decode.array attachmentDecoder)
                     |> Decode.map (\attachments -> DescriptionOnly { task | attachments = attachments })
             )
 
@@ -596,122 +587,28 @@ plannedTaskDecoder =
         (Decode.field "agentWorkspace" Decode.string)
         |> Decode.andThen
             (\task ->
-                Decode.oneOf
-                    [ Decode.field "attachments" (Decode.array attachmentDecoder)
-                    , Decode.succeed []
-                    ]
+                Decode.field "attachments" (Decode.array attachmentDecoder)
                     |> Decode.map (\attachments -> { task | attachments = attachments })
             )
         |> Decode.andThen
             (\task ->
-                Decode.oneOf
-                    [ Decode.field "summary" Decode.string
-                    , Decode.succeed ""
-                    ]
+                Decode.field "summary" Decode.string
                     |> Decode.map (\summary -> { task | summary = summary })
             )
         |> Decode.andThen
             (\task ->
-                Decode.oneOf
-                    [ Decode.field "requirements" (Decode.array Decode.string)
-                    , Decode.succeed []
-                    ]
+                Decode.field "requirements" (Decode.array Decode.string)
                     |> Decode.map (\requirements -> { task | requirements = requirements })
             )
         |> Decode.andThen
             (\task ->
-                Decode.oneOf
-                    [ Decode.field "acceptanceCriteria" (Decode.array Decode.string)
-                    , Decode.succeed []
-                    ]
+                Decode.field "acceptanceCriteria" (Decode.array Decode.string)
                     |> Decode.map (\acceptanceCriteria -> { task | acceptanceCriteria = acceptanceCriteria })
             )
         |> Decode.andThen
             (\task ->
-                Decode.oneOf
-                    [ Decode.field "plan" (Decode.array Decode.string)
-                    , Decode.succeed []
-                    ]
+                Decode.field "plan" (Decode.array Decode.string)
                     |> Decode.map (\plan -> Planned { task | plan = plan })
-            )
-
-
-{-| Backward-compatible decoder for legacy task.json files without a taskType field.
-
-    This decoder is only reached when the taskType discriminator field is absent
-    (via the Decode.oneOf in taskDecoder). It uses a heuristic: if any planning
-    fields contain non-empty data, the task is decoded as Planned; otherwise as
-    DescriptionOnly. This heuristic is a fallback for truly legacy data written
-    before the taskType field was introduced. Newly serialized tasks always
-    include taskType, so the discriminator-based branch handles them.
--}
-legacyTaskDecoder : Decoder Task
-legacyTaskDecoder =
-    Decode.map8
-        (\id description status createdAt updatedAt sessionId source agentWorkspace ->
-            { id = id
-            , description = description
-            , status = status
-            , createdAt = createdAt
-            , updatedAt = updatedAt
-            , sessionId = sessionId
-            , source = source
-            , agentWorkspace = agentWorkspace
-            , attachments = []
-            }
-        )
-        (Decode.field "id" Decode.string)
-        (Decode.field "description" Decode.string)
-        (Decode.field "status" statusDecoder)
-        (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "sessionId" (Decode.maybe Decode.string))
-        (Decode.field "source" sourceInfoDecoder)
-        (Decode.field "agentWorkspace" Decode.string)
-        |> Decode.andThen
-            (\baseTask ->
-                Decode.oneOf
-                    [ Decode.field "attachments" (Decode.array attachmentDecoder)
-                    , Decode.succeed []
-                    ]
-                    |> Decode.map (\attachments -> { baseTask | attachments = attachments })
-            )
-        |> Decode.andThen
-            (\baseTask ->
-                -- Try decoding planning fields. If any are present, create Planned.
-                Decode.map4
-                    (\summary requirements acceptanceCriteria plan ->
-                        { summary = summary
-                        , requirements = requirements
-                        , acceptanceCriteria = acceptanceCriteria
-                        , plan = plan
-                        }
-                    )
-                    (Decode.oneOf [ Decode.field "summary" Decode.string, Decode.succeed "" ])
-                    (Decode.oneOf [ Decode.field "requirements" (Decode.array Decode.string), Decode.succeed [] ])
-                    (Decode.oneOf [ Decode.field "acceptanceCriteria" (Decode.array Decode.string), Decode.succeed [] ])
-                    (Decode.oneOf [ Decode.field "plan" (Decode.array Decode.string), Decode.succeed [] ])
-                    |> Decode.map
-                        (\planningFields ->
-                            if String.isEmpty planningFields.summary && Array.isEmpty planningFields.requirements && Array.isEmpty planningFields.acceptanceCriteria && Array.isEmpty planningFields.plan then
-                                DescriptionOnly baseTask
-                            else
-                                Planned
-                                    { id = baseTask.id
-                                    , description = baseTask.description
-                                    , status = baseTask.status
-                                    , createdAt = baseTask.createdAt
-                                    , updatedAt = baseTask.updatedAt
-                                    , sessionId = baseTask.sessionId
-                                    , source = baseTask.source
-                                    , agentWorkspace = baseTask.agentWorkspace
-                                    , attachments = baseTask.attachments
-                                    , summary = planningFields.summary
-                                    , requirements = planningFields.requirements
-                                    , acceptanceCriteria = planningFields.acceptanceCriteria
-                                    , plan = planningFields.plan
-                                    }
-                        )
             )
 
 

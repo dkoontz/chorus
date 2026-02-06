@@ -232,3 +232,142 @@ updatedUser =
         |> incrementLoginCount
         |> updateLastSeen now
 ```
+
+## Fail on Malformed or Missing Data
+
+Never silently substitute a default value or partially interpret data when the expected value is missing or malformed. Missing or invalid data must produce an explicit error so that the caller can detect and handle the problem. Hard-coded fallbacks hide bugs and make failures difficult to trace.
+
+### Why?
+
+- **Visibility**: Silent defaults mask upstream problems. A bug that produces empty strings or missing fields should be caught immediately, not papered over with `"unknown"` or `0`.
+- **Correctness**: A fallback value may look plausible enough to pass through the rest of the system and corrupt downstream state before anyone notices.
+- **Debuggability**: When something eventually goes wrong, the root cause is far from the symptom. Failing early at the point of the bad data makes diagnosis straightforward.
+
+### Rules
+
+1. **Do not invent fallback values** for missing or invalid data unless the caller has explicitly requested a default.
+2. **Use `Result` with specific error types** to report why data is invalid, so the receiver can take appropriate action.
+3. **Treat `Nothing` / `Err` as a signal**, not an inconvenience. Propagate it or handle it — do not replace it with a made-up value.
+4. **Log or surface the error clearly** so that a user or operator can take corrective action.
+
+### Bad: Silent defaults hide failures
+
+```gren
+-- BAD: Missing name becomes "unknown" — no one finds out
+parseUser : Json.Value -> User
+parseUser json =
+    { name =
+        json
+            |> Json.Decode.decodeValue (Json.Decode.field "name" Json.Decode.string)
+            |> Result.withDefault "unknown"
+    , age =
+        json
+            |> Json.Decode.decodeValue (Json.Decode.field "age" Json.Decode.int)
+            |> Result.withDefault 0
+    }
+```
+
+This silently produces `{ name = "unknown", age = 0 }` when the input is garbage. Nothing in the system will flag the problem.
+
+### Good: Explicit errors with specific types
+
+```gren
+type UserParseError
+    = MissingField String
+    | InvalidFieldType { field : String, expected : String }
+
+parseUser : Json.Value -> Result UserParseError User
+parseUser json =
+    let
+        nameResult =
+            json
+                |> Json.Decode.decodeValue (Json.Decode.field "name" Json.Decode.string)
+                |> Result.mapError (\_ -> MissingField "name")
+
+        ageResult =
+            json
+                |> Json.Decode.decodeValue (Json.Decode.field "age" Json.Decode.int)
+                |> Result.mapError (\_ -> MissingField "age")
+    in
+    Result.map2 (\name age -> { name = name, age = age }) nameResult ageResult
+```
+
+The caller sees exactly what went wrong and can decide how to respond — retry, ask the user for input, or report the error upstream.
+
+### Bad: Partial interpretation of structured data
+
+```gren
+-- BAD: Extracts what it can, ignores the rest
+parseConfig : String -> Config
+parseConfig raw =
+    { host =
+        raw
+            |> extractField "host"
+            |> Maybe.withDefault "localhost"
+    , port_ =
+        raw
+            |> extractField "port"
+            |> Maybe.andThen String.toInt
+            |> Maybe.withDefault 8080
+    }
+```
+
+If the config file is empty or corrupt, the system silently runs with `localhost:8080` and the operator has no idea the config was never applied.
+
+### Good: Fail and report what is missing
+
+```gren
+type ConfigError
+    = FieldNotFound String
+    | FieldNotValid { field : String, value : String, reason : String }
+
+parseConfig : String -> Result ConfigError Config
+parseConfig raw =
+    let
+        hostResult =
+            raw
+                |> extractField "host"
+                |> Result.fromMaybe (FieldNotFound "host")
+
+        portResult =
+            raw
+                |> extractField "port"
+                |> Result.fromMaybe (FieldNotFound "port")
+                |> Result.andThen
+                    (\portStr ->
+                        portStr
+                            |> String.toInt
+                            |> Result.fromMaybe
+                                (FieldNotValid
+                                    { field = "port"
+                                    , value = portStr
+                                    , reason = "not a valid integer"
+                                    }
+                                )
+                    )
+    in
+    Result.map2 (\host port_ -> { host = host, port_ = port_ }) hostResult portResult
+```
+
+### When defaults are acceptable
+
+Defaults are fine when they are part of the documented, intentional design — not a workaround for missing data:
+
+```gren
+-- OK: Explicit optional field with a documented default
+type alias PaginationRequest =
+    { page : Int
+    , pageSize : Int
+    }
+
+defaultPagination : PaginationRequest
+defaultPagination =
+    { page = 1
+    , pageSize = 25
+    }
+
+-- The caller explicitly chooses to use the default:
+-- parsePagination input |> Result.withDefault defaultPagination
+```
+
+The key difference: the caller makes the decision to apply a default, and it is visible at the call site. The parser itself does not hide the absence of data.

@@ -5566,59 +5566,43 @@ var $author$project$Types$statusDecoder = A2($gren_lang$core$Json$Decode$andThen
 var $author$project$Types$descriptionOnlyTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(task) {
 		return A2($gren_lang$core$Json$Decode$map, function(attachments) {
 				return $author$project$Types$DescriptionOnly(_Utils_update(task, { attachments: attachments }));
-			}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Types$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+			}, A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Types$attachmentDecoder)));
 	}, A9($gren_lang$core$Json$Decode$map8, F8(function(id, description, status, createdAt, updatedAt, sessionId, source, agentWorkspace) {
 				return { agentWorkspace: agentWorkspace, attachments: [  ], createdAt: createdAt, description: description, id: id, sessionId: sessionId, source: source, status: status, updatedAt: updatedAt };
 			}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Types$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Types$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string)));
 var $author$project$Types$Planned = function (a) {
 	return { $: 'Planned', a: a };
 };
-var $gren_lang$core$Array$isEmpty = function(array) {
-	return $gren_lang$core$Array$length(array) === 0;
-};
-var $author$project$Types$legacyTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(baseTask) {
-		return A2($gren_lang$core$Json$Decode$map, function(planningFields) {
-				return ($gren_lang$core$String$isEmpty(planningFields.summary) && ($gren_lang$core$Array$isEmpty(planningFields.requirements) && ($gren_lang$core$Array$isEmpty(planningFields.acceptanceCriteria) && $gren_lang$core$Array$isEmpty(planningFields.plan)))) ? $author$project$Types$DescriptionOnly(baseTask) : $author$project$Types$Planned({ acceptanceCriteria: planningFields.acceptanceCriteria, agentWorkspace: baseTask.agentWorkspace, attachments: baseTask.attachments, createdAt: baseTask.createdAt, description: baseTask.description, id: baseTask.id, plan: planningFields.plan, requirements: planningFields.requirements, sessionId: baseTask.sessionId, source: baseTask.source, status: baseTask.status, summary: planningFields.summary, updatedAt: baseTask.updatedAt });
-			}, A5($gren_lang$core$Json$Decode$map4, F4(function(summary, requirements, acceptanceCriteria, plan) {
-						return { acceptanceCriteria: acceptanceCriteria, plan: plan, requirements: requirements, summary: summary };
-					}), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'summary', $gren_lang$core$Json$Decode$string), $gren_lang$core$Json$Decode$succeed('') ]), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'requirements', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'acceptanceCriteria', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]), $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'plan', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ])));
-	}, A2($gren_lang$core$Json$Decode$andThen, function(baseTask) {
-			return A2($gren_lang$core$Json$Decode$map, function(attachments) {
-					return _Utils_update(baseTask, { attachments: attachments });
-				}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Types$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
-		}, A9($gren_lang$core$Json$Decode$map8, F8(function(id, description, status, createdAt, updatedAt, sessionId, source, agentWorkspace) {
-					return { agentWorkspace: agentWorkspace, attachments: [  ], createdAt: createdAt, description: description, id: id, sessionId: sessionId, source: source, status: status, updatedAt: updatedAt };
-				}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Types$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Types$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string))));
 var $author$project$Types$plannedTaskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(task) {
 		return A2($gren_lang$core$Json$Decode$map, function(plan) {
 				return $author$project$Types$Planned(_Utils_update(task, { plan: plan }));
-			}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'plan', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+			}, A2($gren_lang$core$Json$Decode$field, 'plan', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)));
 	}, A2($gren_lang$core$Json$Decode$andThen, function(task) {
 			return A2($gren_lang$core$Json$Decode$map, function(acceptanceCriteria) {
 					return _Utils_update(task, { acceptanceCriteria: acceptanceCriteria });
-				}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'acceptanceCriteria', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+				}, A2($gren_lang$core$Json$Decode$field, 'acceptanceCriteria', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)));
 		}, A2($gren_lang$core$Json$Decode$andThen, function(task) {
 				return A2($gren_lang$core$Json$Decode$map, function(requirements) {
 						return _Utils_update(task, { requirements: requirements });
-					}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'requirements', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+					}, A2($gren_lang$core$Json$Decode$field, 'requirements', $gren_lang$core$Json$Decode$array($gren_lang$core$Json$Decode$string)));
 			}, A2($gren_lang$core$Json$Decode$andThen, function(task) {
 					return A2($gren_lang$core$Json$Decode$map, function(summary) {
 							return _Utils_update(task, { summary: summary });
-						}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'summary', $gren_lang$core$Json$Decode$string), $gren_lang$core$Json$Decode$succeed('') ]));
+						}, A2($gren_lang$core$Json$Decode$field, 'summary', $gren_lang$core$Json$Decode$string));
 				}, A2($gren_lang$core$Json$Decode$andThen, function(task) {
 						return A2($gren_lang$core$Json$Decode$map, function(attachments) {
 								return _Utils_update(task, { attachments: attachments });
-							}, $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Types$attachmentDecoder)), $gren_lang$core$Json$Decode$succeed([  ]) ]));
+							}, A2($gren_lang$core$Json$Decode$field, 'attachments', $gren_lang$core$Json$Decode$array($author$project$Types$attachmentDecoder)));
 					}, A9($gren_lang$core$Json$Decode$map8, F8(function(id, description, status, createdAt, updatedAt, sessionId, source, agentWorkspace) {
 								return { acceptanceCriteria: [  ], agentWorkspace: agentWorkspace, attachments: [  ], createdAt: createdAt, description: description, id: id, plan: [  ], requirements: [  ], sessionId: sessionId, source: source, status: status, summary: '', updatedAt: updatedAt };
 							}), A2($gren_lang$core$Json$Decode$field, 'id', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'description', $gren_lang$core$Json$Decode$string), A2($gren_lang$core$Json$Decode$field, 'status', $author$project$Types$statusDecoder), A2($gren_lang$core$Json$Decode$field, 'createdAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'updatedAt', A2($gren_lang$core$Json$Decode$map, $gren_lang$core$Time$millisToPosix, $gren_lang$core$Json$Decode$int)), A2($gren_lang$core$Json$Decode$field, 'sessionId', $gren_lang$core$Json$Decode$maybe($gren_lang$core$Json$Decode$string)), A2($gren_lang$core$Json$Decode$field, 'source', $author$project$Types$sourceInfoDecoder), A2($gren_lang$core$Json$Decode$field, 'agentWorkspace', $gren_lang$core$Json$Decode$string)))))));
-var $author$project$Types$taskDecoder = $gren_lang$core$Json$Decode$oneOf([ A2($gren_lang$core$Json$Decode$andThen, function(taskType) {
-			if (taskType === 'planned') {
-				return $author$project$Types$plannedTaskDecoder;
-			} else {
-				return $author$project$Types$descriptionOnlyTaskDecoder;
-			}
-		}, A2($gren_lang$core$Json$Decode$field, 'taskType', $gren_lang$core$Json$Decode$string)), $author$project$Types$legacyTaskDecoder ]);
+var $author$project$Types$taskDecoder = A2($gren_lang$core$Json$Decode$andThen, function(taskType) {
+		if (taskType === 'planned') {
+			return $author$project$Types$plannedTaskDecoder;
+		} else {
+			return $author$project$Types$descriptionOnlyTaskDecoder;
+		}
+	}, A2($gren_lang$core$Json$Decode$field, 'taskType', $gren_lang$core$Json$Decode$string));
 var $author$project$Api$getTask$ = function(tid, toMsg) {
 	return $gren_lang$browser$Http$get({ expect: $gren_lang$browser$Http$expectJson$(toMsg, $author$project$Api$dataDecoder($author$project$Types$taskDecoder)), url: '/api/tasks/' + tid });
 };
@@ -6672,6 +6656,9 @@ var $author$project$View$Dashboard$countFailed = function(tasks) {
 					return count;
 				}
 			}), 0, tasks);
+};
+var $gren_lang$core$Array$isEmpty = function(array) {
+	return $gren_lang$core$Array$length(array) === 0;
 };
 var $gren_lang$browser$Html$h3 = $gren_lang$browser$Html$node('h3');
 var $gren_lang$core$Basics$negate = function(n) {

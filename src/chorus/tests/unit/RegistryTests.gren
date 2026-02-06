@@ -18,12 +18,10 @@ tests =
     , testStatusFailed
     , testSourceInfoEncodeDecode
     , testAttachmentRoundTrip
-    , testBackwardCompatMissingAttachments
     , testMalformedAttachmentMissingField
     , testMalformedAttachmentWrongType
+    , testMissingTaskTypeFieldFails
     , testTaskEncodeDecodeWithPlanningFields
-    , testTaskDecodeBackwardCompatibility
-    , testTaskDecodeBackwardCompatWithPlanningFields
     , testDescriptionOnlyRoundTrip
     ]
 
@@ -273,75 +271,65 @@ testAttachmentRoundTrip =
     }
 
 
-testBackwardCompatMissingAttachments : { name : String, run : Task.Task String {} }
-testBackwardCompatMissingAttachments =
-    { name = "Task JSON without attachments field decodes with empty array"
-    , run =
-        let
-            -- Manually constructed JSON without the "attachments" key
-            json =
-                "{\"id\":\"old-task\",\"description\":\"Legacy task\",\"status\":{\"type\":\"pending\"},\"createdAt\":1707048600000,\"updatedAt\":1707048600000,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"tester\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\"}"
-
-            decoded =
-                Decode.decodeString Types.taskDecoder json
-        in
-        when decoded is
-            Ok decodedTask ->
-                expectEqual "old-task" (Types.taskId decodedTask)
-                    |> Task.andThen (\_ -> expectEqual "Legacy task" (Types.taskDescription decodedTask))
-                    |> Task.andThen (\_ -> expectEqual [] (Types.taskAttachments decodedTask))
-                    |> Task.andThen (\_ -> expectEqual False (Types.isPlanned decodedTask))
-
-            Err err ->
-                Task.fail ("Decode should have succeeded but failed: " ++ Decode.errorToString err)
-    }
-
-
 testMalformedAttachmentMissingField : { name : String, run : Task.Task String {} }
 testMalformedAttachmentMissingField =
-    { name = "Task with malformed attachment falls back to empty array"
+    { name = "Task with malformed attachment fails to decode"
     , run =
         let
             -- Attachment is missing the "contentType" field.
-            -- The Decode.oneOf in taskDecoder falls back to [] when
-            -- the attachments array fails to decode.
             json =
-                "{\"id\":\"bad-task\",\"description\":\"Bad\",\"status\":{\"type\":\"pending\"},\"createdAt\":0,\"updatedAt\":0,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"test\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[{\"filename\":\"f.txt\",\"size\":100,\"uploadedAt\":0}]}"
+                "{\"taskType\":\"description_only\",\"id\":\"bad-task\",\"description\":\"Bad\",\"status\":{\"type\":\"pending\"},\"createdAt\":0,\"updatedAt\":0,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"test\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[{\"filename\":\"f.txt\",\"size\":100,\"uploadedAt\":0}]}"
 
             decoded =
                 Decode.decodeString Types.taskDecoder json
         in
         when decoded is
-            Ok decodedTask ->
-                expectEqual "bad-task" (Types.taskId decodedTask)
-                    |> Task.andThen (\_ -> expectEqual [] (Types.taskAttachments decodedTask))
+            Ok _ ->
+                Task.fail "Decode should have failed but succeeded"
 
-            Err err ->
-                Task.fail ("Decode failed unexpectedly: " ++ Decode.errorToString err)
+            Err _ ->
+                Task.succeed {}
     }
 
 
 testMalformedAttachmentWrongType : { name : String, run : Task.Task String {} }
 testMalformedAttachmentWrongType =
-    { name = "Task with wrong attachment field type falls back to empty array"
+    { name = "Task with wrong attachment field type fails to decode"
     , run =
         let
             -- Attachment "size" is a string instead of an int.
-            -- The Decode.oneOf in taskDecoder falls back to [] when
-            -- the attachments array fails to decode.
             json =
-                "{\"id\":\"bad-task\",\"description\":\"Bad\",\"status\":{\"type\":\"pending\"},\"createdAt\":0,\"updatedAt\":0,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"test\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[{\"filename\":\"f.txt\",\"size\":\"not-a-number\",\"contentType\":\"text/plain\",\"uploadedAt\":0}]}"
+                "{\"taskType\":\"description_only\",\"id\":\"bad-task\",\"description\":\"Bad\",\"status\":{\"type\":\"pending\"},\"createdAt\":0,\"updatedAt\":0,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"test\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[{\"filename\":\"f.txt\",\"size\":\"not-a-number\",\"contentType\":\"text/plain\",\"uploadedAt\":0}]}"
 
             decoded =
                 Decode.decodeString Types.taskDecoder json
         in
         when decoded is
-            Ok decodedTask ->
-                expectEqual "bad-task" (Types.taskId decodedTask)
-                    |> Task.andThen (\_ -> expectEqual [] (Types.taskAttachments decodedTask))
+            Ok _ ->
+                Task.fail "Decode should have failed but succeeded"
 
-            Err err ->
-                Task.fail ("Decode failed unexpectedly: " ++ Decode.errorToString err)
+            Err _ ->
+                Task.succeed {}
+    }
+
+
+testMissingTaskTypeFieldFails : { name : String, run : Task.Task String {} }
+testMissingTaskTypeFieldFails =
+    { name = "Task JSON without taskType field fails to decode"
+    , run =
+        let
+            json =
+                "{\"id\":\"no-type\",\"description\":\"Missing taskType\",\"status\":{\"type\":\"pending\"},\"createdAt\":0,\"updatedAt\":0,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"test\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[]}"
+
+            decoded =
+                Decode.decodeString Types.taskDecoder json
+        in
+        when decoded is
+            Ok _ ->
+                Task.fail "Decode should have failed but succeeded"
+
+            Err _ ->
+                Task.succeed {}
     }
 
 
@@ -386,60 +374,6 @@ testTaskEncodeDecodeWithPlanningFields =
 
             Err err ->
                 Task.fail ("Decode failed: " ++ Decode.errorToString err)
-    }
-
-
-testTaskDecodeBackwardCompatibility : { name : String, run : Task.Task String {} }
-testTaskDecodeBackwardCompatibility =
-    { name = "Task JSON without planning fields decodes as DescriptionOnly"
-    , run =
-        let
-            -- JSON that omits summary, requirements, acceptanceCriteria, plan, and taskType fields
-            json =
-                "{\"id\":\"legacy-task\",\"description\":\"Old task\",\"status\":{\"type\":\"pending\"},\"createdAt\":1707048600000,\"updatedAt\":1707048600000,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"tester\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[]}"
-
-            decoded =
-                Decode.decodeString Types.taskDecoder json
-        in
-        when decoded is
-            Ok decodedTask ->
-                expectEqual "legacy-task" (Types.taskId decodedTask)
-                    |> Task.andThen (\_ -> expectEqual False (Types.isPlanned decodedTask))
-
-            Err err ->
-                Task.fail ("Decode should have succeeded but failed: " ++ Decode.errorToString err)
-    }
-
-
-testTaskDecodeBackwardCompatWithPlanningFields : { name : String, run : Task.Task String {} }
-testTaskDecodeBackwardCompatWithPlanningFields =
-    { name = "Legacy task JSON with planning fields decodes as Planned"
-    , run =
-        let
-            -- JSON without taskType but with planning fields present
-            json =
-                "{\"id\":\"legacy-planned\",\"description\":\"Old planned task\",\"status\":{\"type\":\"pending\"},\"createdAt\":1707048600000,\"updatedAt\":1707048600000,\"sessionId\":null,\"source\":{\"sourceType\":\"test\",\"userId\":\"tester\",\"conversationId\":null},\"agentWorkspace\":\"/tmp\",\"attachments\":[],\"summary\":\"My summary\",\"requirements\":[\"req1\"],\"acceptanceCriteria\":[],\"plan\":[]}"
-
-            decoded =
-                Decode.decodeString Types.taskDecoder json
-        in
-        when decoded is
-            Ok decodedTask ->
-                expectEqual "legacy-planned" (Types.taskId decodedTask)
-                    |> Task.andThen (\_ -> expectEqual True (Types.isPlanned decodedTask))
-                    |> Task.andThen
-                        (\_ ->
-                            when decodedTask is
-                                Planned t ->
-                                    expectEqual "My summary" t.summary
-                                        |> Task.andThen (\_ -> expectEqual [ "req1" ] t.requirements)
-
-                                DescriptionOnly _ ->
-                                    Task.fail "Expected Planned but got DescriptionOnly"
-                        )
-
-            Err err ->
-                Task.fail ("Decode should have succeeded but failed: " ++ Decode.errorToString err)
     }
 
 
