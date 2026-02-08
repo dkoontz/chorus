@@ -104,12 +104,12 @@ src/chorus/
 
 ## Relationship to Existing Code
 
-| Existing | Role in Main App |
-|----------|------------------|
-| `src/agent-executor/` | Used by tasks to run orchestrator sessions |
-| `Provider.ClaudeCode` | LLM backend for orchestrator and triage |
-| `src/tools/` | File tools available to agents |
-| `agents/orchestrator.md` | System prompt for task sessions |
+| Existing                 | Role in Main App                           |
+| ------------------------ | ------------------------------------------ |
+| `src/agent-executor/`    | Used by tasks to run orchestrator sessions |
+| `Provider.ClaudeCode`    | LLM backend for orchestrator and triage    |
+| `src/tools/`             | File tools available to agents             |
+| `agents/orchestrator.md` | System prompt for task sessions            |
 
 ## Key Design Decisions
 
@@ -125,7 +125,6 @@ src/chorus/
 
 ## Out of Scope (for now)
 
-- Web dashboard UI (future phase)
 - Multi-user / authentication
 - Privilege separation (security model)
 - Horizontal scaling
