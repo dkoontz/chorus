@@ -14,7 +14,7 @@ mkdir -p "$DATA_DIR/registry" "$DATA_DIR/workspaces" "$DATA_DIR/uploads"
 : > "$LOG_FILE"
 
 echo "Starting app..." >&2
-cd "$PROJECT_ROOT/src/chorus"
+cd "$PROJECT_ROOT/packages/chorus"
 CHORUS_DATA_DIR="$DATA_DIR" ./build/chorus > "$LOG_FILE" 2>&1 &
 echo $! > "$PROJECT_ROOT/data/.pid"
 

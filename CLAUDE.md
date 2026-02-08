@@ -54,9 +54,9 @@ npm run test:integration  # Integration tests only
 
 ## Project Structure
 
-- `src/chorus/` - Main Chorus application (Gren), includes agent executor modules
-- `src/chorus-ui/` - Web UI (Gren)
-- `src/tools/` - File tools
+- `packages/chorus/` - Main Chorus application (Gren), includes agent executor modules
+- `packages/chorus-ui/` - Web UI (Gren)
+- `packages/tools/` - File tools
 - `data/` - Persistent data directory (created on first start)
 
 ## Command Line Tools
@@ -69,4 +69,4 @@ Prefer these tools over their slower alternatives:
 
 ## Key Constraints
 
-- Do not create `src/chorus/data/` - data lives in `./data` at the project root
+- Do not create `packages/chorus/data/` - data lives in `./data` at the project root

@@ -4,10 +4,10 @@
   "description": "Chorus multi-agent orchestration system - workspace root",
   "private": true,
   "scripts": {
-    "build:ui": "cd src/chorus-ui && gren make Main --output=build/app.js",
-    "build:tools": "cd src/tools && gren make Main --output=build/file-tools-tmp && tail -n +2 build/file-tools-tmp > build/file-tools.js && bun build --compile build/file-tools.js --outfile build/file-tools && rm build/file-tools-tmp",
-    "build:chorus": "cd src/chorus && gren make Main --output=build/chorus-tmp && tail -n +2 build/chorus-tmp > build/chorus.js && echo 'this.Gren.Main.init({});' >> build/chorus.js && bun build --compile build/chorus.js --outfile build/chorus && rm build/chorus-tmp",
-    "build:copy-ui": "cp src/chorus-ui/build/app.js src/chorus/static/ && cp src/chorus-ui/static/index.html src/chorus/static/ && cp src/chorus-ui/static/styles.css src/chorus/static/",
+    "build:ui": "cd packages/chorus-ui && gren make Main --output=build/app.js",
+    "build:tools": "cd packages/tools && gren make Main --output=build/file-tools-tmp && tail -n +2 build/file-tools-tmp > build/file-tools.js && bun build --compile build/file-tools.js --outfile build/file-tools && rm build/file-tools-tmp",
+    "build:chorus": "cd packages/chorus && gren make Main --output=build/chorus-tmp && tail -n +2 build/chorus-tmp > build/chorus.js && echo 'this.Gren.Main.init({});' >> build/chorus.js && bun build --compile build/chorus.js --outfile build/chorus && rm build/chorus-tmp",
+    "build:copy-ui": "cp packages/chorus-ui/build/app.js packages/chorus/static/ && cp packages/chorus-ui/static/index.html packages/chorus/static/ && cp packages/chorus-ui/static/styles.css packages/chorus/static/",
     "build:app": "npm run build:ui && npm run build:tools && npm run build:chorus && npm run build:copy-ui",
     "build:all": "npm run build:app",
     "start": "scripts/agent/start.sh",
@@ -17,9 +17,9 @@
     "logs": "scripts/agent/logs.sh",
     "logs:follow": "tail -f \"/tmp/$(pwd | tr '/' '-').log\"",
     "curl-api": "scripts/agent/curl-api.sh",
-    "test:unit": "cd src/chorus && npm run test:unit",
-    "test:integration": "cd src/chorus && npm run test:integration",
+    "test:unit": "cd packages/chorus && npm run test:unit",
+    "test:integration": "cd packages/chorus && npm run test:integration",
     "test": "npm run test:unit && npm run test:integration",
-    "clean": "rm -rf src/*/build src/*/.gren src/*/gren_packages"
+    "clean": "rm -rf packages/*/build packages/*/.gren packages/*/gren_packages"
   }
 }

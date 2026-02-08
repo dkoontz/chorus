@@ -17,7 +17,7 @@ The goal is that every manual test you perform becomes an automated test in the 
 
 ### Test File Location
 
-`src/tools/tests/integration/{tool-name}.json`
+`packages/tools/tests/integration/{tool-name}.json`
 
 Each file contains scenarios for one tool (e.g., `file-read.json`, `file-write.json`).
 
@@ -101,7 +101,7 @@ Each file contains scenarios for one tool (e.g., `file-read.json`, `file-write.j
 After adding tests, verify they pass:
 
 ```bash
-cd src/tools
+cd packages/tools
 npm run test:integration
 ```
 
