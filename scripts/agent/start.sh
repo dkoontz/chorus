@@ -22,7 +22,7 @@ echo "Waiting for app to be ready..." >&2
 elapsed=0
 while [ $elapsed -lt 30 ]; do
     if curl -sf http://localhost:8080/api/tasks > /dev/null 2>&1; then
-        echo "App ready" >&2
+        echo "App ready on http://localhost:8080" >&2
         exit 0
     fi
     sleep 2
