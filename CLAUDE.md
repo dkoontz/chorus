@@ -4,43 +4,27 @@ Multi-agent orchestration system written in Gren (Elm-like language that compile
 
 ## Running the Application
 
-**Docker is the only supported way to run Chorus.**
-
 ```bash
-# Build everything (app + Docker image)
+# Build the app
 npm run build:all
 
-# Run with Docker directly
-npm run docker:run
+# Start the app (runs in background, logs to /tmp)
+npm run start
 
-# Or use Docker Compose
-npm run docker:compose
+# View logs
+npm run logs
+
+# Stop the app
+npm run stop
 ```
 
-The app runs on port 8080. Data is persisted via Docker volume mount at `./docker-data:/app/data`.
-
-## Claude Code Authentication
-
-The agent-executor uses Claude Code CLI. First-time setup requires authentication:
-
-```bash
-# Start the container
-npm run docker:compose
-
-# Login to Claude Code (opens browser for OAuth)
-docker exec -it chorus-chorus-1 claude login
-
-# Verify authentication
-docker exec -it chorus-chorus-1 claude --version
-```
-
-Credentials are persisted in `./docker-data/.claude/` and survive container restarts.
+The app runs on port 8080. Data is stored in `./data` at the project root.
 
 ## Environment Variables
 
 Environment variables are managed via `.env` in the project root (gitignored, template at `.env.example`).
 
-A PreToolUse hook (`.claude/hooks/source-env.sh`) sources `.env` before every Bash command. This means changes to `.env` take effect immediately without restarting the session. Docker Compose also reads `.env` natively.
+A PreToolUse hook (`.claude/hooks/source-env.sh`) sources `.env` before every Bash command. This means changes to `.env` take effect immediately without restarting the session.
 
 To change a variable mid-session, edit `.env` directly:
 
@@ -58,8 +42,7 @@ Log format: `[Chorus YYYY-MM-DDTHH:MM:SSZ] [LEVEL] message`
 ## Build Scripts
 
 - `npm run build:app` - Build all components (UI, tools, chorus)
-- `npm run build:docker` - Build Docker image
-- `npm run build:all` - Build app + Docker image
+- `npm run build:all` - Same as `build:app`
 
 ## Testing
 
@@ -74,7 +57,7 @@ npm run test:integration  # Integration tests only
 - `src/chorus/` - Main Chorus application (Gren), includes agent executor modules
 - `src/chorus-ui/` - Web UI (Gren)
 - `src/tools/` - File tools
-- `docker-data/` - Persistent data directory (Docker volume mount)
+- `data/` - Persistent data directory (created on first start)
 
 ## Command Line Tools
 
@@ -86,5 +69,4 @@ Prefer these tools over their slower alternatives:
 
 ## Key Constraints
 
-- Do not create `src/chorus/data/` - data lives only in Docker volume mount
-- Do not add direct execution scripts (`start`, `dev`) - all runtime goes through Docker
+- Do not create `src/chorus/data/` - data lives in `./data` at the project root

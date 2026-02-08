@@ -12,5 +12,5 @@ node_modules/
 # Local environment
 .env
 
-# Testing
-docker-data
+# App data
+data

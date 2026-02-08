@@ -6,15 +6,20 @@
   "scripts": {
     "build:ui": "cd src/chorus-ui && gren make Main --output=build/app.js",
     "build:tools": "cd src/tools && gren make Main --output=build/file-tools-tmp && tail -n +2 build/file-tools-tmp > build/file-tools.js && bun build --compile build/file-tools.js --outfile build/file-tools && rm build/file-tools-tmp",
-    "build:chorus": "cd src/chorus && gren make Main --output=build/chorus.js",
+    "build:chorus": "cd src/chorus && gren make Main --output=build/chorus-tmp && tail -n +2 build/chorus-tmp > build/chorus.js && echo 'this.Gren.Main.init({});' >> build/chorus.js && bun build --compile build/chorus.js --outfile build/chorus && rm build/chorus-tmp",
     "build:copy-ui": "cp src/chorus-ui/build/app.js src/chorus/static/ && cp src/chorus-ui/static/index.html src/chorus/static/ && cp src/chorus-ui/static/styles.css src/chorus/static/",
     "build:app": "npm run build:ui && npm run build:tools && npm run build:chorus && npm run build:copy-ui",
-    "build:docker": "docker build -t chorus .",
-    "build:all": "npm run build:app && npm run build:docker",
+    "build:all": "npm run build:app",
+    "start": "scripts/agent/start.sh",
+    "stop": "scripts/agent/stop.sh",
+    "restart": "scripts/agent/restart.sh",
+    "status": "scripts/agent/status.sh",
+    "logs": "scripts/agent/logs.sh",
+    "logs:follow": "tail -f \"/tmp/$(pwd | tr '/' '-').log\"",
+    "curl-api": "scripts/agent/curl-api.sh",
     "test:unit": "cd src/chorus && npm run test:unit",
     "test:integration": "cd src/chorus && npm run test:integration",
     "test": "npm run test:unit && npm run test:integration",
-    "docker:compose": "docker compose up",
     "clean": "rm -rf src/*/build src/*/.gren src/*/gren_packages"
   }
 }
