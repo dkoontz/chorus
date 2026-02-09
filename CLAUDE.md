@@ -70,3 +70,4 @@ Prefer these tools over their slower alternatives:
 ## Key Constraints
 
 - Do not create `packages/chorus/data/` - data lives in `./data` at the project root
+- No backwards compatibility: decoders must decode exactly what the types require. Do not add defaults, fallbacks, or value conversions unless explicitly specified.
