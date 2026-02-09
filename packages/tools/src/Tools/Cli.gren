@@ -1,0 +1,62 @@
+module Tools.Cli exposing
+    ( handleResult
+    , outputError
+    )
+
+{-| Shared CLI output helpers for tool entry-point modules.
+
+These functions handle writing JSON results to stdout and errors to stderr,
+following the convention used by all tool binaries.
+-}
+
+import Init
+import Json.Encode as Encode
+import Node
+import Stream
+import Task
+import Tools.Json as Json
+
+
+{-| Handle a tool result task by writing the JSON-encoded success value to
+stdout, or writing a JSON error to stderr if the task fails.
+-}
+handleResult : Node.Environment -> Task.Task String Encode.Value -> Init.Task (Cmd a)
+handleResult env task =
+    task
+        |> Task.andThen
+            (\value ->
+                let
+                    json =
+                        Encode.encode 0 value
+                in
+                Stream.writeLineAsBytes json env.stdout
+                    |> Task.mapError (\_ -> "Failed to write output")
+            )
+        |> Task.onError
+            (\errorMsg ->
+                let
+                    errorJson =
+                        Json.encodeError errorMsg
+                in
+                Stream.writeLineAsBytes errorJson env.stderr
+                    |> Task.map (\_ -> env.stderr)
+                    |> Task.onError (\_ -> Task.succeed env.stderr)
+                    |> Task.map (\_ -> errorMsg)
+                    |> Task.andThen (\_ -> Task.fail errorMsg)
+            )
+        |> Task.map (\_ -> env.stdout)
+        |> Task.onError (\_ -> Task.succeed env.stdout)
+        |> Node.endSimpleProgram
+
+
+{-| Output an error message as JSON to stderr and end the program.
+-}
+outputError : Node.Environment -> String -> Init.Task (Cmd a)
+outputError env errorMsg =
+    let
+        errorJson =
+            Json.encodeError errorMsg
+    in
+    Stream.writeLineAsBytes errorJson env.stderr
+        |> Task.onError (\_ -> Task.succeed env.stderr)
+        |> Node.endSimpleProgram

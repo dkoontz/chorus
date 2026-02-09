@@ -33,6 +33,19 @@
         "status": "error",
         "error_contains": "cannot be empty"
       }
+    },
+    {
+      "name": "Reject handoff tool in file-tools binary",
+      "input": {
+        "tool": "handoff",
+        "taskId": "test-task",
+        "agentName": "developer",
+        "prompt": "Do something"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "not supported by file-tools"
+      }
     }
   ]
 }

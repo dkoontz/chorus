@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "description": "Sandboxed file operations for Chorus agents",
   "scripts": {
-    "build": "gren make Main --output=build/file-tools-tmp && tail -n +2 build/file-tools-tmp > build/file-tools.js && bun build --compile build/file-tools.js --outfile build/file-tools && rm build/file-tools-tmp",
+    "build": "gren make FileToolsMain --output=build/file-tools-tmp && tail -n +2 build/file-tools-tmp > build/file-tools.js && bun build --compile build/file-tools.js --outfile build/file-tools && rm build/file-tools-tmp build/file-tools.js && gren make HandoffMain --output=build/handoff-tool-tmp && tail -n +2 build/handoff-tool-tmp > build/handoff-tool.js && bun build --compile build/handoff-tool.js --outfile build/handoff-tool && rm build/handoff-tool-tmp build/handoff-tool.js",
     "build:runner": "cd ../integration-runner && npm run build",
     "clean": "rm -rf build .gren tests/.gren",
     "test": "cd tests && gren run Main",
-    "test:integration": "npm run build && npm run build:runner && ../integration-runner/build/runner tests/integration build/file-tools",
+    "test:integration": "npm run build && npm run build:runner && ../integration-runner/build/runner tests/integration/file-tools build/file-tools && ../integration-runner/build/runner tests/integration/handoff-tool build/handoff-tool",
     "test:all": "npm test && npm run test:integration"
   },
   "keywords": ["gren", "chorus", "file-tools"],

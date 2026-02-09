@@ -1,15 +1,17 @@
-module Main exposing (main)
+module FileToolsMain exposing (main)
 
-{-| CLI entry point for file tools.
+{-| CLI entry point for file tools only.
 
 Usage:
-    node file-tools.js <workspace_root> <json_input>
+    file-tools <workspace_root> <json_input>
 
 The workspace_root is the directory all operations are scoped to.
 The json_input is a JSON object with a "tool" field and tool-specific parameters.
 
+Supported tools: file.read, file.write, file.patch, file.delete, file.list, file.search
+
 Example:
-    node file-tools.js /var/chorus/workspaces/task-1 '{"tool":"file.read","path":"src/main.gren"}'
+    file-tools /var/chorus/workspaces/task-1 '{"tool":"file.read","path":"src/main.gren"}'
 -}
 
 import ChildProcess
@@ -19,7 +21,6 @@ import Node
 import Task
 import Tools.Cli exposing (handleResult, outputError)
 import Tools.File as File
-import Tools.Handoff as Handoff
 import Tools.Json as Json
     exposing
         ( ToolRequest(..)
@@ -29,7 +30,6 @@ import Tools.Json as Json
         , encodeDeleteOutput
         , encodeListOutput
         , encodeSearchOutput
-        , encodeHandoffOutput
         )
 import Tools.Validation as Validation exposing (WorkspaceRoot)
 
@@ -112,9 +112,5 @@ executeRequest env fsPermission cpPermission workspaceRoot request =
                 |> Task.mapError File.fileErrorToString
                 |> handleResult env
 
-        HandoffRequest input ->
-            Handoff.run cpPermission input
-                |> Task.map encodeHandoffOutput
-                |> Task.mapError Handoff.handoffErrorToString
-                |> handleResult env
-
+        HandoffRequest _ ->
+            outputError env "Unknown tool: handoff is not supported by file-tools"

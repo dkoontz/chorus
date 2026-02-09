@@ -79,6 +79,27 @@
         "status": "error",
         "error_contains": "Unknown tool"
       }
+    },
+    {
+      "name": "Reject file.read in handoff-tool binary",
+      "input": {
+        "tool": "file.read",
+        "path": "test.txt"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "only handoff is supported"
+      }
+    },
+    {
+      "name": "Reject file.list in handoff-tool binary",
+      "input": {
+        "tool": "file.list"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "only handoff is supported"
+      }
     }
   ]
 }
