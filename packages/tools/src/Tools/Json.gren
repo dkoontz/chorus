@@ -13,6 +13,9 @@ module Tools.Json exposing
     , encodeListOutput
     , encodeSearchOutput
     , encodeHandoffOutput
+      -- Help encoders
+    , encodeFileToolsHelp
+    , encodeAllToolsHelp
     )
 
 {-| JSON encoding and decoding for tool requests and responses.
@@ -23,6 +26,7 @@ import Json.Encode as Encode
 import Time
 import Tools.File as File
 import Tools.Handoff as Handoff
+import Tools.Help as Help
 
 
 -- REQUEST TYPES
@@ -38,6 +42,7 @@ type ToolRequest
     | ListRequest File.ListInput
     | SearchRequest File.SearchInput
     | HandoffRequest Handoff.HandoffInput
+    | HelpRequest
 
 
 {-| Decode a JSON request into a ToolRequest.
@@ -78,8 +83,11 @@ toolDecoder toolName =
         "handoff" ->
             Decode.map HandoffRequest handoffInputDecoder
 
+        "help" ->
+            Decode.succeed HelpRequest
+
         _ ->
-            Decode.fail ("Unknown tool: " ++ toolName)
+            Decode.fail ("Unknown tool: " ++ toolName ++ ". Use {\"tool\":\"help\"} for available commands.")
 
 
 
@@ -320,6 +328,20 @@ encodeHandoffOutput output =
         [ { key = "agent_name", value = Encode.string output.agentName }
         , { key = "output", value = Encode.string output.output }
         ]
+
+
+{-| Encode help output for file tools only (file-tools binary).
+-}
+encodeFileToolsHelp : Encode.Value
+encodeFileToolsHelp =
+    Help.encodeFileToolsHelp
+
+
+{-| Encode help output for all tools (main binary).
+-}
+encodeAllToolsHelp : Encode.Value
+encodeAllToolsHelp =
+    Help.encodeAllToolsHelp
 
 
 {-| Encode an error response.

@@ -30,6 +30,7 @@ import Tools.Json as Json
         , encodeListOutput
         , encodeSearchOutput
         , encodeHandoffOutput
+        , encodeAllToolsHelp
         )
 import Tools.Validation as Validation exposing (WorkspaceRoot)
 
@@ -64,7 +65,7 @@ runTool env fsPermission cpPermission =
                     executeRequest env fsPermission cpPermission workspaceRoot request
 
         _ ->
-            outputError env "Usage: file-tools <workspace_root> <json_input>"
+            outputError env "Usage: file-tools <workspace_root> <json_input>. Use {\"tool\":\"help\"} for available commands."
 
 
 executeRequest :
@@ -116,5 +117,9 @@ executeRequest env fsPermission cpPermission workspaceRoot request =
             Handoff.run cpPermission input
                 |> Task.map encodeHandoffOutput
                 |> Task.mapError Handoff.handoffErrorToString
+                |> handleResult env
+
+        HelpRequest ->
+            Task.succeed encodeAllToolsHelp
                 |> handleResult env
 

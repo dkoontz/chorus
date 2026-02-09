@@ -30,6 +30,7 @@ import Tools.Json as Json
         , encodeDeleteOutput
         , encodeListOutput
         , encodeSearchOutput
+        , encodeFileToolsHelp
         )
 import Tools.Validation as Validation exposing (WorkspaceRoot)
 
@@ -64,7 +65,7 @@ runTool env fsPermission cpPermission =
                     executeRequest env fsPermission cpPermission workspaceRoot request
 
         _ ->
-            outputError env "Usage: file-tools <workspace_root> <json_input>"
+            outputError env "Usage: file-tools <workspace_root> <json_input>. Use {\"tool\":\"help\"} for available commands."
 
 
 executeRequest :
@@ -114,3 +115,7 @@ executeRequest env fsPermission cpPermission workspaceRoot request =
 
         HandoffRequest _ ->
             outputError env "Unknown tool: handoff is not supported by file-tools"
+
+        HelpRequest ->
+            Task.succeed encodeFileToolsHelp
+                |> handleResult env
