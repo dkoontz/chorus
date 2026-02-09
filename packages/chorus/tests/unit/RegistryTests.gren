@@ -473,7 +473,7 @@ testHandoffRecordEncodeDecode =
     , run =
         let
             record =
-                { agentName = "developer"
+                { agentName = "writer"
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Just (Time.millisToPosix 1707048700000)
                 , output = "Implementation complete"
@@ -506,7 +506,7 @@ testHandoffRecordWithNothingCompletedAtEncodeDecode =
     , run =
         let
             record =
-                { agentName = "qa"
+                { agentName = "editor"
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Nothing
                 , output = ""
@@ -539,7 +539,7 @@ testTaskWithHandoffFieldsEncodeDecode =
     , run =
         let
             handoffRecord =
-                { agentName = "developer"
+                { agentName = "writer"
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Just (Time.millisToPosix 1707048700000)
                 , output = "Done"
@@ -560,7 +560,7 @@ testTaskWithHandoffFieldsEncodeDecode =
                         }
 
                     , attachments = []
-                    , currentAgent = Just "qa"
+                    , currentAgent = Just "editor"
                     , agentChain = [ handoffRecord ]
                     }
 
@@ -575,13 +575,13 @@ testTaskWithHandoffFieldsEncodeDecode =
         in
         when decoded is
             Ok decodedTask ->
-                expectEqual (Just "qa") (Types.taskCurrentAgent decodedTask)
+                expectEqual (Just "editor") (Types.taskCurrentAgent decodedTask)
                     |> Task.andThen (\_ -> expectEqual 1 (Array.length (Types.taskAgentChain decodedTask)))
                     |> Task.andThen
                         (\_ ->
                             when Array.first (Types.taskAgentChain decodedTask) is
                                 Just r ->
-                                    expectEqual "developer" r.agentName
+                                    expectEqual "writer" r.agentName
                                         |> Task.andThen (\_ -> expectEqual "Done" r.output)
 
                                 Nothing ->
@@ -599,7 +599,7 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
     , run =
         let
             handoffRecord =
-                { agentName = "developer"
+                { agentName = "writer"
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Just (Time.millisToPosix 1707048700000)
                 , output = "Implemented"
@@ -620,7 +620,7 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
                         }
 
                     , attachments = []
-                    , currentAgent = Just "developer"
+                    , currentAgent = Just "writer"
                     , agentChain = [ handoffRecord ]
                     , summary = "Test summary"
                     , requirements = [ "Req 1" ]
@@ -639,14 +639,14 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
         in
         when decoded is
             Ok decodedTask ->
-                expectEqual (Just "developer") (Types.taskCurrentAgent decodedTask)
+                expectEqual (Just "writer") (Types.taskCurrentAgent decodedTask)
                     |> Task.andThen (\_ -> expectEqual 1 (Array.length (Types.taskAgentChain decodedTask)))
                     |> Task.andThen (\_ -> expectEqual True (Types.isPlanned decodedTask))
                     |> Task.andThen
                         (\_ ->
                             when Array.first (Types.taskAgentChain decodedTask) is
                                 Just r ->
-                                    expectEqual "developer" r.agentName
+                                    expectEqual "writer" r.agentName
                                         |> Task.andThen (\_ -> expectEqual "Implemented" r.output)
 
                                 Nothing ->
@@ -664,7 +664,7 @@ testPlanTaskCarriesHandoffFields =
     , run =
         let
             handoffRecord =
-                { agentName = "planner"
+                { agentName = "researcher"
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Nothing
                 , output = ""
@@ -685,7 +685,7 @@ testPlanTaskCarriesHandoffFields =
                         }
 
                     , attachments = []
-                    , currentAgent = Just "planner"
+                    , currentAgent = Just "researcher"
                     , agentChain = [ handoffRecord ]
                     }
 
@@ -699,13 +699,13 @@ testPlanTaskCarriesHandoffFields =
             plannedTask =
                 Types.planTask descTask planningFields
         in
-        expectEqual (Just "planner") (Types.taskCurrentAgent plannedTask)
+        expectEqual (Just "researcher") (Types.taskCurrentAgent plannedTask)
             |> Task.andThen (\_ -> expectEqual 1 (Array.length (Types.taskAgentChain plannedTask)))
             |> Task.andThen
                 (\_ ->
                     when Array.first (Types.taskAgentChain plannedTask) is
                         Just r ->
-                            expectEqual "planner" r.agentName
+                            expectEqual "researcher" r.agentName
 
                         Nothing ->
                             Task.fail "Expected handoff record to be carried forward"
@@ -729,7 +729,7 @@ testTaskCurrentAgentAccessor =
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
 
                     , attachments = []
-                    , currentAgent = Just "developer"
+                    , currentAgent = Just "writer"
                     , agentChain = []
                     }
 
@@ -744,7 +744,7 @@ testTaskCurrentAgentAccessor =
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
 
                     , attachments = []
-                    , currentAgent = Just "qa"
+                    , currentAgent = Just "editor"
                     , agentChain = []
                     , summary = ""
                     , requirements = []
@@ -752,8 +752,8 @@ testTaskCurrentAgentAccessor =
                     , plan = []
                     }
         in
-        expectEqual (Just "developer") (Types.taskCurrentAgent descTask)
-            |> Task.andThen (\_ -> expectEqual (Just "qa") (Types.taskCurrentAgent plannedTask))
+        expectEqual (Just "writer") (Types.taskCurrentAgent descTask)
+            |> Task.andThen (\_ -> expectEqual (Just "editor") (Types.taskCurrentAgent plannedTask))
     }
 
 
@@ -763,14 +763,14 @@ testTaskAgentChainAccessor =
     , run =
         let
             record1 =
-                { agentName = "developer"
+                { agentName = "writer"
                 , startedAt = Time.millisToPosix 100
                 , completedAt = Just (Time.millisToPosix 200)
                 , output = "first"
                 }
 
             record2 =
-                { agentName = "qa"
+                { agentName = "editor"
                 , startedAt = Time.millisToPosix 300
                 , completedAt = Nothing
                 , output = ""
@@ -787,7 +787,7 @@ testTaskAgentChainAccessor =
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
 
                     , attachments = []
-                    , currentAgent = Just "qa"
+                    , currentAgent = Just "editor"
                     , agentChain = [ record1, record2 ]
                     }
         in
@@ -800,7 +800,7 @@ testTaskAgentChainAccessor =
                 (\_ ->
                     when Array.first chain is
                         Just r ->
-                            expectEqual "developer" r.agentName
+                            expectEqual "writer" r.agentName
                                 |> Task.andThen (\_ -> expectEqual (Time.millisToPosix 100) r.startedAt)
                                 |> Task.andThen (\_ -> expectEqual (Just (Time.millisToPosix 200)) r.completedAt)
                                 |> Task.andThen (\_ -> expectEqual "first" r.output)
@@ -812,7 +812,7 @@ testTaskAgentChainAccessor =
                 (\_ ->
                     when Array.get 1 chain is
                         Just r ->
-                            expectEqual "qa" r.agentName
+                            expectEqual "editor" r.agentName
                                 |> Task.andThen (\_ -> expectEqual (Time.millisToPosix 300) r.startedAt)
                                 |> Task.andThen (\_ -> expectEqual Nothing r.completedAt)
                                 |> Task.andThen (\_ -> expectEqual "" r.output)
@@ -844,12 +844,12 @@ testSetCurrentAgentMutator =
                     }
 
             updated =
-                Types.setCurrentAgent (Just "developer") task
+                Types.setCurrentAgent (Just "writer") task
 
             cleared =
                 Types.setCurrentAgent Nothing updated
         in
-        expectEqual (Just "developer") (Types.taskCurrentAgent updated)
+        expectEqual (Just "writer") (Types.taskCurrentAgent updated)
             |> Task.andThen (\_ -> expectEqual Nothing (Types.taskCurrentAgent cleared))
     }
 
@@ -860,7 +860,7 @@ testSetAgentChainMutator =
     , run =
         let
             record =
-                { agentName = "developer"
+                { agentName = "writer"
                 , startedAt = Time.millisToPosix 100
                 , completedAt = Nothing
                 , output = ""
@@ -911,7 +911,7 @@ testSetAgentChainMutator =
                 (\_ ->
                     when Array.first (Types.taskAgentChain updatedDesc) is
                         Just r ->
-                            expectEqual "developer" r.agentName
+                            expectEqual "writer" r.agentName
 
                         Nothing ->
                             Task.fail "Expected chain entry on DescriptionOnly task"
@@ -921,7 +921,7 @@ testSetAgentChainMutator =
                 (\_ ->
                     when Array.first (Types.taskAgentChain updatedPlanned) is
                         Just r ->
-                            expectEqual "developer" r.agentName
+                            expectEqual "writer" r.agentName
 
                         Nothing ->
                             Task.fail "Expected chain entry on Planned task"
