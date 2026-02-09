@@ -26,23 +26,6 @@ if echo "$COMMAND" | grep -qE '&&|;|&'; then
   exit 0
 fi
 
-# Reject slow/non-preferred utilities — extract the base command (first word)
-BASE_CMD=$(echo "$COMMAND" | awk '{print $1}')
-case "$BASE_CMD" in
-  find)
-    jq -n '{decision: "block", reason: "Use fd instead of find. Example: fd -t f \"pattern\""}'
-    exit 0
-    ;;
-  grep|egrep|fgrep)
-    jq -n '{decision: "block", reason: "Use rg (ripgrep) instead of grep. Example: rg \"pattern\" path/"}'
-    exit 0
-    ;;
-  pgrep)
-    jq -n '{decision: "block", reason: "Use ps with rg instead of pgrep. Example: ps aux | ... or use npm run status to check the app."}'
-    exit 0
-    ;;
-esac
-
 # Prepend sourcing .env (set -a exports all vars, set +a turns it off)
 # The 2>/dev/null handles case where .env doesn't exist
 MODIFIED="set -a; source .env 2>/dev/null; set +a; $COMMAND"
