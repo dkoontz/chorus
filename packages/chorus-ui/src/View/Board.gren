@@ -3,6 +3,7 @@ module View.Board exposing (view)
 {-| Kanban board view showing tasks organized into columns by status.
 -}
 
+import FormatTime
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Id
@@ -13,6 +14,8 @@ import Types exposing (Task(..), TaskStatus(..))
 type alias Props =
     { tasks : Array Types.Task
     , loading : Bool
+    , zone : Time.Zone
+    , now : Time.Posix
     }
 
 
@@ -22,19 +25,19 @@ view props =
         div [ class "loading" ] [ text "Loading..." ]
     else
         div [ class "kanban-board" ]
-            [ viewColumn "Pending" "pending" Pending props.tasks
-            , viewColumn "Active" "active" Active props.tasks
-            , viewColumn "Waiting" "waiting" Waiting props.tasks
-            , viewColumn "Completed" "completed" Completed props.tasks
-            , viewFailedColumn props.tasks
+            [ viewColumn "Pending" "pending" Pending props
+            , viewColumn "Active" "active" Active props
+            , viewColumn "Waiting" "waiting" Waiting props
+            , viewColumn "Completed" "completed" Completed props
+            , viewFailedColumn props
             ]
 
 
-viewColumn : String -> String -> Types.TaskStatus -> Array Types.Task -> Html msg
-viewColumn title statusClass status tasks =
+viewColumn : String -> String -> Types.TaskStatus -> Props -> Html msg
+viewColumn title statusClass status props =
     let
         columnTasks =
-            tasks
+            props.tasks
                 |> Array.keepIf (\t -> Types.statusEquals (Types.taskStatus t) status)
                 |> Array.sortBy (\t -> negate (Time.posixToMillis (Types.taskUpdatedAt t)))
 
@@ -50,16 +53,16 @@ viewColumn title statusClass status tasks =
             (if Array.isEmpty columnTasks then
                 [ div [ class "kanban-empty" ] [ text "No tasks" ] ]
              else
-                Array.map viewCard columnTasks
+                Array.map (viewCard props.zone props.now) columnTasks
             )
         ]
 
 
-viewFailedColumn : Array Types.Task -> Html msg
-viewFailedColumn tasks =
+viewFailedColumn : Props -> Html msg
+viewFailedColumn props =
     let
         columnTasks =
-            tasks
+            props.tasks
                 |> Array.keepIf
                     (\t ->
                         when Types.taskStatus t is
@@ -83,13 +86,13 @@ viewFailedColumn tasks =
             (if Array.isEmpty columnTasks then
                 [ div [ class "kanban-empty" ] [ text "No tasks" ] ]
              else
-                Array.map viewCard columnTasks
+                Array.map (viewCard props.zone props.now) columnTasks
             )
         ]
 
 
-viewCard : Types.Task -> Html msg
-viewCard task =
+viewCard : Time.Zone -> Time.Posix -> Types.Task -> Html msg
+viewCard zone now task =
     let
         source =
             Types.taskSource task
@@ -108,7 +111,7 @@ viewCard task =
                 [ span [ class "kanban-card-source" ]
                     [ text (source.sourceType ++ " / " ++ source.userId) ]
                 , span [ class "kanban-card-updated" ]
-                    [ text (formatTimestamp (Types.taskUpdatedAt task)) ]
+                    [ text (FormatTime.format zone now (Types.taskUpdatedAt task)) ]
                 ]
             ]
         ]
@@ -148,6 +151,3 @@ viewHandoffCount count =
         text ""
 
 
-formatTimestamp : Time.Posix -> String
-formatTimestamp posix =
-    String.fromInt (Time.posixToMillis posix)

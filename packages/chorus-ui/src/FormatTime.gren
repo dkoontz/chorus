@@ -1,0 +1,127 @@
+module FormatTime exposing (format)
+
+{-| Shared timestamp formatting for the Chorus UI.
+
+Formats a Time.Posix timestamp relative to the current time:
+- "Today HH:MM" if the timestamp is from today
+- "Yesterday HH:MM" if the timestamp is from yesterday
+- "YYYY-MM-DD HH:MM" otherwise
+
+-}
+
+import Time
+
+
+{-| Format a timestamp for display.
+
+Takes the user's time zone, the current time (now), and the timestamp to format.
+Returns a human-readable string.
+
+-}
+format : Time.Zone -> Time.Posix -> Time.Posix -> String
+format zone now timestamp =
+    let
+        timeStr =
+            padInt (Time.toHour zone timestamp) ++ ":" ++ padInt (Time.toMinute zone timestamp)
+
+        nowDayStart =
+            dayStart zone now
+
+        yesterdayDayStart =
+            nowDayStart - (24 * 60 * 60 * 1000)
+
+        timestampMillis =
+            Time.posixToMillis timestamp
+    in
+    if timestampMillis >= nowDayStart then
+        "Today " ++ timeStr
+    else if timestampMillis >= yesterdayDayStart then
+        "Yesterday " ++ timeStr
+    else
+        let
+            year =
+                String.fromInt (Time.toYear zone timestamp)
+
+            month =
+                padInt (monthToInt (Time.toMonth zone timestamp))
+
+            day =
+                padInt (Time.toDay zone timestamp)
+        in
+        year ++ "-" ++ month ++ "-" ++ day ++ " " ++ timeStr
+
+
+{-| Calculate the milliseconds timestamp for the start of the day (midnight)
+for the given time in the given zone.
+-}
+dayStart : Time.Zone -> Time.Posix -> Int
+dayStart zone posix =
+    let
+        millis =
+            Time.posixToMillis posix
+
+        hour =
+            Time.toHour zone posix
+
+        minute =
+            Time.toMinute zone posix
+
+        second =
+            Time.toSecond zone posix
+
+        millisInDay =
+            ((hour * 60 + minute) * 60 + second) * 1000 + Time.toMillis zone posix
+    in
+    millis - millisInDay
+
+
+{-| Pad an integer to two digits with a leading zero if needed.
+-}
+padInt : Int -> String
+padInt n =
+    if n < 10 then
+        "0" ++ String.fromInt n
+    else
+        String.fromInt n
+
+
+{-| Convert a Time.Month to its 1-based integer representation.
+-}
+monthToInt : Time.Month -> Int
+monthToInt month =
+    when month is
+        Time.Jan ->
+            1
+
+        Time.Feb ->
+            2
+
+        Time.Mar ->
+            3
+
+        Time.Apr ->
+            4
+
+        Time.May ->
+            5
+
+        Time.Jun ->
+            6
+
+        Time.Jul ->
+            7
+
+        Time.Aug ->
+            8
+
+        Time.Sep ->
+            9
+
+        Time.Oct ->
+            10
+
+        Time.Nov ->
+            11
+
+        Time.Dec ->
+            12

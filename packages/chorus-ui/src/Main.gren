@@ -64,6 +64,7 @@ type alias Model =
     , error : Maybe String
     , lastPoll : Time.Posix
     , editingPlanning : Maybe PlanningEditState
+    , timeZone : Time.Zone
     }
 
 
@@ -124,6 +125,7 @@ type Msg
     | SavePlanning
     | CancelPlanningEdit
     | PlanningUpdated (Result Http.Error Types.Task)
+    | GotZone Time.Zone
 
 
 
@@ -148,10 +150,15 @@ init _ url key =
             , error = Nothing
             , lastPoll = Time.millisToPosix 0
             , editingPlanning = Nothing
+            , timeZone = Time.utc
             }
     in
     { model = model
-    , command = loadPageData page
+    , command =
+        Cmd.batch
+            [ loadPageData page
+            , Task.perform GotZone Time.here
+            ]
     }
 
 
@@ -645,6 +652,11 @@ update msg model =
                     , command = Cmd.none
                     }
 
+        GotZone zone ->
+            { model = { model | timeZone = zone }
+            , command = Cmd.none
+            }
+
 
 
 -- SUBSCRIPTIONS
@@ -713,6 +725,8 @@ viewMain model =
                     [ Board.view
                         { tasks = model.tasks
                         , loading = model.loading
+                        , zone = model.timeZone
+                        , now = model.lastPoll
                         }
                     , viewCreateModal model
                     ]
@@ -735,6 +749,8 @@ viewMain model =
                     , onRemovePlanningItem = RemovePlanningItem
                     , onSavePlanning = SavePlanning
                     , onCancelPlanningEdit = CancelPlanningEdit
+                    , zone = model.timeZone
+                    , now = model.lastPoll
                     }
 
             NotFoundPage ->

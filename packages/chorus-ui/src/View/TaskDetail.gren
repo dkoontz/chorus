@@ -9,6 +9,7 @@ module View.TaskDetail exposing
 
 import Dict exposing (Dict)
 import File
+import FormatTime
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, on, onInput)
@@ -53,6 +54,8 @@ type alias Props msg =
     , onRemovePlanningItem : Int -> msg
     , onSavePlanning : msg
     , onCancelPlanningEdit : msg
+    , zone : Time.Zone
+    , now : Time.Posix
     }
 
 
@@ -76,11 +79,11 @@ viewTask props task =
     div [ class "task-detail" ]
         [ viewTaskHeader props task
         , div [ class "task-detail-grid" ]
-            [ viewTaskInfo task
+            [ viewTaskInfo props.zone props.now task
             , viewPlanningSections props task
             , viewAttachments props task
-            , viewTaskHistory props.history
-            , viewTaskQueue props.queue
+            , viewTaskHistory props.zone props.now props.history
+            , viewTaskQueue props.zone props.now props.queue
             ]
         ]
 
@@ -170,8 +173,8 @@ viewStatusActions props task =
         )
 
 
-viewTaskInfo : Types.Task -> Html msg
-viewTaskInfo task =
+viewTaskInfo : Time.Zone -> Time.Posix -> Types.Task -> Html msg
+viewTaskInfo zone now task =
     let
         source =
             Types.taskSource task
@@ -189,9 +192,9 @@ viewTaskInfo task =
             , dt [] [ text "Workspace" ]
             , dd [ class "monospace truncate" ] [ text (Types.taskWorkspacePath task) ]
             , dt [] [ text "Created" ]
-            , dd [] [ text (formatTimestamp (Types.taskCreatedAt task)) ]
+            , dd [] [ text (FormatTime.format zone now (Types.taskCreatedAt task)) ]
             , dt [] [ text "Updated" ]
-            , dd [] [ text (formatTimestamp (Types.taskUpdatedAt task)) ]
+            , dd [] [ text (FormatTime.format zone now (Types.taskUpdatedAt task)) ]
             ]
         ]
 
@@ -211,7 +214,7 @@ viewAttachments props task =
             p [ class "empty-state" ] [ text "No attachments" ]
           else
             ul [ class "attachment-list" ]
-                (Array.map (viewAttachment props tid) attachments)
+                (Array.map (viewAttachment props.zone props.now props tid) attachments)
         , div [ class "attachment-upload" ]
             [ label [ class "btn btn-secondary" ]
                 [ text "Upload File"
@@ -229,8 +232,8 @@ viewAttachments props task =
         ]
 
 
-viewAttachment : Props msg -> String -> Types.Attachment -> Html msg
-viewAttachment props taskId attachment =
+viewAttachment : Time.Zone -> Time.Posix -> Props msg -> String -> Types.Attachment -> Html msg
+viewAttachment zone now props taskId attachment =
     li [ class "attachment-item" ]
         [ a
             [ href ("/api/tasks/" ++ taskId ++ "/attachments/" ++ attachment.filename)
@@ -241,7 +244,7 @@ viewAttachment props taskId attachment =
         , span [ class "attachment-size" ]
             [ text (formatFileSize attachment.size) ]
         , span [ class "attachment-time" ]
-            [ text (formatTimestamp attachment.uploadedAt) ]
+            [ text (FormatTime.format zone now attachment.uploadedAt) ]
         , button
             [ class "btn btn-small btn-danger"
             , onClick (props.onDeleteAttachment attachment.filename)
@@ -431,8 +434,8 @@ sectionEquals a b =
     a == b
 
 
-viewTaskHistory : Maybe Types.History -> Html msg
-viewTaskHistory maybeHistory =
+viewTaskHistory : Time.Zone -> Time.Posix -> Maybe Types.History -> Html msg
+viewTaskHistory zone now maybeHistory =
     div [ class "task-history card" ]
         [ h3 [] [ text "History" ]
         , when maybeHistory is
@@ -444,16 +447,16 @@ viewTaskHistory maybeHistory =
                     p [ class "empty-state" ] [ text "No events recorded" ]
                 else
                     ul [ class "event-list" ]
-                        (Array.map viewEvent (Array.reverse history.events))
+                        (Array.map (viewEvent zone now) (Array.reverse history.events))
         ]
 
 
-viewEvent : Types.Event -> Html msg
-viewEvent event =
+viewEvent : Time.Zone -> Time.Posix -> Types.Event -> Html msg
+viewEvent zone now event =
     li [ class "event-item" ]
         [ div [ class "event-header" ]
             [ span [ class "event-type" ] [ text event.eventType ]
-            , span [ class "event-time" ] [ text (formatTimestamp event.timestamp) ]
+            , span [ class "event-time" ] [ text (FormatTime.format zone now event.timestamp) ]
             ]
         , if Dict.isEmpty event.data then
             text ""
@@ -473,8 +476,8 @@ viewEvent event =
         ]
 
 
-viewTaskQueue : Maybe Types.Queue -> Html msg
-viewTaskQueue maybeQueue =
+viewTaskQueue : Time.Zone -> Time.Posix -> Maybe Types.Queue -> Html msg
+viewTaskQueue zone now maybeQueue =
     div [ class "task-queue card" ]
         [ h3 [] [ text "Message Queue" ]
         , when maybeQueue is
@@ -490,23 +493,19 @@ viewTaskQueue maybeQueue =
                             [ text (String.fromInt (Array.length queue.messages) ++ " message(s) pending")
                             ]
                         , ul [ class "queue-list" ]
-                            (Array.map viewQueuedMessage queue.messages)
+                            (Array.map (viewQueuedMessage zone now) queue.messages)
                         ]
         ]
 
 
-viewQueuedMessage : Types.QueuedMessage -> Html msg
-viewQueuedMessage message =
+viewQueuedMessage : Time.Zone -> Time.Posix -> Types.QueuedMessage -> Html msg
+viewQueuedMessage zone now message =
     li [ class "queue-item" ]
         [ div [ class "queue-item-header" ]
             [ span [ class "queue-item-id monospace" ] [ text (String.takeFirst 8 (Id.messageIdToString message.id)) ]
-            , span [ class "queue-item-time" ] [ text (formatTimestamp message.receivedAt) ]
+            , span [ class "queue-item-time" ] [ text (FormatTime.format zone now message.receivedAt) ]
             ]
         , div [ class "queue-item-content" ] [ text message.content ]
         ]
 
 
-formatTimestamp : Time.Posix -> String
-formatTimestamp posix =
-    -- Simple timestamp display
-    String.fromInt (Time.posixToMillis posix)

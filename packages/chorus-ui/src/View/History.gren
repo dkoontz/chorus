@@ -4,6 +4,7 @@ module View.History exposing (view)
 -}
 
 import Dict exposing (Dict)
+import FormatTime
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Time
@@ -13,6 +14,8 @@ import Types
 type alias Props =
     { history : Maybe Types.History
     , loading : Bool
+    , zone : Time.Zone
+    , now : Time.Posix
     }
 
 
@@ -28,27 +31,27 @@ view props =
                     p [ class "empty-state" ] [ text "No history available" ]
 
             Just history ->
-                viewTimeline history.events
+                viewTimeline props.zone props.now history.events
         ]
 
 
-viewTimeline : Array Types.Event -> Html msg
-viewTimeline events =
+viewTimeline : Time.Zone -> Time.Posix -> Array Types.Event -> Html msg
+viewTimeline zone now events =
     if Array.isEmpty events then
         p [ class "empty-state" ] [ text "No events recorded" ]
     else
         div [ class "timeline" ]
-            (Array.map viewTimelineEvent (Array.reverse events))
+            (Array.map (viewTimelineEvent zone now) (Array.reverse events))
 
 
-viewTimelineEvent : Types.Event -> Html msg
-viewTimelineEvent event =
+viewTimelineEvent : Time.Zone -> Time.Posix -> Types.Event -> Html msg
+viewTimelineEvent zone now event =
     div [ class ("timeline-event event-" ++ eventTypeClass event.eventType) ]
         [ div [ class "timeline-marker" ] []
         , div [ class "timeline-content" ]
             [ div [ class "timeline-header" ]
                 [ span [ class "event-type" ] [ text (formatEventType event.eventType) ]
-                , span [ class "event-timestamp" ] [ text (formatTimestamp event.timestamp) ]
+                , span [ class "event-timestamp" ] [ text (FormatTime.format zone now event.timestamp) ]
                 ]
             , viewEventData event.data
             ]
@@ -118,6 +121,3 @@ eventTypeClass eventType =
             "default"
 
 
-formatTimestamp : Time.Posix -> String
-formatTimestamp posix =
-    String.fromInt (Time.posixToMillis posix)
