@@ -11,6 +11,7 @@ If `TASK_FILE` is not provided, you will ask the user what they want to work on 
 
 Derived paths:
 - Task name: filename without extension (e.g., `feature-a`)
+- Worktree: `../chorus.worktrees/{task-name}` (branch: `{task-name}`)
 - Workspace: `workspaces/{task-name}/`
 - Status file: `workspaces/{task-name}/status.md`
 - Reports directory: `workspaces/{task-name}/reports/`
@@ -23,11 +24,12 @@ Report files (where `N` is the current iteration number):
 ## Your Workflow
 
 1. **Parse the task filename** to derive the workspace path
-2. **Create the workspace directory** if it doesn't exist: `workspaces/{task-name}/reports/`
-3. **Read the task specification** from `TASK_FILE`
-4. **Read or initialize status** from `workspaces/{task-name}/status.md`
-5. **Based on the current phase, take the appropriate action**
-6. **Update status file** after each transition
+2. **Create a git worktree** at `../chorus.worktrees/{task-name}` on a new branch `{task-name}`
+3. **Create the workspace directory** if it doesn't exist: `workspaces/{task-name}/reports/`
+4. **Read the task specification** from `TASK_FILE`
+5. **Read or initialize status** from `workspaces/{task-name}/status.md`
+6. **Based on the current phase, take the appropriate action**
+7. **Update status file** after each transition
 
 ## Workflow State Machine
 
@@ -81,6 +83,16 @@ Where `[planning]` is optional - only invoked if the user describes a new task.
 - Write final status update
 - Move the task file from `tasks/{task-name}.md` to `tasks/completed/{task-name}.md`
 - Report success to the user
+- **Ask the user** (using AskUserQuestion) whether to merge the worktree branch to `main`
+  - Options: "Merge to main and clean up" or "Keep the branch for now"
+  - If user approves merge:
+    1. Switch to main: `git checkout main`
+    2. Fast-forward merge: `git merge --ff-only {task-name}`
+    3. Delete the worktree: `git worktree remove ../chorus.worktrees/{task-name}`
+    4. Delete the branch: `git branch -d {task-name}`
+    5. Report that the merge is complete
+  - If user declines:
+    - Report that the branch `{task-name}` and worktree are preserved for manual handling
 
 ## Agent Scripts vs Tools
 
@@ -105,9 +117,10 @@ Task tool:
     TASK_FILE: {TASK_FILE}
     STATUS_FILE: workspaces/{task-name}/status.md
     REPORT_FILE: workspaces/{task-name}/reports/developer-{N}.md
+    WORKTREE: ../chorus.worktrees/{task-name}
 
-    Before starting, navigate to the project root:
-        cd $(git rev-parse --show-toplevel)
+    Before starting, navigate to the worktree:
+        cd $(git rev-parse --show-toplevel)/../chorus.worktrees/{task-name}
 
     Read your instructions from agents/developer.md, then execute your workflow using the parameters above.
 ```
@@ -125,9 +138,10 @@ Task tool:
     STATUS_FILE: workspaces/{task-name}/status.md
     REPORT_FILE: workspaces/{task-name}/reports/developer-{N}.md
     REVIEW_REPORT: workspaces/{task-name}/reports/review-{N-1}.md
+    WORKTREE: ../chorus.worktrees/{task-name}
 
-    Before starting, navigate to the project root:
-        cd $(git rev-parse --show-toplevel)
+    Before starting, navigate to the worktree:
+        cd $(git rev-parse --show-toplevel)/../chorus.worktrees/{task-name}
 
     Read your instructions from agents/developer.md, then execute your workflow using the parameters above.
     Address the issues identified in REVIEW_REPORT.
@@ -146,9 +160,10 @@ Task tool:
     STATUS_FILE: workspaces/{task-name}/status.md
     REPORT_FILE: workspaces/{task-name}/reports/developer-{N}.md
     QA_REPORT: workspaces/{task-name}/reports/qa-{N-1}.md
+    WORKTREE: ../chorus.worktrees/{task-name}
 
-    Before starting, navigate to the project root:
-        cd $(git rev-parse --show-toplevel)
+    Before starting, navigate to the worktree:
+        cd $(git rev-parse --show-toplevel)/../chorus.worktrees/{task-name}
 
     Read your instructions from agents/developer.md, then execute your workflow using the parameters above.
     Fix the failures identified in QA_REPORT.
@@ -166,9 +181,10 @@ Task tool:
     TASK_FILE: {TASK_FILE}
     DEV_REPORT: workspaces/{task-name}/reports/developer-{N}.md
     REPORT_FILE: workspaces/{task-name}/reports/review-{N}.md
+    WORKTREE: ../chorus.worktrees/{task-name}
 
-    Before starting, navigate to the project root:
-        cd $(git rev-parse --show-toplevel)
+    Before starting, navigate to the worktree:
+        cd $(git rev-parse --show-toplevel)/../chorus.worktrees/{task-name}
 
     Read your instructions from agents/developer-review.md, then execute your workflow using the parameters above.
 ```
@@ -185,9 +201,10 @@ Task tool:
     TASK_FILE: {TASK_FILE}
     DEV_REPORT: workspaces/{task-name}/reports/developer-{N}.md
     REPORT_FILE: workspaces/{task-name}/reports/qa-{N}.md
+    WORKTREE: ../chorus.worktrees/{task-name}
 
-    Before starting, navigate to the project root:
-        cd $(git rev-parse --show-toplevel)
+    Before starting, navigate to the worktree:
+        cd $(git rev-parse --show-toplevel)/../chorus.worktrees/{task-name}
 
     Read your instructions from agents/qa.md, then execute your workflow using the parameters above.
 ```
@@ -226,6 +243,8 @@ Update `workspaces/{task-name}/status.md` after each phase transition:
 # Status
 
 Task: {TASK_FILE}
+Branch: {task-name}
+Worktree: ../chorus.worktrees/{task-name}
 Phase: [ask | planning | dev | review | qa | complete]
 Iteration: [number - increment each time we return to dev]
 Current Agent: [Planner | Developer | Review | QA | none]
@@ -300,10 +319,15 @@ When first invoked:
 
 5. **Create directories** if they don't exist: `tasks/completed/`, `workspaces`, `workspaces/{task-name}/reports/`
 
-6. **Initialize `workspaces/{task-name}/status.md`**
+6. **Create git worktree** for the task:
+   - Create a new branch from `main`: `git branch {task-name} main`
+   - Create the worktree: `git worktree add ../chorus.worktrees/{task-name} {task-name}`
+   - The `../chorus.worktrees/` directory must already exist
 
-7. **Set phase to `dev` and iteration to 1**
+7. **Initialize `workspaces/{task-name}/status.md`**
 
-8. **Invoke the Developer agent** with appropriate parameters
+8. **Set phase to `dev` and iteration to 1**
 
-9. **Continue the workflow** until complete or max iterations reached
+9. **Invoke the Developer agent** with appropriate parameters
+
+10. **Continue the workflow** until complete or max iterations reached
