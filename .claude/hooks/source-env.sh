@@ -17,15 +17,6 @@ if [ -z "$COMMAND" ]; then
   exit 0
 fi
 
-# Reject commands that chain multiple operations with &&, &, or ;
-if echo "$COMMAND" | grep -qE '&&|;|&'; then
-  jq -n --arg reason "Commands must not contain '&&', '&', or ';'. Run each command separately instead." '{
-    decision: "block",
-    reason: $reason
-  }'
-  exit 0
-fi
-
 # Prepend sourcing .env (set -a exports all vars, set +a turns it off)
 # The 2>/dev/null handles case where .env doesn't exist
 MODIFIED="set -a; source .env 2>/dev/null; set +a; $COMMAND"
