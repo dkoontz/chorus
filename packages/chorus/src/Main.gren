@@ -11,6 +11,7 @@ The server exposes:
 
 -}
 
+import Agent.Registry as AgentRegistry
 import Bytes
 import ChildProcess
 import Crypto exposing (SecureContext)
@@ -22,8 +23,10 @@ import HttpServer
 import HttpServer.Response as Response exposing (Response)
 import Init
 import Json.Decode as Decode
+import Json.Encode as Encode
 import Logging exposing (LogLevel(..))
 import Node
+import Provider.ClaudeCode as ClaudeCode
 import Stream
 import Task as GrenTask
 import Task.Registry as Registry
@@ -54,6 +57,9 @@ type alias Model =
     { env : Node.Environment
     , server : Maybe HttpServer.Server
     , registry : Maybe Registry.Registry
+    , agentRegistry : Maybe AgentRegistry.AgentRegistry
+    , activeExecutors : Dict String ExecutorState
+    , providerConfig : ClaudeCode.Config
     , fsPermission : FileSystem.Permission
     , cpPermission : ChildProcess.Permission
     , secureContext : SecureContext
@@ -62,6 +68,25 @@ type alias Model =
     , pendingResponses : Array PendingResponse
     , logger : Logging.Logger
     }
+
+
+{-| State of an active agent executor, keyed by task ID.
+-}
+type alias ExecutorState =
+    { taskId : String
+    , agentName : String
+    , agentConfig : AgentRegistry.AgentConfig
+    , status : ExecutorStatus
+    }
+
+
+{-| Status of an agent executor.
+-}
+type ExecutorStatus
+    = ExecStarting
+    | ExecRunning
+    | ExecCompleted String
+    | ExecFailed String
 
 
 type alias PendingResponse =
@@ -77,6 +102,8 @@ type alias Config =
     , workspacesRoot : String
     , staticRoot : String
     , uploadDir : String
+    , agentsRoot : String
+    , fileToolsPath : String
     , logLevel : LogLevel
     }
 
@@ -95,6 +122,8 @@ defaultConfig =
     , workspacesRoot = "./data/workspaces"
     , staticRoot = "./static"
     , uploadDir = "./data/uploads"
+    , agentsRoot = "./data/agents"
+    , fileToolsPath = "./file-tools"
     , logLevel = LogInfo
     }
 
@@ -144,6 +173,8 @@ configFromEnv envVars config =
     , workspacesRoot = dataDir ++ "/workspaces"
     , staticRoot = staticRoot
     , uploadDir = uploadDir
+    , agentsRoot = dataDir ++ "/agents"
+    , fileToolsPath = Dict.get "CHORUS_FILE_TOOLS_PATH" envVars |> Maybe.withDefault config.fileToolsPath
     , logLevel = logLevel
     }
 
@@ -154,10 +185,16 @@ configFromEnv envVars config =
 type Msg
     = GotServer (Result Server.Error HttpServer.Server)
     | GotRegistry (Result Registry.Error Registry.Registry)
+    | GotAgentRegistry (Result AgentRegistry.Error AgentRegistry.AgentRegistry)
     | GotRequest { request : HttpServer.Request, response : Response }
     | GotStaticFile { id : Int, response : Response, result : Static.StaticFileResult }
     | GotApiResult { response : Response, result : Api.ApiResult }
     | GotBinaryResult { response : Response, result : Api.BinaryResult }
+    | GotAgentLookup { taskId : String, prompt : String, response : Response, result : Result AgentRegistry.Error AgentRegistry.AgentConfig }
+    | GotHandoffRecorded { taskId : String, prompt : String, response : Response, agentConfig : AgentRegistry.AgentConfig, apiResult : Api.ApiResult }
+    | GotAgentComplete { taskId : String, result : Result String String }
+    | GotAgentSpecLoaded { taskId : String, prompt : String, agentConfig : AgentRegistry.AgentConfig, result : Result String String }
+    | GotInternalApiResult Api.ApiResult
     | NoOp
 
 
@@ -179,10 +216,18 @@ init env =
                             logger =
                                 Logging.makeLogger env.stdout config.logLevel
 
+                            providerCfg =
+                                { childProcessPermission = cpPermission
+                                , fileToolsPath = config.fileToolsPath
+                                }
+
                             model =
                                 { env = env
                                 , server = Nothing
                                 , registry = Nothing
+                                , agentRegistry = Nothing
+                                , activeExecutors = Dict.empty
+                                , providerConfig = providerCfg
                                 , fsPermission = fsPermission
                                 , cpPermission = cpPermission
                                 , secureContext = secureContext
@@ -209,6 +254,12 @@ init env =
                                         , workspacesRoot = config.workspacesRoot
                                         }
                                         |> GrenTask.attempt GotRegistry
+
+                                    , -- Initialize the agent registry
+                                      AgentRegistry.init fsPermission
+                                        { agentsRoot = config.agentsRoot
+                                        }
+                                        |> GrenTask.attempt GotAgentRegistry
 
                                     , -- Log startup
                                       Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.port_) NoOp
@@ -250,6 +301,252 @@ update msg model =
                     { model = { model | status = Error (registryErrorToString err) }
                     , command = Logging.logError model.logger ("Registry error: " ++ registryErrorToString err) NoOp
                     }
+
+        GotAgentRegistry result ->
+            when result is
+                Ok agentReg ->
+                    { model = { model | agentRegistry = Just agentReg }
+                    , command = Logging.logInfo model.logger "Agent registry initialized" NoOp
+                    }
+
+                Err err ->
+                    { model = model
+                    , command = Logging.logError model.logger ("Agent registry error: " ++ AgentRegistry.errorToString err) NoOp
+                    }
+
+        GotAgentLookup { taskId, prompt, response, result } ->
+            when result is
+                Err err ->
+                    { model = model
+                    , command = sendBadRequest response ("Agent registry error: " ++ AgentRegistry.errorToString err)
+                    }
+
+                Ok agentConfig ->
+                    -- Agent found. Update the task first, then spawn the agent.
+                    -- The HTTP response is sent via GotApiResult from requestStartHandoff.
+                    -- The agent spawn happens via GotHandoffRecorded when the task update succeeds.
+                    when model.registry is
+                        Nothing ->
+                            { model = model
+                            , command = sendBadRequest response "Registry not available"
+                            }
+
+                        Just registry ->
+                            let
+                                ctx =
+                                    { registry = registry
+                                    , fsPermission = model.fsPermission
+                                    , secureContext = model.secureContext
+                                    , registryRoot = Path.fromPosixString model.config.registryRoot
+                                    }
+
+                                toMsg =
+                                    \apiResult ->
+                                        GotHandoffRecorded
+                                            { taskId = taskId
+                                            , prompt = prompt
+                                            , response = response
+                                            , agentConfig = agentConfig
+                                            , apiResult = apiResult
+                                            }
+                            in
+                            { model = model
+                            , command =
+                                Api.requestStartHandoff ctx taskId { agentName = agentConfig.name, prompt = prompt } toMsg
+                            }
+
+        GotHandoffRecorded { taskId, prompt, response, agentConfig, apiResult } ->
+            -- The task update completed. Send the HTTP response first, then load the agent spec and spawn.
+            let
+                sendResponseCmd =
+                    Api.sendApiResponse response apiResult
+            in
+            when apiResult is
+                Api.ApiError _ ->
+                    -- Task update failed (e.g., 409 conflict), just send the error response
+                    { model = model
+                    , command = sendResponseCmd
+                    }
+
+                Api.ApiSuccess _ ->
+                    -- Task updated successfully, send response and load the agent spec file
+                    { model = model
+                    , command =
+                        Cmd.batch
+                            [ sendResponseCmd
+                            , FileSystem.readFile model.fsPermission (Path.fromPosixString agentConfig.specPath)
+                                |> GrenTask.map
+                                    (\bytes ->
+                                        Ok (Bytes.toString bytes |> Maybe.withDefault "")
+                                    )
+                                |> GrenTask.onError
+                                    (\_ ->
+                                        -- Spec file not found or unreadable; proceed without a system prompt
+                                        GrenTask.succeed (Ok "")
+                                    )
+                                |> GrenTask.perform
+                                    (\r ->
+                                        GotAgentSpecLoaded
+                                            { taskId = taskId
+                                            , prompt = prompt
+                                            , agentConfig = agentConfig
+                                            , result = r
+                                            }
+                                    )
+                            ]
+                    }
+
+        GotAgentSpecLoaded { taskId, prompt, agentConfig, result } ->
+            -- Agent spec loaded (or empty if not found). Now spawn the CLI process.
+            let
+                specContent =
+                    when result is
+                        Ok content ->
+                            content
+
+                        Err _ ->
+                            ""
+
+                systemPrompt =
+                    if String.isEmpty specContent then
+                        Nothing
+                    else
+                        Just specContent
+
+                executorState =
+                    { taskId = taskId
+                    , agentName = agentConfig.name
+                    , agentConfig = agentConfig
+                    , status = ExecRunning
+                    }
+
+                cliArgs =
+                    { systemPrompt = systemPrompt
+                    , resumeSessionId = Nothing
+                    , workspaceRoot = ""
+                    , fileToolsPath = model.config.fileToolsPath
+                    , message = prompt
+                    , allowedTools = Just agentConfig.allowedTools
+                    , permissionMode = Just agentConfig.permissionMode
+                    }
+
+                shellCommand =
+                    ClaudeCode.buildShellCommand cliArgs
+
+                options =
+                    { shell = ChildProcess.NoShell
+                    , workingDirectory = ChildProcess.InheritWorkingDirectory
+                    , environmentVariables = ChildProcess.InheritEnvironmentVariables
+                    , maximumBytesWrittenToStreams = 10 * 1024 * 1024
+                    , runDuration = ChildProcess.Milliseconds 600000
+                    }
+            in
+            { model = { model | activeExecutors = Dict.set taskId executorState model.activeExecutors }
+            , command =
+                Cmd.batch
+                    [ ChildProcess.run model.cpPermission "bash" [ "-c", shellCommand ] options
+                        |> GrenTask.map
+                            (\cliResult ->
+                                let
+                                    output =
+                                        cliResult.stdout
+                                            |> Bytes.toString
+                                            |> Maybe.withDefault ""
+
+                                    -- Extract the result text from CLI JSON output
+                                    resultText =
+                                        when Decode.decodeString (Decode.field "result" Decode.string) output is
+                                            Ok text ->
+                                                text
+
+                                            Err _ ->
+                                                output
+                                in
+                                Ok resultText
+                            )
+                        |> GrenTask.onError
+                            (\runError ->
+                                let
+                                    errMsg =
+                                        when runError is
+                                            ChildProcess.InitError { errorCode } ->
+                                                "Failed to start agent CLI: " ++ errorCode
+
+                                            ChildProcess.ProgramError { exitCode, stderr } ->
+                                                let
+                                                    stderrStr =
+                                                        stderr
+                                                            |> Bytes.toString
+                                                            |> Maybe.withDefault ""
+                                                in
+                                                "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                                in
+                                GrenTask.succeed (Err errMsg)
+                            )
+                        |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
+                    , Logging.logInfo model.logger ("Spawned agent " ++ agentConfig.name ++ " for task " ++ taskId) NoOp
+                    ]
+            }
+
+        GotAgentComplete { taskId, result } ->
+            let
+                -- Remove executor from active
+                updatedExecutors =
+                    Dict.remove taskId model.activeExecutors
+
+                updatedModel =
+                    { model | activeExecutors = updatedExecutors }
+            in
+            when result is
+                Ok outputText ->
+                    when model.registry is
+                        Nothing ->
+                            { model = updatedModel
+                            , command = Logging.logError model.logger "Agent completed but registry not available" NoOp
+                            }
+
+                        Just registry ->
+                            let
+                                ctx =
+                                    { registry = registry
+                                    , fsPermission = model.fsPermission
+                                    , secureContext = model.secureContext
+                                    , registryRoot = Path.fromPosixString model.config.registryRoot
+                                    }
+                            in
+                            { model = updatedModel
+                            , command =
+                                Cmd.batch
+                                    [ Api.requestCompleteHandoff ctx taskId { output = outputText }
+                                        (\apiResult -> GotInternalApiResult apiResult)
+                                    , Logging.logInfo model.logger ("Agent completed for task " ++ taskId ++ " (output length: " ++ String.fromInt (String.unitLength outputText) ++ ")") NoOp
+                                    ]
+                            }
+
+                Err errMsg ->
+                    when model.registry is
+                        Nothing ->
+                            { model = updatedModel
+                            , command = Logging.logError model.logger ("Agent failed for task " ++ taskId ++ ": " ++ errMsg) NoOp
+                            }
+
+                        Just registry ->
+                            let
+                                ctx =
+                                    { registry = registry
+                                    , fsPermission = model.fsPermission
+                                    , secureContext = model.secureContext
+                                    , registryRoot = Path.fromPosixString model.config.registryRoot
+                                    }
+                            in
+                            { model = updatedModel
+                            , command =
+                                Cmd.batch
+                                    [ Api.requestCompleteHandoff ctx taskId { output = "Agent failed: " ++ errMsg }
+                                        (\apiResult -> GotInternalApiResult apiResult)
+                                    , Logging.logError model.logger ("Agent failed for task " ++ taskId ++ ": " ++ errMsg) NoOp
+                                    ]
+                            }
 
         GotRequest { request, response } ->
             let
@@ -309,6 +606,12 @@ update msg model =
         GotBinaryResult { response, result } ->
             { model = model
             , command = Api.sendBinaryResponse response result
+            }
+
+        GotInternalApiResult _ ->
+            -- Internal API result from agent completion; no HTTP response to send
+            { model = model
+            , command = Cmd.none
             }
 
         NoOp ->
@@ -405,6 +708,53 @@ handleRoute model route request response =
 
                         Router.DeleteAttachment { taskId, filename } ->
                             Api.requestDeleteAttachment ctx taskId filename model.config.uploadDir toMsg
+
+                        Router.StartHandoff taskId ->
+                            when parseStartHandoffBody request is
+                                Ok params ->
+                                    when model.agentRegistry is
+                                        Nothing ->
+                                            sendBadRequest response "Agent registry not initialized"
+
+                                        Just agentReg ->
+                                            -- Look up the agent first; only update the task if the agent exists
+                                            AgentRegistry.getAgent agentReg params.agentName
+                                                |> GrenTask.attempt
+                                                    (\result ->
+                                                        GotAgentLookup
+                                                            { taskId = taskId
+                                                            , prompt = params.prompt
+                                                            , response = response
+                                                            , result = result
+                                                            }
+                                                    )
+
+                                Err errMsg ->
+                                    sendBadRequest response errMsg
+
+                        Router.CompleteHandoff taskId ->
+                            when parseCompleteHandoffBody request is
+                                Ok params ->
+                                    Api.requestCompleteHandoff ctx taskId params toMsg
+
+                                Err errMsg ->
+                                    sendBadRequest response errMsg
+
+                        Router.ListAgents ->
+                            when model.agentRegistry is
+                                Nothing ->
+                                    sendServiceUnavailable response
+
+                                Just agentReg ->
+                                    Api.requestAgents agentReg toMsg
+
+                        Router.GetAgent agentName ->
+                            when model.agentRegistry is
+                                Nothing ->
+                                    sendServiceUnavailable response
+
+                                Just agentReg ->
+                                    Api.requestAgent agentReg agentName toMsg
 
                         Router.NotFound ->
                             sendNotFound response
@@ -593,6 +943,46 @@ parseUpdatePlanningBody request =
         Err _ ->
             Err "Invalid JSON body for planning update"
 
+
+
+{-| Parse the body for POST /api/tasks/:id/handoff.
+-}
+parseStartHandoffBody : HttpServer.Request -> Result String Api.StartHandoffParams
+parseStartHandoffBody request =
+    let
+        decoder =
+            Decode.map2
+                (\agentName prompt ->
+                    { agentName = agentName
+                    , prompt = prompt
+                    }
+                )
+                (Decode.field "agentName" Decode.string)
+                (Decode.field "prompt" Decode.string)
+    in
+    when HttpServer.bodyFromJson decoder request is
+        Ok params ->
+            Ok params
+
+        Err _ ->
+            Err "Invalid JSON body for handoff"
+
+
+{-| Parse the body for PUT /api/tasks/:id/handoff/complete.
+-}
+parseCompleteHandoffBody : HttpServer.Request -> Result String Api.CompleteHandoffParams
+parseCompleteHandoffBody request =
+    let
+        decoder =
+            Decode.map (\output -> { output = output })
+                (Decode.field "output" Decode.string)
+    in
+    when HttpServer.bodyFromJson decoder request is
+        Ok params ->
+            Ok params
+
+        Err _ ->
+            Err "Invalid JSON body for handoff completion"
 
 
 -- SUBSCRIPTIONS

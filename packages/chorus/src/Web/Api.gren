@@ -12,10 +12,16 @@ module Web.Api exposing
     , requestUploadAttachment
     , requestDownloadAttachment
     , requestDeleteAttachment
+    , requestStartHandoff
+    , requestCompleteHandoff
+    , requestAgents
+    , requestAgent
     , sendApiResponse
     , sendBinaryResponse
     , CreateTaskParams
     , UpdatePlanningParams
+    , StartHandoffParams
+    , CompleteHandoffParams
     )
 
 {-| API request handlers for the Chorus web interface.
@@ -24,6 +30,7 @@ Each endpoint produces an ApiResult that should be sent back via the Response.
 
 -}
 
+import Agent.Registry as AgentRegistry exposing (encodeAgentConfig)
 import Bytes exposing (Bytes)
 import Crypto exposing (SecureContext)
 import Dict exposing (Dict)
@@ -37,7 +44,7 @@ import Task as GrenTask exposing (Task)
 import Task.Queue as Queue
 import Task.Registry as Registry
 import Time
-import Types exposing (Task(..), TaskStatus(..), SourceInfo, PlanningFields)
+import Types exposing (Task(..), TaskStatus(..), SourceInfo, PlanningFields, HandoffRecord, setAgentChain)
 import Web.Router exposing (Route(..))
 
 
@@ -77,6 +84,21 @@ type alias UpdatePlanningParams =
     , requirements : Maybe (Array String)
     , acceptanceCriteria : Maybe (Array String)
     , plan : Maybe (Array String)
+    }
+
+
+{-| Parameters for starting a hand-off.
+-}
+type alias StartHandoffParams =
+    { agentName : String
+    , prompt : String
+    }
+
+
+{-| Parameters for completing a hand-off.
+-}
+type alias CompleteHandoffParams =
+    { output : String
     }
 
 
@@ -591,6 +613,230 @@ requestDeleteAttachment ctx taskId filename uploadDir toMsg =
             )
         |> GrenTask.perform toMsg
 
+
+
+{-| POST /api/tasks/:id/handoff - Start a hand-off to an agent.
+
+Sets currentAgent, appends a HandoffRecord to agentChain, records a history event,
+and transitions the task to Active if it was Pending or Waiting.
+The actual agent spawning is handled by the caller (Main.gren).
+-}
+requestStartHandoff : ApiContext -> String -> StartHandoffParams -> (ApiResult -> msg) -> Cmd msg
+requestStartHandoff ctx taskId params toMsg =
+    -- First check if the task exists and currentAgent is not already set
+    Registry.getTask ctx.registry taskId
+        |> GrenTask.andThen
+            (\maybeTask ->
+                when maybeTask is
+                    Nothing ->
+                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ taskId })
+
+                    Just task ->
+                        when Types.taskCurrentAgent task is
+                            Just existingAgent ->
+                                GrenTask.succeed (ApiError { statusCode = 409, code = "CONFLICT", message = "Agent already active on task: " ++ existingAgent })
+
+                            Nothing ->
+                                Time.now
+                                    |> GrenTask.mapError (\_ -> Registry.FileSystemError "Failed to get time")
+                                    |> GrenTask.andThen
+                                        (\now ->
+                                            let
+                                                newRecord =
+                                                    { agentName = params.agentName
+                                                    , startedAt = now
+                                                    , completedAt = Nothing
+                                                    , output = ""
+                                                    }
+
+                                                updateFn t =
+                                                    let
+                                                        chain =
+                                                            Types.taskAgentChain t
+
+                                                        newChain =
+                                                            Array.pushLast newRecord chain
+
+                                                        -- Set status to Active if Pending or Waiting
+                                                        newStatus =
+                                                            when Types.taskStatus t is
+                                                                Pending ->
+                                                                    Active
+
+                                                                Waiting ->
+                                                                    Active
+
+                                                                other ->
+                                                                    other
+
+                                                        updated =
+                                                            t
+                                                                |> Types.setCurrentAgent (Just params.agentName)
+                                                                |> Types.setTaskStatus newStatus
+                                                    in
+                                                    setAgentChain newChain updated
+                                            in
+                                            Registry.updateTask ctx.registry taskId updateFn
+                                                |> GrenTask.andThen
+                                                    (\updatedTask ->
+                                                        -- Record history event
+                                                        Registry.recordEvent ctx.registry taskId
+                                                            { eventType = "agent_handoff_started"
+                                                            , data = Dict.singleton "agentName" params.agentName
+                                                            }
+                                                            |> GrenTask.map (\_ -> updatedTask)
+                                                    )
+                                                |> GrenTask.andThen
+                                                    (\updatedTask ->
+                                                        Time.now
+                                                            |> GrenTask.mapError (\_ -> Registry.FileSystemError "Failed to get time")
+                                                            |> GrenTask.map
+                                                                (\nowForResponse ->
+                                                                    ApiSuccess
+                                                                        { statusCode = 200
+                                                                        , body = wrapResponse (Types.encodeTask updatedTask) nowForResponse
+                                                                        }
+                                                                )
+                                                    )
+                                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = registryErrorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| PUT /api/tasks/:id/handoff/complete - Complete a hand-off.
+
+Sets completedAt on the last agentChain entry, stores the output,
+clears currentAgent, sets status to Waiting, and records a history event.
+-}
+requestCompleteHandoff : ApiContext -> String -> CompleteHandoffParams -> (ApiResult -> msg) -> Cmd msg
+requestCompleteHandoff ctx taskId params toMsg =
+    Registry.getTask ctx.registry taskId
+        |> GrenTask.andThen
+            (\maybeTask ->
+                when maybeTask is
+                    Nothing ->
+                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ taskId })
+
+                    Just task ->
+                        Time.now
+                            |> GrenTask.mapError (\_ -> Registry.FileSystemError "Failed to get time")
+                            |> GrenTask.andThen
+                                (\now ->
+                                    let
+                                        chain =
+                                            Types.taskAgentChain task
+
+                                        agentName =
+                                            Types.taskCurrentAgent task
+                                                |> Maybe.withDefault "unknown"
+
+                                        -- Update the last entry in agentChain
+                                        updatedChain =
+                                            when Array.popLast chain is
+                                                Nothing ->
+                                                    chain
+
+                                                Just { last, initial } ->
+                                                    Array.pushLast
+                                                        { last
+                                                            | completedAt = Just now
+                                                            , output = params.output
+                                                        }
+                                                        initial
+
+                                        updateFn t =
+                                            t
+                                                |> Types.setCurrentAgent Nothing
+                                                |> Types.setTaskStatus Waiting
+                                                |> setAgentChain updatedChain
+                                    in
+                                    Registry.updateTask ctx.registry taskId updateFn
+                                        |> GrenTask.andThen
+                                            (\updatedTask ->
+                                                -- Record history event
+                                                Registry.recordEvent ctx.registry taskId
+                                                    { eventType = "agent_handoff_completed"
+                                                    , data =
+                                                        Dict.empty
+                                                            |> Dict.set "agentName" agentName
+                                                            |> Dict.set "outputLength" (String.fromInt (String.unitLength params.output))
+                                                    }
+                                                    |> GrenTask.map (\_ -> updatedTask)
+                                            )
+                                        |> GrenTask.andThen
+                                            (\updatedTask ->
+                                                Time.now
+                                                    |> GrenTask.mapError (\_ -> Registry.FileSystemError "Failed to get time")
+                                                    |> GrenTask.map
+                                                        (\nowForResponse ->
+                                                            ApiSuccess
+                                                                { statusCode = 200
+                                                                , body = wrapResponse (Types.encodeTask updatedTask) nowForResponse
+                                                                }
+                                                        )
+                                            )
+                                )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = registryErrorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| GET /api/agents - List all agent configs.
+-}
+requestAgents : AgentRegistry.AgentRegistry -> (ApiResult -> msg) -> Cmd msg
+requestAgents agentRegistry toMsg =
+    AgentRegistry.listAgents agentRegistry
+        |> GrenTask.andThen
+            (\agents ->
+                Time.now
+                    |> GrenTask.mapError (\_ -> AgentRegistry.FileSystemError "Failed to get time")
+                    |> GrenTask.map
+                        (\now ->
+                            let
+                                agentsJson =
+                                    Encode.array encodeAgentConfig agents
+                            in
+                            ApiSuccess { statusCode = 200, body = wrapResponse agentsJson now }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "AGENT_REGISTRY_ERROR", message = AgentRegistry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| GET /api/agents/:name - Get a single agent config.
+-}
+requestAgent : AgentRegistry.AgentRegistry -> String -> (ApiResult -> msg) -> Cmd msg
+requestAgent agentRegistry name toMsg =
+    AgentRegistry.getAgent agentRegistry name
+        |> GrenTask.andThen
+            (\agentConfig ->
+                Time.now
+                    |> GrenTask.mapError (\_ -> AgentRegistry.FileSystemError "Failed to get time")
+                    |> GrenTask.map
+                        (\now ->
+                            ApiSuccess { statusCode = 200, body = wrapResponse (encodeAgentConfig agentConfig) now }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                when err is
+                    AgentRegistry.AgentNotFound _ ->
+                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = AgentRegistry.errorToString err })
+
+                    _ ->
+                        GrenTask.succeed (ApiError { statusCode = 500, code = "AGENT_REGISTRY_ERROR", message = AgentRegistry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
 
 
 -- RESPONSE SENDING

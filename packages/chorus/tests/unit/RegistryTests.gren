@@ -6,7 +6,8 @@ module RegistryTests exposing (tests)
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task
-import Types exposing (Task(..), TaskStatus(..), SourceInfo, Attachment)
+import Types exposing (Task(..), TaskStatus(..), SourceInfo, Attachment, HandoffRecord)
+import Provider.ClaudeCode as ClaudeCode
 import Time
 
 
@@ -23,6 +24,19 @@ tests =
     , testMissingTaskTypeFieldFails
     , testTaskEncodeDecodeWithPlanningFields
     , testDescriptionOnlyRoundTrip
+    , testHandoffRecordEncodeDecode
+    , testHandoffRecordWithNothingCompletedAtEncodeDecode
+    , testTaskWithHandoffFieldsEncodeDecode
+    , testPlannedTaskWithHandoffFieldsEncodeDecode
+    , testPlanTaskCarriesHandoffFields
+    , testTaskCurrentAgentAccessor
+    , testTaskAgentChainAccessor
+    , testSetCurrentAgentMutator
+    , testSetAgentChainMutator
+    , testToolCliFlagSingleToolWithParens
+    , testToolCliFlagMultipleTools
+    , testToolCliFlagSpacesInsideParens
+    , testToolCliFlagNoParens
     ]
 
 
@@ -65,6 +79,8 @@ testTaskEncodeDecode =
                         }
                     , agentWorkspace = "/tmp/workspace"
                     , attachments = []
+                    , currentAgent = Nothing
+                    , agentChain = []
                     }
 
             encoded =
@@ -127,6 +143,8 @@ testStatusRoundTrip status =
                     }
                 , agentWorkspace = "/tmp"
                 , attachments = []
+                , currentAgent = Nothing
+                , agentChain = []
                 }
 
         encoded =
@@ -166,6 +184,8 @@ testSourceInfoEncodeDecode =
                         }
                     , agentWorkspace = "/tmp"
                     , attachments = []
+                    , currentAgent = Nothing
+                    , agentChain = []
                     }
 
             encoded =
@@ -223,6 +243,8 @@ testAttachmentRoundTrip =
                         }
                     , agentWorkspace = "/tmp/workspace"
                     , attachments = [ attachment1, attachment2 ]
+                    , currentAgent = Nothing
+                    , agentChain = []
                     }
 
             encoded =
@@ -353,6 +375,8 @@ testTaskEncodeDecodeWithPlanningFields =
                         }
                     , agentWorkspace = "/tmp/workspace"
                     , attachments = []
+                    , currentAgent = Nothing
+                    , agentChain = []
                     , summary = "Build a REST API for task management"
                     , requirements = [ "Support CRUD operations", "Use JSON format" ]
                     , acceptanceCriteria = [ "All endpoints return valid JSON", "Error responses include error codes" ]
@@ -397,6 +421,8 @@ testDescriptionOnlyRoundTrip =
                         }
                     , agentWorkspace = "/tmp/ws"
                     , attachments = []
+                    , currentAgent = Nothing
+                    , agentChain = []
                     }
 
             encoded =
@@ -414,4 +440,501 @@ testDescriptionOnlyRoundTrip =
 
             Err err ->
                 Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testHandoffRecordEncodeDecode : { name : String, run : Task.Task String {} }
+testHandoffRecordEncodeDecode =
+    { name = "HandoffRecord encodes and decodes correctly"
+    , run =
+        let
+            record =
+                { agentName = "developer"
+                , startedAt = Time.millisToPosix 1707048600000
+                , completedAt = Just (Time.millisToPosix 1707048700000)
+                , output = "Implementation complete"
+                }
+
+            encoded =
+                Types.encodeHandoffRecord record
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Types.handoffRecordDecoder json
+        in
+        when decoded is
+            Ok decodedRecord ->
+                expectEqual record.agentName decodedRecord.agentName
+                    |> Task.andThen (\_ -> expectEqual record.startedAt decodedRecord.startedAt)
+                    |> Task.andThen (\_ -> expectEqual record.completedAt decodedRecord.completedAt)
+                    |> Task.andThen (\_ -> expectEqual record.output decodedRecord.output)
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testHandoffRecordWithNothingCompletedAtEncodeDecode : { name : String, run : Task.Task String {} }
+testHandoffRecordWithNothingCompletedAtEncodeDecode =
+    { name = "HandoffRecord with completedAt=Nothing encodes and decodes"
+    , run =
+        let
+            record =
+                { agentName = "qa"
+                , startedAt = Time.millisToPosix 1707048600000
+                , completedAt = Nothing
+                , output = ""
+                }
+
+            encoded =
+                Types.encodeHandoffRecord record
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Types.handoffRecordDecoder json
+        in
+        when decoded is
+            Ok decodedRecord ->
+                expectEqual record.agentName decodedRecord.agentName
+                    |> Task.andThen (\_ -> expectEqual record.startedAt decodedRecord.startedAt)
+                    |> Task.andThen (\_ -> expectEqual Nothing decodedRecord.completedAt)
+                    |> Task.andThen (\_ -> expectEqual "" decodedRecord.output)
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testTaskWithHandoffFieldsEncodeDecode : { name : String, run : Task.Task String {} }
+testTaskWithHandoffFieldsEncodeDecode =
+    { name = "Task with populated handoff fields encodes and decodes"
+    , run =
+        let
+            handoffRecord =
+                { agentName = "developer"
+                , startedAt = Time.millisToPosix 1707048600000
+                , completedAt = Just (Time.millisToPosix 1707048700000)
+                , output = "Done"
+                }
+
+            task =
+                DescriptionOnly
+                    { id = "handoff-test"
+                    , description = "Test handoff fields"
+                    , status = Active
+                    , createdAt = Time.millisToPosix 1707048500000
+                    , updatedAt = Time.millisToPosix 1707048700000
+                    , sessionId = Nothing
+                    , source =
+                        { sourceType = "terminal"
+                        , userId = "testuser"
+                        , conversationId = Nothing
+                        }
+                    , agentWorkspace = "/tmp/workspace"
+                    , attachments = []
+                    , currentAgent = Just "qa"
+                    , agentChain = [ handoffRecord ]
+                    }
+
+            encoded =
+                Types.encodeTask task
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Types.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                expectEqual (Just "qa") (Types.taskCurrentAgent decodedTask)
+                    |> Task.andThen (\_ -> expectEqual 1 (Array.length (Types.taskAgentChain decodedTask)))
+                    |> Task.andThen
+                        (\_ ->
+                            when Array.first (Types.taskAgentChain decodedTask) is
+                                Just r ->
+                                    expectEqual "developer" r.agentName
+                                        |> Task.andThen (\_ -> expectEqual "Done" r.output)
+
+                                Nothing ->
+                                    Task.fail "Expected one handoff record in agentChain"
+                        )
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testPlannedTaskWithHandoffFieldsEncodeDecode : { name : String, run : Task.Task String {} }
+testPlannedTaskWithHandoffFieldsEncodeDecode =
+    { name = "Planned task with handoff fields encodes and decodes"
+    , run =
+        let
+            handoffRecord =
+                { agentName = "developer"
+                , startedAt = Time.millisToPosix 1707048600000
+                , completedAt = Just (Time.millisToPosix 1707048700000)
+                , output = "Implemented"
+                }
+
+            task =
+                Planned
+                    { id = "planned-handoff-test"
+                    , description = "Test planned task with handoff"
+                    , status = Active
+                    , createdAt = Time.millisToPosix 1707048500000
+                    , updatedAt = Time.millisToPosix 1707048700000
+                    , sessionId = Nothing
+                    , source =
+                        { sourceType = "terminal"
+                        , userId = "testuser"
+                        , conversationId = Nothing
+                        }
+                    , agentWorkspace = "/tmp/workspace"
+                    , attachments = []
+                    , currentAgent = Just "developer"
+                    , agentChain = [ handoffRecord ]
+                    , summary = "Test summary"
+                    , requirements = [ "Req 1" ]
+                    , acceptanceCriteria = [ "Criteria 1" ]
+                    , plan = [ "Step 1" ]
+                    }
+
+            encoded =
+                Types.encodeTask task
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Types.taskDecoder json
+        in
+        when decoded is
+            Ok decodedTask ->
+                expectEqual (Just "developer") (Types.taskCurrentAgent decodedTask)
+                    |> Task.andThen (\_ -> expectEqual 1 (Array.length (Types.taskAgentChain decodedTask)))
+                    |> Task.andThen (\_ -> expectEqual True (Types.isPlanned decodedTask))
+                    |> Task.andThen
+                        (\_ ->
+                            when Array.first (Types.taskAgentChain decodedTask) is
+                                Just r ->
+                                    expectEqual "developer" r.agentName
+                                        |> Task.andThen (\_ -> expectEqual "Implemented" r.output)
+
+                                Nothing ->
+                                    Task.fail "Expected one handoff record in agentChain"
+                        )
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testPlanTaskCarriesHandoffFields : { name : String, run : Task.Task String {} }
+testPlanTaskCarriesHandoffFields =
+    { name = "planTask carries forward currentAgent and agentChain"
+    , run =
+        let
+            handoffRecord =
+                { agentName = "planner"
+                , startedAt = Time.millisToPosix 1707048600000
+                , completedAt = Nothing
+                , output = ""
+                }
+
+            descTask =
+                DescriptionOnly
+                    { id = "plan-carry"
+                    , description = "Test carry forward"
+                    , status = Active
+                    , createdAt = Time.millisToPosix 1707048500000
+                    , updatedAt = Time.millisToPosix 1707048600000
+                    , sessionId = Nothing
+                    , source =
+                        { sourceType = "terminal"
+                        , userId = "testuser"
+                        , conversationId = Nothing
+                        }
+                    , agentWorkspace = "/tmp/workspace"
+                    , attachments = []
+                    , currentAgent = Just "planner"
+                    , agentChain = [ handoffRecord ]
+                    }
+
+            planningFields =
+                { summary = "Test summary"
+                , requirements = [ "Req 1" ]
+                , acceptanceCriteria = [ "Criteria 1" ]
+                , plan = [ "Step 1" ]
+                }
+
+            plannedTask =
+                Types.planTask descTask planningFields
+        in
+        expectEqual (Just "planner") (Types.taskCurrentAgent plannedTask)
+            |> Task.andThen (\_ -> expectEqual 1 (Array.length (Types.taskAgentChain plannedTask)))
+            |> Task.andThen
+                (\_ ->
+                    when Array.first (Types.taskAgentChain plannedTask) is
+                        Just r ->
+                            expectEqual "planner" r.agentName
+
+                        Nothing ->
+                            Task.fail "Expected handoff record to be carried forward"
+                )
+    }
+
+
+testTaskCurrentAgentAccessor : { name : String, run : Task.Task String {} }
+testTaskCurrentAgentAccessor =
+    { name = "taskCurrentAgent accessor works for both task types"
+    , run =
+        let
+            descTask =
+                DescriptionOnly
+                    { id = "t1"
+                    , description = "Test"
+                    , status = Pending
+                    , createdAt = Time.millisToPosix 0
+                    , updatedAt = Time.millisToPosix 0
+                    , sessionId = Nothing
+                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , agentWorkspace = "/tmp"
+                    , attachments = []
+                    , currentAgent = Just "developer"
+                    , agentChain = []
+                    }
+
+            plannedTask =
+                Planned
+                    { id = "t2"
+                    , description = "Test"
+                    , status = Active
+                    , createdAt = Time.millisToPosix 0
+                    , updatedAt = Time.millisToPosix 0
+                    , sessionId = Nothing
+                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , agentWorkspace = "/tmp"
+                    , attachments = []
+                    , currentAgent = Just "qa"
+                    , agentChain = []
+                    , summary = ""
+                    , requirements = []
+                    , acceptanceCriteria = []
+                    , plan = []
+                    }
+        in
+        expectEqual (Just "developer") (Types.taskCurrentAgent descTask)
+            |> Task.andThen (\_ -> expectEqual (Just "qa") (Types.taskCurrentAgent plannedTask))
+    }
+
+
+testTaskAgentChainAccessor : { name : String, run : Task.Task String {} }
+testTaskAgentChainAccessor =
+    { name = "taskAgentChain accessor returns correct chain"
+    , run =
+        let
+            record1 =
+                { agentName = "developer"
+                , startedAt = Time.millisToPosix 100
+                , completedAt = Just (Time.millisToPosix 200)
+                , output = "first"
+                }
+
+            record2 =
+                { agentName = "qa"
+                , startedAt = Time.millisToPosix 300
+                , completedAt = Nothing
+                , output = ""
+                }
+
+            task =
+                DescriptionOnly
+                    { id = "chain-test"
+                    , description = "Test"
+                    , status = Active
+                    , createdAt = Time.millisToPosix 0
+                    , updatedAt = Time.millisToPosix 0
+                    , sessionId = Nothing
+                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , agentWorkspace = "/tmp"
+                    , attachments = []
+                    , currentAgent = Just "qa"
+                    , agentChain = [ record1, record2 ]
+                    }
+        in
+        let
+            chain =
+                Types.taskAgentChain task
+        in
+        expectEqual 2 (Array.length chain)
+            |> Task.andThen
+                (\_ ->
+                    when Array.first chain is
+                        Just r ->
+                            expectEqual "developer" r.agentName
+                                |> Task.andThen (\_ -> expectEqual (Time.millisToPosix 100) r.startedAt)
+                                |> Task.andThen (\_ -> expectEqual (Just (Time.millisToPosix 200)) r.completedAt)
+                                |> Task.andThen (\_ -> expectEqual "first" r.output)
+
+                        Nothing ->
+                            Task.fail "Expected first chain entry"
+                )
+            |> Task.andThen
+                (\_ ->
+                    when Array.get 1 chain is
+                        Just r ->
+                            expectEqual "qa" r.agentName
+                                |> Task.andThen (\_ -> expectEqual (Time.millisToPosix 300) r.startedAt)
+                                |> Task.andThen (\_ -> expectEqual Nothing r.completedAt)
+                                |> Task.andThen (\_ -> expectEqual "" r.output)
+
+                        Nothing ->
+                            Task.fail "Expected second chain entry"
+                )
+    }
+
+
+testSetCurrentAgentMutator : { name : String, run : Task.Task String {} }
+testSetCurrentAgentMutator =
+    { name = "setCurrentAgent mutator works correctly"
+    , run =
+        let
+            task =
+                DescriptionOnly
+                    { id = "mutator-test"
+                    , description = "Test"
+                    , status = Pending
+                    , createdAt = Time.millisToPosix 0
+                    , updatedAt = Time.millisToPosix 0
+                    , sessionId = Nothing
+                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , agentWorkspace = "/tmp"
+                    , attachments = []
+                    , currentAgent = Nothing
+                    , agentChain = []
+                    }
+
+            updated =
+                Types.setCurrentAgent (Just "developer") task
+
+            cleared =
+                Types.setCurrentAgent Nothing updated
+        in
+        expectEqual (Just "developer") (Types.taskCurrentAgent updated)
+            |> Task.andThen (\_ -> expectEqual Nothing (Types.taskCurrentAgent cleared))
+    }
+
+
+testSetAgentChainMutator : { name : String, run : Task.Task String {} }
+testSetAgentChainMutator =
+    { name = "setAgentChain mutator works for both task types"
+    , run =
+        let
+            record =
+                { agentName = "developer"
+                , startedAt = Time.millisToPosix 100
+                , completedAt = Nothing
+                , output = ""
+                }
+
+            descTask =
+                DescriptionOnly
+                    { id = "chain-mutator-test"
+                    , description = "Test"
+                    , status = Pending
+                    , createdAt = Time.millisToPosix 0
+                    , updatedAt = Time.millisToPosix 0
+                    , sessionId = Nothing
+                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , agentWorkspace = "/tmp"
+                    , attachments = []
+                    , currentAgent = Nothing
+                    , agentChain = []
+                    }
+
+            plannedTask =
+                Planned
+                    { id = "chain-mutator-test-2"
+                    , description = "Test"
+                    , status = Active
+                    , createdAt = Time.millisToPosix 0
+                    , updatedAt = Time.millisToPosix 0
+                    , sessionId = Nothing
+                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , agentWorkspace = "/tmp"
+                    , attachments = []
+                    , currentAgent = Nothing
+                    , agentChain = []
+                    , summary = ""
+                    , requirements = []
+                    , acceptanceCriteria = []
+                    , plan = []
+                    }
+
+            updatedDesc =
+                Types.setAgentChain [ record ] descTask
+
+            updatedPlanned =
+                Types.setAgentChain [ record ] plannedTask
+        in
+        expectEqual 1 (Array.length (Types.taskAgentChain updatedDesc))
+            |> Task.andThen
+                (\_ ->
+                    when Array.first (Types.taskAgentChain updatedDesc) is
+                        Just r ->
+                            expectEqual "developer" r.agentName
+
+                        Nothing ->
+                            Task.fail "Expected chain entry on DescriptionOnly task"
+                )
+            |> Task.andThen (\_ -> expectEqual 1 (Array.length (Types.taskAgentChain updatedPlanned)))
+            |> Task.andThen
+                (\_ ->
+                    when Array.first (Types.taskAgentChain updatedPlanned) is
+                        Just r ->
+                            expectEqual "developer" r.agentName
+
+                        Nothing ->
+                            Task.fail "Expected chain entry on Planned task"
+                )
+    }
+
+
+-- TOOLCLIFLAGFROMALLOWEDTOOLS TESTS
+
+
+testToolCliFlagSingleToolWithParens : { name : String, run : Task.Task String {} }
+testToolCliFlagSingleToolWithParens =
+    { name = "toolCliFlagFromAllowedTools extracts single tool name from parenthesized value"
+    , run =
+        expectEqual "Bash" (ClaudeCode.toolCliFlagFromAllowedTools "Bash(file-tools *)")
+    }
+
+
+testToolCliFlagMultipleTools : { name : String, run : Task.Task String {} }
+testToolCliFlagMultipleTools =
+    { name = "toolCliFlagFromAllowedTools extracts multiple tool names"
+    , run =
+        expectEqual "Bash Edit Read" (ClaudeCode.toolCliFlagFromAllowedTools "Bash(file-tools *) Edit Read(*)")
+    }
+
+
+testToolCliFlagSpacesInsideParens : { name : String, run : Task.Task String {} }
+testToolCliFlagSpacesInsideParens =
+    { name = "toolCliFlagFromAllowedTools handles spaces inside parentheses"
+    , run =
+        expectEqual "Bash" (ClaudeCode.toolCliFlagFromAllowedTools "Bash(file-tools * scripts/agent/*)")
+    }
+
+
+testToolCliFlagNoParens : { name : String, run : Task.Task String {} }
+testToolCliFlagNoParens =
+    { name = "toolCliFlagFromAllowedTools handles plain tool names without parentheses"
+    , run =
+        expectEqual "Bash Edit" (ClaudeCode.toolCliFlagFromAllowedTools "Bash Edit")
     }

@@ -41,7 +41,7 @@ init env =
                 , stdout = env.stdout
                 }
         in
-        Stream.writeLineAsBytes "Running 18 integration tests...\n" env.stdout
+        Stream.writeLineAsBytes "Running 19 integration tests...\n" env.stdout
             |> GrenTask.onError (\_ -> GrenTask.succeed env.stdout)
             |> GrenTask.andThen (\_ -> setupTempDir fsPermission tempDir)
             |> GrenTask.andThen (\_ -> runAllTests ctx)
@@ -156,6 +156,9 @@ runAllTests ctx =
               }
             , { name = "length returns correct count"
               , run = testQueueLength
+              }
+            , { name = "task summary includes currentAgent in registry index"
+              , run = testTaskSummaryIncludesCurrentAgent
               }
             ]
     in
@@ -979,4 +982,75 @@ testQueueLength ctx subdir =
                 Queue.length ctx.fsPermission taskDir
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen (assertEqual "length after 3 enqueues" 3)
+            )
+
+
+testTaskSummaryIncludesCurrentAgent : Context -> String -> GrenTask.Task String {}
+testTaskSummaryIncludesCurrentAgent ctx subdir =
+    initRegistry ctx subdir
+        |> GrenTask.andThen
+            (\registry ->
+                Registry.createTask registry
+                    { description = "Summary Agent Test"
+                    , source =
+                        { sourceType = "test"
+                        , userId = "tester"
+                        , conversationId = Nothing
+                        }
+                    }
+                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.map (\task -> { registry = registry, task = task })
+            )
+        |> GrenTask.andThen
+            (\{ registry, task } ->
+                -- Set currentAgent on the task
+                Registry.updateTask registry (Types.taskId task)
+                    (\t -> Types.setCurrentAgent (Just "developer") t)
+                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.map (\_ -> Types.taskId task)
+            )
+        |> GrenTask.andThen
+            (\taskId ->
+                -- Read registry.json and verify currentAgent appears in the summary
+                let
+                    registryJsonPath =
+                        Path.append (Path.fromPosixString (subdir ++ "/registry/registry.json")) ctx.tempDir
+                in
+                FileSystem.readFile ctx.fsPermission registryJsonPath
+                    |> GrenTask.mapError (\e -> "Failed to read registry.json: " ++ FileSystem.errorToString e)
+                    |> GrenTask.andThen
+                        (\bytes ->
+                            when Bytes.toString bytes is
+                                Nothing ->
+                                    GrenTask.fail "Could not decode registry.json as UTF-8"
+
+                                Just content ->
+                                    let
+                                        -- Decode the tasks array and find our task's currentAgent
+                                        summaryDecoder =
+                                            Decode.field "tasks"
+                                                (Decode.array
+                                                    (Decode.map2
+                                                        (\id currentAgent -> { id = id, currentAgent = currentAgent })
+                                                        (Decode.field "id" Decode.string)
+                                                        (Decode.field "currentAgent" (Decode.maybe Decode.string))
+                                                    )
+                                                )
+                                    in
+                                    when Decode.decodeString summaryDecoder content is
+                                        Err err ->
+                                            GrenTask.fail ("Failed to decode registry.json: " ++ Decode.errorToString err)
+
+                                        Ok summaries ->
+                                            let
+                                                matchingSummary =
+                                                    Array.findFirst (\s -> s.id == taskId) summaries
+                                            in
+                                            when matchingSummary is
+                                                Nothing ->
+                                                    GrenTask.fail "Task not found in registry.json summaries"
+
+                                                Just { value } ->
+                                                    assertEqual "currentAgent in summary" (Just "developer") value.currentAgent
+                        )
             )

@@ -7,7 +7,7 @@
     "build:ui": "cd packages/chorus-ui && gren make Main --output=build/app.js",
     "build:tools": "cd packages/tools && gren make Main --output=build/file-tools-tmp && tail -n +2 build/file-tools-tmp > build/file-tools.js && bun build --compile build/file-tools.js --outfile build/file-tools && rm build/file-tools-tmp",
     "build:chorus": "cd packages/chorus && gren make Main --output=build/chorus-tmp && tail -n +2 build/chorus-tmp > build/chorus.js && echo 'this.Gren.Main.init({});' >> build/chorus.js && bun build --compile build/chorus.js --outfile build/chorus && rm build/chorus-tmp",
-    "build:copy-ui": "cp packages/chorus-ui/build/app.js packages/chorus/static/ && cp packages/chorus-ui/static/index.html packages/chorus/static/ && cp packages/chorus-ui/static/styles.css packages/chorus/static/",
+    "build:copy-ui": "cp packages/chorus-ui/build/app.js packages/chorus/static/ && cp packages/chorus-ui/static/* packages/chorus/static/",
     "build:app": "npm run build:ui && npm run build:tools && npm run build:chorus && npm run build:copy-ui",
     "build:all": "npm run build:app",
     "start": "scripts/agent/start.sh",

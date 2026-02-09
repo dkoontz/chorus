@@ -3,6 +3,7 @@ module Types exposing
     , DescriptionOnlyTask
     , PlannedTask
     , PlanningFields
+    , HandoffRecord
     , TaskStatus(..)
     , SourceInfo
     , Attachment
@@ -20,6 +21,7 @@ module Types exposing
     , encodeQueue
     , encodeMessage
     , encodeMaybe
+    , encodeHandoffRecord
     -- Decoders
     , taskDecoder
     , statusDecoder
@@ -29,6 +31,7 @@ module Types exposing
     , historyDecoder
     , queueDecoder
     , messageDecoder
+    , handoffRecordDecoder
     -- Accessors
     , taskId
     , taskDescription
@@ -39,11 +42,15 @@ module Types exposing
     , taskSource
     , taskAgentWorkspace
     , taskAttachments
+    , taskCurrentAgent
+    , taskAgentChain
     , isPlanned
     -- Mutators
     , planTask
     , setTaskStatus
     , setAttachments
+    , setCurrentAgent
+    , setAgentChain
     -- Helpers
     , statusToString
     , statusFromString
@@ -77,6 +84,16 @@ type Task
     | Planned PlannedTask
 
 
+{-| A record of an agent hand-off on a task.
+-}
+type alias HandoffRecord =
+    { agentName : String
+    , startedAt : Time.Posix
+    , completedAt : Maybe Time.Posix
+    , output : String
+    }
+
+
 {-| A task that has only a description and no planning data.
 -}
 type alias DescriptionOnlyTask =
@@ -89,6 +106,8 @@ type alias DescriptionOnlyTask =
     , source : SourceInfo
     , agentWorkspace : String
     , attachments : Array Attachment
+    , currentAgent : Maybe String
+    , agentChain : Array HandoffRecord
     }
 
 
@@ -104,6 +123,8 @@ type alias PlannedTask =
     , source : SourceInfo
     , agentWorkspace : String
     , attachments : Array Attachment
+    , currentAgent : Maybe String
+    , agentChain : Array HandoffRecord
     , summary : String
     , requirements : Array String
     , acceptanceCriteria : Array String
@@ -294,6 +315,30 @@ taskAttachments task =
             t.attachments
 
 
+{-| Get the current agent assigned to a task.
+-}
+taskCurrentAgent : Task -> Maybe String
+taskCurrentAgent task =
+    when task is
+        DescriptionOnly t ->
+            t.currentAgent
+
+        Planned t ->
+            t.currentAgent
+
+
+{-| Get the agent chain (hand-off history) of a task.
+-}
+taskAgentChain : Task -> Array HandoffRecord
+taskAgentChain task =
+    when task is
+        DescriptionOnly t ->
+            t.agentChain
+
+        Planned t ->
+            t.agentChain
+
+
 {-| Check if a task has been planned.
 -}
 isPlanned : Task -> Bool
@@ -327,6 +372,8 @@ planTask task fields =
                 , source = t.source
                 , agentWorkspace = t.agentWorkspace
                 , attachments = t.attachments
+                , currentAgent = t.currentAgent
+                , agentChain = t.agentChain
                 , summary = fields.summary
                 , requirements = fields.requirements
                 , acceptanceCriteria = fields.acceptanceCriteria
@@ -367,6 +414,30 @@ setAttachments attachments task =
             Planned { t | attachments = attachments }
 
 
+{-| Set the current agent on a task.
+-}
+setCurrentAgent : Maybe String -> Task -> Task
+setCurrentAgent agent task =
+    when task is
+        DescriptionOnly t ->
+            DescriptionOnly { t | currentAgent = agent }
+
+        Planned t ->
+            Planned { t | currentAgent = agent }
+
+
+{-| Set the agent chain (hand-off history) on a task.
+-}
+setAgentChain : Array HandoffRecord -> Task -> Task
+setAgentChain chain task =
+    when task is
+        DescriptionOnly t ->
+            DescriptionOnly { t | agentChain = chain }
+
+        Planned t ->
+            Planned { t | agentChain = chain }
+
+
 
 -- JSON ENCODING
 
@@ -392,6 +463,8 @@ encodeTask task =
                 , { key = "source", value = encodeSourceInfo t.source }
                 , { key = "agentWorkspace", value = Encode.string t.agentWorkspace }
                 , { key = "attachments", value = Encode.array encodeAttachment t.attachments }
+                , { key = "currentAgent", value = encodeMaybe Encode.string t.currentAgent }
+                , { key = "agentChain", value = Encode.array encodeHandoffRecord t.agentChain }
                 ]
 
         Planned t ->
@@ -406,6 +479,8 @@ encodeTask task =
                 , { key = "source", value = encodeSourceInfo t.source }
                 , { key = "agentWorkspace", value = Encode.string t.agentWorkspace }
                 , { key = "attachments", value = Encode.array encodeAttachment t.attachments }
+                , { key = "currentAgent", value = encodeMaybe Encode.string t.currentAgent }
+                , { key = "agentChain", value = Encode.array encodeHandoffRecord t.agentChain }
                 , { key = "summary", value = Encode.string t.summary }
                 , { key = "requirements", value = Encode.array Encode.string t.requirements }
                 , { key = "acceptanceCriteria", value = Encode.array Encode.string t.acceptanceCriteria }
@@ -422,6 +497,18 @@ encodeAttachment attachment =
         , { key = "size", value = Encode.int attachment.size }
         , { key = "contentType", value = Encode.string attachment.contentType }
         , { key = "uploadedAt", value = Encode.int (Time.posixToMillis attachment.uploadedAt) }
+        ]
+
+
+{-| Encode a hand-off record to JSON.
+-}
+encodeHandoffRecord : HandoffRecord -> Encode.Value
+encodeHandoffRecord record =
+    Encode.object
+        [ { key = "agentName", value = Encode.string record.agentName }
+        , { key = "startedAt", value = Encode.int (Time.posixToMillis record.startedAt) }
+        , { key = "completedAt", value = encodeMaybe (\t -> Encode.int (Time.posixToMillis t)) record.completedAt }
+        , { key = "output", value = Encode.string record.output }
         ]
 
 
@@ -541,6 +628,8 @@ descriptionOnlyTaskDecoder =
             , source = source
             , agentWorkspace = agentWorkspace
             , attachments = []
+            , currentAgent = Nothing
+            , agentChain = []
             }
         )
         (Decode.field "id" Decode.string)
@@ -554,7 +643,23 @@ descriptionOnlyTaskDecoder =
         |> Decode.andThen
             (\task ->
                 Decode.field "attachments" (Decode.array attachmentDecoder)
-                    |> Decode.map (\attachments -> DescriptionOnly { task | attachments = attachments })
+                    |> Decode.map (\attachments -> { task | attachments = attachments })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "currentAgent" (Decode.maybe Decode.string)
+                    , Decode.succeed Nothing
+                    ]
+                    |> Decode.map (\currentAgent -> { task | currentAgent = currentAgent })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "agentChain" (Decode.array handoffRecordDecoder)
+                    , Decode.succeed []
+                    ]
+                    |> Decode.map (\agentChain -> DescriptionOnly { task | agentChain = agentChain })
             )
 
 
@@ -571,6 +676,8 @@ plannedTaskDecoder =
             , source = source
             , agentWorkspace = agentWorkspace
             , attachments = []
+            , currentAgent = Nothing
+            , agentChain = []
             , summary = ""
             , requirements = []
             , acceptanceCriteria = []
@@ -592,6 +699,22 @@ plannedTaskDecoder =
             )
         |> Decode.andThen
             (\task ->
+                Decode.oneOf
+                    [ Decode.field "currentAgent" (Decode.maybe Decode.string)
+                    , Decode.succeed Nothing
+                    ]
+                    |> Decode.map (\currentAgent -> { task | currentAgent = currentAgent })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.oneOf
+                    [ Decode.field "agentChain" (Decode.array handoffRecordDecoder)
+                    , Decode.succeed []
+                    ]
+                    |> Decode.map (\agentChain -> { task | agentChain = agentChain })
+            )
+        |> Decode.andThen
+            (\task ->
                 Decode.field "summary" Decode.string
                     |> Decode.map (\summary -> { task | summary = summary })
             )
@@ -610,6 +733,24 @@ plannedTaskDecoder =
                 Decode.field "plan" (Decode.array Decode.string)
                     |> Decode.map (\plan -> Planned { task | plan = plan })
             )
+
+
+{-| Decode a hand-off record from JSON.
+-}
+handoffRecordDecoder : Decoder HandoffRecord
+handoffRecordDecoder =
+    Decode.map4
+        (\agentName startedAt completedAt output ->
+            { agentName = agentName
+            , startedAt = startedAt
+            , completedAt = completedAt
+            , output = output
+            }
+        )
+        (Decode.field "agentName" Decode.string)
+        (Decode.field "startedAt" (Decode.map Time.millisToPosix Decode.int))
+        (Decode.field "completedAt" (Decode.maybe (Decode.map Time.millisToPosix Decode.int)))
+        (Decode.field "output" Decode.string)
 
 
 attachmentDecoder : Decoder Attachment

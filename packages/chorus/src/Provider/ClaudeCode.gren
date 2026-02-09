@@ -1,6 +1,9 @@
 module Provider.ClaudeCode exposing
     ( provider
     , Config
+    , CliArgs
+    , buildShellCommand
+    , toolCliFlagFromAllowedTools
     )
 
 {-| Claude Code provider implementation.
@@ -144,6 +147,8 @@ createSession config agentSpec workspaceRoot toMsg =
             , workspaceRoot = workspaceRoot
             , fileToolsPath = config.fileToolsPath
             , message = "Session initialized. Awaiting instructions."
+            , allowedTools = Nothing
+            , permissionMode = Nothing
             }
 
         -- Build shell command with stdin redirected from /dev/null
@@ -200,6 +205,8 @@ sendMessage config session message toMsg =
             , workspaceRoot = ""  -- Not needed for resume
             , fileToolsPath = config.fileToolsPath
             , message = message
+            , allowedTools = Nothing
+            , permissionMode = Nothing
             }
 
         -- Build shell command with stdin redirected from /dev/null
@@ -292,6 +299,8 @@ type alias CliArgs =
     , workspaceRoot : String
     , fileToolsPath : String
     , message : String
+    , allowedTools : Maybe String
+    , permissionMode : Maybe String
     }
 
 
@@ -321,10 +330,21 @@ buildCliArgs args =
                 Nothing ->
                     []
 
+        allowedToolsValue =
+            args.allowedTools
+                |> Maybe.withDefault "Bash(file-tools *)"
+
+        toolsFlag =
+            toolCliFlagFromAllowedTools allowedToolsValue
+
+        permMode =
+            args.permissionMode
+                |> Maybe.withDefault "bypassPermissions"
+
         toolArgs =
-            [ "--tools", "Bash"
-            , "--allowedTools", "Bash(file-tools *)"
-            , "--permission-mode", "bypassPermissions"
+            [ "--tools", toolsFlag
+            , "--allowedTools", allowedToolsValue
+            , "--permission-mode", permMode
             ]
 
         dirArgs =
@@ -382,8 +402,19 @@ buildShellCommand args =
                 Nothing ->
                     ""
 
+        allowedToolsValue =
+            args.allowedTools
+                |> Maybe.withDefault "Bash(file-tools *)"
+
+        toolsFlag =
+            toolCliFlagFromAllowedTools allowedToolsValue
+
+        permMode =
+            args.permissionMode
+                |> Maybe.withDefault "bypassPermissions"
+
         toolArgs =
-            " --tools Bash --allowedTools " ++ escapeForShell "Bash(file-tools *)" ++ " --permission-mode bypassPermissions"
+            " --tools " ++ escapeForShell toolsFlag ++ " --allowedTools " ++ escapeForShell allowedToolsValue ++ " --permission-mode " ++ escapeForShell permMode
 
         dirArgs =
             if String.isEmpty args.workspaceRoot then
@@ -399,6 +430,68 @@ buildShellCommand args =
             " </dev/null"
     in
     baseArgs ++ sessionArgs ++ promptArgs ++ toolArgs ++ dirArgs ++ messageArg ++ stdinRedirect
+
+
+{-| Derive the --tools flag value from an allowedTools string.
+
+Extracts tool category names by removing all parenthesized content
+(tracking depth to handle nested parens), then splitting on whitespace.
+
+Example: "Bash(file-tools *) Edit Read(*)" produces "Bash Edit Read"
+Example: "Bash(file-tools * scripts/agent/*)" produces "Bash"
+-}
+toolCliFlagFromAllowedTools : String -> String
+toolCliFlagFromAllowedTools allowedTools =
+    allowedTools
+        |> stripParenthesizedContent
+        |> String.split " "
+        |> Array.keepIf (\s -> not (String.isEmpty (String.trim s)))
+        |> Array.map String.trim
+        |> deduplicateStrings
+        |> String.join " "
+
+
+{-| Remove all content between parentheses (inclusive), handling nested parens.
+
+"Bash(file-tools * scripts/agent/*)" becomes "Bash"
+"Bash(file-tools *) Edit Read(*)" becomes "Bash Edit Read"
+-}
+stripParenthesizedContent : String -> String
+stripParenthesizedContent input =
+    let
+        result =
+            input
+                |> String.toArray
+                |> Array.foldl
+                    (\char acc ->
+                        if char == '(' then
+                            { acc | depth = acc.depth + 1 }
+                        else if char == ')' then
+                            { acc | depth = max 0 (acc.depth - 1) }
+                        else if acc.depth == 0 then
+                            { acc | chars = Array.pushLast char acc.chars }
+                        else
+                            acc
+                    )
+                    { depth = 0, chars = [] }
+    in
+    String.fromArray result.chars
+
+
+{-| Remove duplicate strings while preserving order.
+-}
+deduplicateStrings : Array String -> Array String
+deduplicateStrings arr =
+    arr
+        |> Array.foldl
+            (\item { seen, result } ->
+                if Array.member item seen then
+                    { seen = seen, result = result }
+                else
+                    { seen = Array.pushLast item seen, result = Array.pushLast item result }
+            )
+            { seen = [], result = [] }
+        |> .result
 
 
 

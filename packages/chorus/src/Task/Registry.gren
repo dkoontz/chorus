@@ -199,6 +199,8 @@ createTask (Registry config) { description, source } =
                             , source = source
                             , agentWorkspace = Path.toPosixString workspaceDir
                             , attachments = []
+                            , currentAgent = Nothing
+                            , agentChain = []
                             }
                 in
                 -- 2. Create task directory
@@ -265,6 +267,7 @@ createTask (Registry config) { description, source } =
                                             , status = Pending
                                             , createdAt = now
                                             , updatedAt = now
+                                            , currentAgent = Nothing
                                             }
                                     in
                                     { index | tasks = Array.pushLast summary index.tasks }
@@ -362,7 +365,7 @@ updateTask (Registry config) theTaskId updateFn =
                                         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
                                         |> GrenTask.andThen
                                             (\_ ->
-                                                -- Update registry index with new status/updatedAt
+                                                -- Update registry index with new status/updatedAt/currentAgent
                                                 updateRegistryIndex config.fsPermission config.registryRoot
                                                     (\index ->
                                                         { index
@@ -373,6 +376,7 @@ updateTask (Registry config) theTaskId updateFn =
                                                                             { summary
                                                                                 | status = Types.taskStatus updatedTask
                                                                                 , updatedAt = now
+                                                                                , currentAgent = Types.taskCurrentAgent updatedTask
                                                                             }
                                                                         else
                                                                             summary
@@ -512,6 +516,7 @@ type alias TaskSummary =
     , status : TaskStatus
     , createdAt : Time.Posix
     , updatedAt : Time.Posix
+    , currentAgent : Maybe String
     }
 
 
@@ -592,6 +597,7 @@ encodeTaskSummary summary =
         , { key = "status", value = Types.encodeStatus summary.status }
         , { key = "createdAt", value = Encode.int (Time.posixToMillis summary.createdAt) }
         , { key = "updatedAt", value = Encode.int (Time.posixToMillis summary.updatedAt) }
+        , { key = "currentAgent", value = Types.encodeMaybe Encode.string summary.currentAgent }
         ]
 
 
@@ -612,6 +618,7 @@ taskSummaryDecoder =
             , status = status
             , createdAt = createdAt
             , updatedAt = updatedAt
+            , currentAgent = Nothing
             }
         )
         (Decode.field "id" Decode.string)
@@ -619,6 +626,14 @@ taskSummaryDecoder =
         (Decode.field "status" Types.statusDecoder)
         (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
         (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
+        |> Decode.andThen
+            (\summary ->
+                Decode.oneOf
+                    [ Decode.field "currentAgent" (Decode.maybe Decode.string)
+                    , Decode.succeed Nothing
+                    ]
+                    |> Decode.map (\currentAgent -> { summary | currentAgent = currentAgent })
+            )
 
 
 

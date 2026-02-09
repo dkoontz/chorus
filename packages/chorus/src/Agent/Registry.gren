@@ -1,0 +1,320 @@
+module Agent.Registry exposing
+    ( AgentRegistry
+    , AgentConfig
+    , Error(..)
+    , init
+    , getAgent
+    , listAgents
+    , encodeAgentConfig
+    , errorToString
+    )
+
+{-| File-based agent configuration registry.
+
+Agent configs are stored as individual JSON files in `data/agents/{name}.json`.
+On first run (empty directory), default configs are seeded for the five
+known agents: developer, developer-review, qa, planner, orchestrator.
+
+-}
+
+import Bytes
+import Dict exposing (Dict)
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+import Task as GrenTask
+
+
+-- TYPES
+
+
+{-| An agent configuration.
+-}
+type alias AgentConfig =
+    { name : String
+    , specPath : String
+    , allowedTools : String
+    , permissionMode : String
+    }
+
+
+{-| Handle to the agent registry. Contains the filesystem permission and root path.
+-}
+type AgentRegistry
+    = AgentRegistry
+        { fsPermission : FileSystem.Permission
+        , agentsRoot : Path
+        }
+
+
+{-| Errors that can occur during registry operations.
+-}
+type Error
+    = FileSystemError String
+    | JsonDecodeError String
+    | AgentNotFound String
+
+
+
+-- INITIALIZATION
+
+
+{-| Initialize the agent registry.
+
+Creates `data/agents/` if missing, seeds default configs when the directory is empty.
+-}
+init : FileSystem.Permission -> { agentsRoot : String } -> GrenTask.Task Error AgentRegistry
+init fsPermission config =
+    let
+        agentsPath =
+            Path.fromPosixString config.agentsRoot
+
+        registry =
+            AgentRegistry
+                { fsPermission = fsPermission
+                , agentsRoot = agentsPath
+                }
+    in
+    ensureDirectoryExists fsPermission agentsPath
+        |> GrenTask.andThen (\_ -> seedDefaultsIfEmpty fsPermission agentsPath)
+        |> GrenTask.map (\_ -> registry)
+
+
+{-| Ensure a directory exists, creating it if necessary.
+-}
+ensureDirectoryExists : FileSystem.Permission -> Path -> GrenTask.Task Error {}
+ensureDirectoryExists fsPermission path =
+    FileSystem.makeDirectory fsPermission { recursive = True } path
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.map (\_ -> {})
+
+
+{-| Seed default agent configs if the agents directory is empty.
+-}
+seedDefaultsIfEmpty : FileSystem.Permission -> Path -> GrenTask.Task Error {}
+seedDefaultsIfEmpty fsPermission agentsPath =
+    FileSystem.listDirectory fsPermission agentsPath
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.andThen
+            (\entries ->
+                let
+                    jsonFiles =
+                        entries
+                            |> Array.keepIf (\entry -> String.endsWith ".json" (Path.toPosixString entry.path))
+                in
+                if Array.isEmpty jsonFiles then
+                    seedDefaults fsPermission agentsPath
+                else
+                    GrenTask.succeed {}
+            )
+
+
+{-| Write default configs for the five known agents.
+-}
+seedDefaults : FileSystem.Permission -> Path -> GrenTask.Task Error {}
+seedDefaults fsPermission agentsPath =
+    let
+        defaults =
+            [ { name = "developer"
+              , specPath = "agents/developer.md"
+              , allowedTools = "Bash(file-tools * scripts/agent/*)"
+              , permissionMode = "bypassPermissions"
+              }
+            , { name = "developer-review"
+              , specPath = "agents/developer-review.md"
+              , allowedTools = "Bash(file-tools * scripts/agent/*)"
+              , permissionMode = "bypassPermissions"
+              }
+            , { name = "qa"
+              , specPath = "agents/qa.md"
+              , allowedTools = "Bash(file-tools * scripts/agent/*)"
+              , permissionMode = "bypassPermissions"
+              }
+            , { name = "planner"
+              , specPath = "agents/planner.md"
+              , allowedTools = "Bash(file-tools * scripts/agent/*)"
+              , permissionMode = "bypassPermissions"
+              }
+            , { name = "orchestrator"
+              , specPath = "agents/orchestrator.md"
+              , allowedTools = "Bash(file-tools * scripts/agent/*)"
+              , permissionMode = "bypassPermissions"
+              }
+            ]
+    in
+    defaults
+        |> Array.foldl
+            (\config acc ->
+                acc
+                    |> GrenTask.andThen (\_ -> writeAgentConfig fsPermission agentsPath config)
+            )
+            (GrenTask.succeed {})
+
+
+
+-- OPERATIONS
+
+
+{-| Get an agent config by name. Fails with AgentNotFound if the agent does not exist.
+-}
+getAgent : AgentRegistry -> String -> GrenTask.Task Error AgentConfig
+getAgent (AgentRegistry config) name =
+    let
+        filePath =
+            Path.append (Path.fromPosixString (name ++ ".json")) config.agentsRoot
+    in
+    FileSystem.readFile config.fsPermission filePath
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        GrenTask.fail (JsonDecodeError "Could not decode agent config file as UTF-8")
+
+                    Just content ->
+                        when Decode.decodeString agentConfigDecoder content is
+                            Ok agentConfig ->
+                                GrenTask.succeed agentConfig
+
+                            Err err ->
+                                GrenTask.fail (JsonDecodeError (Decode.errorToString err))
+            )
+        |> GrenTask.onError
+            (\err ->
+                when err is
+                    FileSystemError msg ->
+                        if String.contains "ENOENT" msg || String.contains "no such file" msg then
+                            GrenTask.fail (AgentNotFound name)
+                        else
+                            GrenTask.fail err
+
+                    _ ->
+                        GrenTask.fail err
+            )
+
+
+{-| List all agent configs by reading all .json files in the agents directory.
+-}
+listAgents : AgentRegistry -> GrenTask.Task Error (Array AgentConfig)
+listAgents (AgentRegistry config) =
+    FileSystem.listDirectory config.fsPermission config.agentsRoot
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.andThen
+            (\entries ->
+                let
+                    jsonFiles =
+                        entries
+                            |> Array.keepIf (\entry -> String.endsWith ".json" (Path.toPosixString entry.path))
+                in
+                jsonFiles
+                    |> Array.foldl
+                        (\entry acc ->
+                            acc
+                                |> GrenTask.andThen
+                                    (\configs ->
+                                        let
+                                            filePath =
+                                                Path.append entry.path config.agentsRoot
+                                        in
+                                        readAgentConfigFile config.fsPermission filePath
+                                            |> GrenTask.map (\agentConfig -> Array.pushLast agentConfig configs)
+                                    )
+                        )
+                        (GrenTask.succeed [])
+            )
+
+
+
+-- HELPERS
+
+
+{-| Convert an error to a string.
+-}
+errorToString : Error -> String
+errorToString err =
+    when err is
+        FileSystemError msg ->
+            "File system error: " ++ msg
+
+        JsonDecodeError msg ->
+            "JSON decode error: " ++ msg
+
+        AgentNotFound name ->
+            "Agent not found: " ++ name
+
+
+{-| Write a single agent config file.
+-}
+writeAgentConfig : FileSystem.Permission -> Path -> AgentConfig -> GrenTask.Task Error {}
+writeAgentConfig fsPermission agentsPath config =
+    let
+        filePath =
+            Path.append (Path.fromPosixString (config.name ++ ".json")) agentsPath
+
+        json =
+            encodeAgentConfig config
+                |> Encode.encode 2
+
+        bytes =
+            Bytes.fromString json
+    in
+    FileSystem.writeFile fsPermission bytes filePath
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.map (\_ -> {})
+
+
+{-| Read and decode an agent config from a file path.
+-}
+readAgentConfigFile : FileSystem.Permission -> Path -> GrenTask.Task Error AgentConfig
+readAgentConfigFile fsPermission filePath =
+    FileSystem.readFile fsPermission filePath
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        GrenTask.fail (JsonDecodeError "Could not decode agent config file as UTF-8")
+
+                    Just content ->
+                        when Decode.decodeString agentConfigDecoder content is
+                            Ok agentConfig ->
+                                GrenTask.succeed agentConfig
+
+                            Err err ->
+                                GrenTask.fail (JsonDecodeError (Decode.errorToString err))
+            )
+
+
+
+-- JSON
+
+
+{-| Encode an agent config to JSON.
+-}
+encodeAgentConfig : AgentConfig -> Encode.Value
+encodeAgentConfig config =
+    Encode.object
+        [ { key = "name", value = Encode.string config.name }
+        , { key = "specPath", value = Encode.string config.specPath }
+        , { key = "allowedTools", value = Encode.string config.allowedTools }
+        , { key = "permissionMode", value = Encode.string config.permissionMode }
+        ]
+
+
+{-| Decode an agent config from JSON.
+-}
+agentConfigDecoder : Decoder AgentConfig
+agentConfigDecoder =
+    Decode.map4
+        (\name specPath allowedTools permissionMode ->
+            { name = name
+            , specPath = specPath
+            , allowedTools = allowedTools
+            , permissionMode = permissionMode
+            }
+        )
+        (Decode.field "name" Decode.string)
+        (Decode.field "specPath" Decode.string)
+        (Decode.field "allowedTools" Decode.string)
+        (Decode.field "permissionMode" Decode.string)

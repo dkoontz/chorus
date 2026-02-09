@@ -31,6 +31,10 @@ type Route
     | UploadAttachment { taskId : String, filename : String }   -- POST /api/tasks/:id/attachments?filename=...
     | DownloadAttachment { taskId : String, filename : String } -- GET /api/tasks/:id/attachments/:filename
     | DeleteAttachment { taskId : String, filename : String }   -- DELETE /api/tasks/:id/attachments/:filename
+    | StartHandoff String                      -- POST /api/tasks/:id/handoff
+    | CompleteHandoff String                   -- PUT /api/tasks/:id/handoff/complete
+    | ListAgents                               -- GET /api/agents
+    | GetAgent String                          -- GET /api/agents/:name
     | StaticFile String                        -- GET /* (for frontend assets)
     | NotFound
 
@@ -106,6 +110,18 @@ parseRoute method path =
                 DeleteAttachment { taskId = taskId, filename = filename }
             else
                 NotFound
+
+        { method = POST, segments = [ "api", "tasks", taskId, "handoff" ] } ->
+            StartHandoff taskId
+
+        { method = PUT, segments = [ "api", "tasks", taskId, "handoff", "complete" ] } ->
+            CompleteHandoff taskId
+
+        { method = GET, segments = [ "api", "agents" ] } ->
+            ListAgents
+
+        { method = GET, segments = [ "api", "agents", agentName ] } ->
+            GetAgent agentName
 
         -- Static files (anything not matching /api/*)
         { method = GET, segments = segs } ->
@@ -237,6 +253,18 @@ routeToString route =
 
         DeleteAttachment { taskId, filename } ->
             "DeleteAttachment(" ++ taskId ++ ", " ++ filename ++ ")"
+
+        StartHandoff taskId ->
+            "StartHandoff(" ++ taskId ++ ")"
+
+        CompleteHandoff taskId ->
+            "CompleteHandoff(" ++ taskId ++ ")"
+
+        ListAgents ->
+            "ListAgents"
+
+        GetAgent name ->
+            "GetAgent(" ++ name ++ ")"
 
         StaticFile path ->
             "StaticFile(" ++ path ++ ")"
