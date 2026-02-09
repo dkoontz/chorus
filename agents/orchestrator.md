@@ -82,6 +82,13 @@ Where `[planning]` is optional - only invoked if the user describes a new task.
 - Move the task file from `tasks/{task-name}.md` to `tasks/completed/{task-name}.md`
 - Report success to the user
 
+## Agent Scripts vs Tools
+
+There are two kinds of executable resources available:
+
+- **Agent scripts** (`scripts/agent/`): Utility scripts for agents that are _developing_ the Chorus application itself (build, start, stop, test, etc.). These are development-time helpers.
+- **Tools** (`packages/tools/`): Gren-based CLI tools that are runtime capabilities for agents _running inside_ the completed Chorus application on other systems. These include file operations and handoff.
+
 ## Invoking Sub-Agents
 
 Use the Task tool to spawn each agent as a sub-agent. Pass all file paths as parameters in the prompt.

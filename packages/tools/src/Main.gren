@@ -20,6 +20,7 @@ import Node
 import Stream
 import Task
 import Tools.File as File
+import Tools.Handoff as Handoff
 import Tools.Json as Json
     exposing
         ( ToolRequest(..)
@@ -29,6 +30,7 @@ import Tools.Json as Json
         , encodeDeleteOutput
         , encodeListOutput
         , encodeSearchOutput
+        , encodeHandoffOutput
         )
 import Tools.Validation as Validation exposing (WorkspaceRoot)
 
@@ -109,6 +111,12 @@ executeRequest env fsPermission cpPermission workspaceRoot request =
             File.search cpPermission workspaceRoot input
                 |> Task.map encodeSearchOutput
                 |> Task.mapError File.fileErrorToString
+                |> handleResult env
+
+        HandoffRequest input ->
+            Handoff.run cpPermission input
+                |> Task.map encodeHandoffOutput
+                |> Task.mapError Handoff.handoffErrorToString
                 |> handleResult env
 
 

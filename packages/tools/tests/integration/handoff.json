@@ -1,0 +1,84 @@
+{
+  "name": "handoff",
+  "scenarios": [
+    {
+      "name": "Handoff with missing taskId",
+      "input": {
+        "tool": "handoff",
+        "agentName": "developer",
+        "prompt": "Do something"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "taskId"
+      }
+    },
+    {
+      "name": "Handoff with missing agentName",
+      "input": {
+        "tool": "handoff",
+        "taskId": "test-task-1",
+        "prompt": "Do something"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "agentName"
+      }
+    },
+    {
+      "name": "Handoff with missing prompt",
+      "input": {
+        "tool": "handoff",
+        "taskId": "test-task-1",
+        "agentName": "developer"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "prompt"
+      }
+    },
+    {
+      "name": "Handoff with all required fields and defaults",
+      "input": {
+        "tool": "handoff",
+        "taskId": "test-task-1",
+        "agentName": "developer",
+        "prompt": "Implement feature X",
+        "baseUrl": "http://localhost:19876"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "curl"
+      },
+      "note": "Uses a non-standard port to ensure curl error regardless of whether Chorus is running"
+    },
+    {
+      "name": "Handoff with custom baseUrl and timing",
+      "input": {
+        "tool": "handoff",
+        "taskId": "test-task-2",
+        "agentName": "qa",
+        "prompt": "Test the feature",
+        "baseUrl": "http://localhost:9999",
+        "pollIntervalMs": 1000,
+        "maxWaitMs": 5000
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "curl"
+      },
+      "note": "Expected to fail with curl error since no Chorus server is running at port 9999"
+    },
+    {
+      "name": "Unknown tool name",
+      "input": {
+        "tool": "nonexistent",
+        "taskId": "test-task-1"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "Unknown tool"
+      }
+    }
+  ]
+}

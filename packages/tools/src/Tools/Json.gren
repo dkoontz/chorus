@@ -12,15 +12,17 @@ module Tools.Json exposing
     , encodeDeleteOutput
     , encodeListOutput
     , encodeSearchOutput
+    , encodeHandoffOutput
     )
 
-{-| JSON encoding and decoding for file tool requests and responses.
+{-| JSON encoding and decoding for tool requests and responses.
 -}
 
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import Time
 import Tools.File as File
+import Tools.Handoff as Handoff
 
 
 -- REQUEST TYPES
@@ -35,6 +37,7 @@ type ToolRequest
     | DeleteRequest File.DeleteInput
     | ListRequest File.ListInput
     | SearchRequest File.SearchInput
+    | HandoffRequest Handoff.HandoffInput
 
 
 {-| Decode a JSON request into a ToolRequest.
@@ -71,6 +74,9 @@ toolDecoder toolName =
 
         "file.search" ->
             Decode.map SearchRequest searchInputDecoder
+
+        "handoff" ->
+            Decode.map HandoffRequest handoffInputDecoder
 
         _ ->
             Decode.fail ("Unknown tool: " ++ toolName)
@@ -197,6 +203,26 @@ andMap da dfn =
     Decode.map2 (\fn a -> fn a) dfn da
 
 
+handoffInputDecoder : Decoder Handoff.HandoffInput
+handoffInputDecoder =
+    map6
+        (\taskId agentName prompt baseUrl pollInterval maxWait ->
+            { taskId = taskId
+            , agentName = agentName
+            , prompt = prompt
+            , baseUrl = Maybe.withDefault "http://localhost:8080" baseUrl
+            , pollIntervalMs = Maybe.withDefault 5000 pollInterval
+            , maxWaitMs = Maybe.withDefault 600000 maxWait
+            }
+        )
+        (Decode.field "taskId" Decode.string)
+        (Decode.field "agentName" Decode.string)
+        (Decode.field "prompt" Decode.string)
+        (Decode.maybe (Decode.field "baseUrl" Decode.string))
+        (Decode.maybe (Decode.field "pollIntervalMs" Decode.int))
+        (Decode.maybe (Decode.field "maxWaitMs" Decode.int))
+
+
 
 -- RESPONSE ENCODING
 
@@ -283,6 +309,16 @@ encodeSearchMatch match =
         [ { key = "path", value = Encode.string match.path }
         , { key = "line", value = Encode.int match.line }
         , { key = "content", value = Encode.string match.content }
+        ]
+
+
+{-| Encode a handoff output.
+-}
+encodeHandoffOutput : Handoff.HandoffOutput -> Encode.Value
+encodeHandoffOutput output =
+    Encode.object
+        [ { key = "agent_name", value = Encode.string output.agentName }
+        , { key = "output", value = Encode.string output.output }
         ]
 
 

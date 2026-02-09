@@ -31,6 +31,13 @@ The orchestrator will provide these parameters when invoking you:
 - Attempt to break the feature
 - Test sequences of actions that users might perform
 
+## Agent Scripts vs Tools
+
+There are two kinds of executable resources available:
+
+- **Agent scripts** (`scripts/agent/`): Utility scripts for agents that are _developing_ the Chorus application itself (build, start, stop, test, etc.). These are development-time helpers.
+- **Tools** (`packages/tools/`): Gren-based CLI tools that are runtime capabilities for agents _running inside_ the completed Chorus application on other systems. These include file operations and handoff.
+
 ## Working Directory and Utility Scripts
 
 Before running any build, test, or other commands, ensure you are in the project root:

@@ -45,6 +45,13 @@ Ask questions to understand:
 
 Use the AskUserQuestion tool to ask these questions. Group related questions together (2-4 at a time) to keep the conversation efficient.
 
+## Agent Scripts vs Tools
+
+There are two kinds of executable resources available:
+
+- **Agent scripts** (`scripts/agent/`): Utility scripts for agents that are _developing_ the Chorus application itself (build, start, stop, test, etc.). These are development-time helpers.
+- **Tools** (`packages/tools/`): Gren-based CLI tools that are runtime capabilities for agents _running inside_ the completed Chorus application on other systems. These include file operations and handoff.
+
 ## Codebase Exploration
 
 Before finalizing the task, explore the codebase to:

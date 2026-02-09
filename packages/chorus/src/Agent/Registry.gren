@@ -118,27 +118,27 @@ seedDefaults fsPermission agentsPath =
         defaults =
             [ { name = "developer"
               , specPath = "agents/developer.md"
-              , allowedTools = "Bash(file-tools * scripts/agent/*)"
+              , allowedTools = "Bash(file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "developer-review"
               , specPath = "agents/developer-review.md"
-              , allowedTools = "Bash(file-tools * scripts/agent/*)"
+              , allowedTools = "Bash(file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "qa"
               , specPath = "agents/qa.md"
-              , allowedTools = "Bash(file-tools * scripts/agent/*)"
+              , allowedTools = "Bash(file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "planner"
               , specPath = "agents/planner.md"
-              , allowedTools = "Bash(file-tools * scripts/agent/*)"
+              , allowedTools = "Bash(file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "orchestrator"
               , specPath = "agents/orchestrator.md"
-              , allowedTools = "Bash(file-tools * scripts/agent/*)"
+              , allowedTools = "Bash(file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             ]
