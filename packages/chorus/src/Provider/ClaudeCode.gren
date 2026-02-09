@@ -14,6 +14,7 @@ It implements the Provider interface for LLM communication.
 
 import Bytes
 import ChildProcess
+import Id exposing (SessionId)
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import Agent.Spec exposing (AgentSpec)
@@ -23,7 +24,6 @@ import Provider
         , ProviderError(..)
         , Response
         , Session
-        , SessionId
         , ToolCall
         , ToolResult
         )
@@ -201,7 +201,7 @@ sendMessage config session message toMsg =
     let
         cliArgs =
             { systemPrompt = Nothing
-            , resumeSessionId = Just session.id
+            , resumeSessionId = Just (Id.sessionIdToString session.id)
             , workspaceRoot = ""  -- Not needed for resume
             , fileToolsPath = config.fileToolsPath
             , message = message
@@ -501,16 +501,17 @@ deduplicateStrings arr =
 {-| Extract session ID from CLI output.
 
 Looks for the session_id in the JSON result message.
+Wraps the parsed string as a SessionId via the smart constructor.
 -}
-parseSessionId : String -> Maybe String
+parseSessionId : String -> Maybe SessionId
 parseSessionId output =
     let
         decoder =
             Decode.field "session_id" Decode.string
     in
     when Decode.decodeString decoder output is
-        Ok sessionId ->
-            Just sessionId
+        Ok rawSessionId ->
+            Id.sessionIdFromString rawSessionId
 
         Err _ ->
             -- Try parsing as NDJSON (stream format) and look for system.init
@@ -520,7 +521,7 @@ parseSessionId output =
                     (\line ->
                         when Decode.decodeString systemInitDecoder line is
                             Ok sid ->
-                                Just sid
+                                Id.sessionIdFromString sid
 
                             Err _ ->
                                 Nothing

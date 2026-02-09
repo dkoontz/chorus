@@ -12,6 +12,7 @@ import File
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, on, onInput)
+import Id
 import Json.Decode
 import Time
 import Types exposing (Task(..), TaskStatus(..))
@@ -108,7 +109,7 @@ viewStatusActions : Props msg -> Types.Task -> Html msg
 viewStatusActions props task =
     let
         tid =
-            Types.taskId task
+            Id.taskIdToString (Types.taskId task)
     in
     div [ class "status-actions" ]
         (when Types.taskStatus task is
@@ -179,14 +180,14 @@ viewTaskInfo task =
         [ h3 [] [ text "Task Information" ]
         , dl [ class "info-list" ]
             [ dt [] [ text "ID" ]
-            , dd [ class "monospace" ] [ text (Types.taskId task) ]
+            , dd [ class "monospace" ] [ text (Id.taskIdToString (Types.taskId task)) ]
             , dt [] [ text "Source" ]
             , dd [] [ text (source.sourceType ++ " / " ++ source.userId) ]
             , dt [] [ text "Session ID" ]
             , dd [ class "monospace" ]
-                [ text (Maybe.withDefault "None" (Types.taskSessionId task)) ]
+                [ text (Maybe.withDefault "None" (Maybe.map Id.sessionIdToString (Types.taskSessionId task))) ]
             , dt [] [ text "Workspace" ]
-            , dd [ class "monospace truncate" ] [ text (Types.taskAgentWorkspace task) ]
+            , dd [ class "monospace truncate" ] [ text (Types.taskWorkspacePath task) ]
             , dt [] [ text "Created" ]
             , dd [] [ text (formatTimestamp (Types.taskCreatedAt task)) ]
             , dt [] [ text "Updated" ]
@@ -202,7 +203,7 @@ viewAttachments props task =
             Types.taskAttachments task
 
         tid =
-            Types.taskId task
+            Id.taskIdToString (Types.taskId task)
     in
     div [ class "task-attachments card" ]
         [ h3 [] [ text "Attachments" ]
@@ -498,7 +499,7 @@ viewQueuedMessage : Types.QueuedMessage -> Html msg
 viewQueuedMessage message =
     li [ class "queue-item" ]
         [ div [ class "queue-item-header" ]
-            [ span [ class "queue-item-id monospace" ] [ text (String.takeFirst 8 message.id) ]
+            [ span [ class "queue-item-id monospace" ] [ text (String.takeFirst 8 (Id.messageIdToString message.id)) ]
             , span [ class "queue-item-time" ] [ text (formatTimestamp message.receivedAt) ]
             ]
         , div [ class "queue-item-content" ] [ text message.content ]

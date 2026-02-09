@@ -1,0 +1,219 @@
+module Id exposing
+    ( TaskId
+    , SessionId
+    , MessageId
+    -- TaskId constructors and accessors
+    , taskIdFromString
+    , taskIdToString
+    , encodeTaskId
+    , taskIdDecoder
+    -- SessionId constructors and accessors
+    , sessionIdFromString
+    , sessionIdToString
+    , encodeSessionId
+    , sessionIdDecoder
+    -- MessageId constructors and accessors
+    , messageIdFromString
+    , messageIdToString
+    , encodeMessageId
+    , messageIdDecoder
+    )
+
+{-| Opaque ID types for tasks, sessions, and messages.
+
+These types prevent accidentally mixing different kinds of identifiers.
+Constructors are not exported; all values must be created via the
+`fromString` smart constructors, which trim whitespace and reject
+empty strings.
+
+This module depends only on `gren-lang/core` so it compiles for both
+node and browser targets.
+
+-}
+
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+
+
+
+-- TYPES
+
+
+{-| A unique identifier for a task.
+-}
+type TaskId
+    = TaskId String
+
+
+{-| A unique identifier for a conversation session.
+-}
+type SessionId
+    = SessionId String
+
+
+{-| A unique identifier for a queued message.
+-}
+type MessageId
+    = MessageId String
+
+
+
+-- TASKID
+
+
+{-| Create a TaskId from a raw string.
+
+Trims whitespace and rejects empty strings.
+
+-}
+taskIdFromString : String -> Maybe TaskId
+taskIdFromString raw =
+    let
+        trimmed =
+            String.trim raw
+    in
+    if String.isEmpty trimmed then
+        Nothing
+    else
+        Just (TaskId trimmed)
+
+
+{-| Extract the underlying string from a TaskId.
+-}
+taskIdToString : TaskId -> String
+taskIdToString (TaskId id) =
+    id
+
+
+{-| Encode a TaskId as a JSON string.
+-}
+encodeTaskId : TaskId -> Encode.Value
+encodeTaskId (TaskId id) =
+    Encode.string id
+
+
+{-| Decode a TaskId from a JSON string.
+
+Fails the decode if the string is empty after trimming.
+
+-}
+taskIdDecoder : Decoder TaskId
+taskIdDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\raw ->
+                when taskIdFromString raw is
+                    Just tid ->
+                        Decode.succeed tid
+
+                    Nothing ->
+                        Decode.fail "TaskId cannot be empty"
+            )
+
+
+
+-- SESSIONID
+
+
+{-| Create a SessionId from a raw string.
+
+Trims whitespace and rejects empty strings.
+
+-}
+sessionIdFromString : String -> Maybe SessionId
+sessionIdFromString raw =
+    let
+        trimmed =
+            String.trim raw
+    in
+    if String.isEmpty trimmed then
+        Nothing
+    else
+        Just (SessionId trimmed)
+
+
+{-| Extract the underlying string from a SessionId.
+-}
+sessionIdToString : SessionId -> String
+sessionIdToString (SessionId id) =
+    id
+
+
+{-| Encode a SessionId as a JSON string.
+-}
+encodeSessionId : SessionId -> Encode.Value
+encodeSessionId (SessionId id) =
+    Encode.string id
+
+
+{-| Decode a SessionId from a JSON string.
+
+Fails the decode if the string is empty after trimming.
+
+-}
+sessionIdDecoder : Decoder SessionId
+sessionIdDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\raw ->
+                when sessionIdFromString raw is
+                    Just sid ->
+                        Decode.succeed sid
+
+                    Nothing ->
+                        Decode.fail "SessionId cannot be empty"
+            )
+
+
+
+-- MESSAGEID
+
+
+{-| Create a MessageId from a raw string.
+
+Trims whitespace and rejects empty strings.
+
+-}
+messageIdFromString : String -> Maybe MessageId
+messageIdFromString raw =
+    let
+        trimmed =
+            String.trim raw
+    in
+    if String.isEmpty trimmed then
+        Nothing
+    else
+        Just (MessageId trimmed)
+
+
+{-| Extract the underlying string from a MessageId.
+-}
+messageIdToString : MessageId -> String
+messageIdToString (MessageId id) =
+    id
+
+
+{-| Encode a MessageId as a JSON string.
+-}
+encodeMessageId : MessageId -> Encode.Value
+encodeMessageId (MessageId id) =
+    Encode.string id
+
+
+{-| Decode a MessageId from a JSON string.
+
+Fails the decode if the string is empty after trimming.
+
+-}
+messageIdDecoder : Decoder MessageId
+messageIdDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\raw ->
+                when messageIdFromString raw is
+                    Just mid ->
+                        Decode.succeed mid
+
+                    Nothing ->
+                        Decode.fail "MessageId cannot be empty"
+            )

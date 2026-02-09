@@ -5,6 +5,7 @@ module View.Board exposing (view)
 
 import Html exposing (..)
 import Html.Attributes exposing (..)
+import Id
 import Time
 import Types exposing (Task(..), TaskStatus(..))
 
@@ -34,7 +35,7 @@ viewColumn title statusClass status tasks =
     let
         columnTasks =
             tasks
-                |> Array.keepIf (\t -> statusMatches (Types.taskStatus t) status)
+                |> Array.keepIf (\t -> Types.statusEquals (Types.taskStatus t) status)
                 |> Array.sortBy (\t -> negate (Time.posixToMillis (Types.taskUpdatedAt t)))
 
         count =
@@ -97,7 +98,7 @@ viewCard task =
             Array.length (Types.taskAgentChain task)
     in
     div [ class "kanban-card" ]
-        [ a [ href ("/tasks/" ++ Types.taskId task), class "kanban-card-link" ]
+        [ a [ href ("/tasks/" ++ Id.taskIdToString (Types.taskId task)), class "kanban-card-link" ]
             [ div [ class "kanban-card-description" ]
                 [ text (Types.taskDescription task) ]
             , viewSummary task
@@ -150,25 +151,3 @@ viewHandoffCount count =
 formatTimestamp : Time.Posix -> String
 formatTimestamp posix =
     String.fromInt (Time.posixToMillis posix)
-
-
-statusMatches : Types.TaskStatus -> Types.TaskStatus -> Bool
-statusMatches a b =
-    when { a = a, b = b } is
-        { a = Pending, b = Pending } ->
-            True
-
-        { a = Active, b = Active } ->
-            True
-
-        { a = Waiting, b = Waiting } ->
-            True
-
-        { a = Completed, b = Completed } ->
-            True
-
-        { a = Failed _, b = Failed _ } ->
-            True
-
-        _ ->
-            False

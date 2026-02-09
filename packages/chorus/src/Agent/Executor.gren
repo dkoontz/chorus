@@ -34,6 +34,7 @@ import Bytes
 import ChildProcess
 import FileSystem
 import FileSystem.Path as Path exposing (Path)
+import Id exposing (SessionId)
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Provider
@@ -42,7 +43,6 @@ import Provider
         , ProviderError
         , Response
         , Session
-        , SessionId
         , ToolCall
         , ToolResult
         )
@@ -56,8 +56,8 @@ import Task exposing (Task)
 -}
 type alias Config msg =
     { provider : Provider msg
-    , workspaceRoot : String
-    , fileToolsPath : String  -- Path to file-tools binary
+    , workspaceRoot : Path
+    , fileToolsPath : Path  -- Path to file-tools binary
     }
 
 
@@ -141,7 +141,7 @@ type Msg
     | ToolExecuted ToolExecutionResult
       -- Session persistence
     | SessionSaved (Result String {})
-    | SessionIdLoaded (Result String String)
+    | SessionIdLoaded (Result String SessionId)
 
 
 
@@ -200,7 +200,7 @@ update msg model config wrapper =
                     , cmd =
                         config.provider.createSession
                             agentSpec
-                            config.workspaceRoot
+                            (Path.toPosixString config.workspaceRoot)
                             (\r -> wrapper.toMsg (SessionCreated r))
                     }
 
@@ -250,7 +250,7 @@ update msg model config wrapper =
                     , cmd =
                         config.provider.createSession
                             agentSpec
-                            config.workspaceRoot
+                            (Path.toPosixString config.workspaceRoot)
                             (\r -> wrapper.toMsg (SessionCreated r))
                     }
 
@@ -407,8 +407,8 @@ subscriptions _ =
 -}
 executeToolCall :
     ChildProcess.Permission
-    -> String  -- file-tools path
-    -> String  -- workspace root
+    -> Path  -- file-tools path
+    -> Path  -- workspace root
     -> ToolCall
     -> Task String String
 executeToolCall cpPermission fileToolsPath workspaceRoot toolCall =
@@ -429,7 +429,7 @@ executeToolCall cpPermission fileToolsPath workspaceRoot toolCall =
             , runDuration = ChildProcess.Milliseconds 60000
             }
     in
-    ChildProcess.run cpPermission fileToolsPath [ workspaceRoot, inputJson ] options
+    ChildProcess.run cpPermission (Path.toPosixString fileToolsPath) [ Path.toPosixString workspaceRoot, inputJson ] options
         |> Task.mapError
             (\runError ->
                 when runError is
@@ -456,16 +456,16 @@ executeToolCall cpPermission fileToolsPath workspaceRoot toolCall =
 
 {-| Path to the session file in a workspace.
 -}
-sessionFilePath : String -> Path
+sessionFilePath : Path -> Path
 sessionFilePath workspaceRoot =
-    Path.fromPosixString (workspaceRoot ++ "/.session")
+    Path.append (Path.fromPosixString ".session") workspaceRoot
 
 
 {-| Save a session ID to the workspace.
 -}
 saveSessionId :
     FileSystem.Permission
-    -> String
+    -> Path
     -> SessionId
     -> Task String {}
 saveSessionId fsPermission workspaceRoot sessionId =
@@ -474,7 +474,7 @@ saveSessionId fsPermission workspaceRoot sessionId =
             sessionFilePath workspaceRoot
 
         bytes =
-            Bytes.fromString sessionId
+            Bytes.fromString (Id.sessionIdToString sessionId)
     in
     FileSystem.writeFile fsPermission bytes path
         |> Task.mapError (\e -> FileSystem.errorToString e)
@@ -485,8 +485,8 @@ saveSessionId fsPermission workspaceRoot sessionId =
 -}
 loadSessionId :
     FileSystem.Permission
-    -> String
-    -> Task String String
+    -> Path
+    -> Task String SessionId
 loadSessionId fsPermission workspaceRoot =
     let
         path =
@@ -500,6 +500,11 @@ loadSessionId fsPermission workspaceRoot =
                     Nothing ->
                         Task.fail "Could not decode session file"
 
-                    Just sessionId ->
-                        Task.succeed (String.trim sessionId)
+                    Just raw ->
+                        when Id.sessionIdFromString raw is
+                            Just sid ->
+                                Task.succeed sid
+
+                            Nothing ->
+                                Task.fail "Session file contained empty session ID"
             )

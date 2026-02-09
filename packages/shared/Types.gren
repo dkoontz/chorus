@@ -40,7 +40,7 @@ module Types exposing
     , taskUpdatedAt
     , taskSessionId
     , taskSource
-    , taskAgentWorkspace
+    , taskWorkspacePath
     , taskAttachments
     , taskCurrentAgent
     , taskAgentChain
@@ -68,6 +68,7 @@ Only depends on `gren-lang/core` so it compiles for both node and browser.
 -}
 
 import Dict exposing (Dict)
+import Id exposing (TaskId, SessionId, MessageId)
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import Time
@@ -97,14 +98,14 @@ type alias HandoffRecord =
 {-| A task that has only a description and no planning data.
 -}
 type alias DescriptionOnlyTask =
-    { id : String
+    { id : TaskId
     , description : String
     , status : TaskStatus
     , createdAt : Time.Posix
     , updatedAt : Time.Posix
-    , sessionId : Maybe String
+    , sessionId : Maybe SessionId
     , source : SourceInfo
-    , agentWorkspace : String
+    , workspacePath : String
     , attachments : Array Attachment
     , currentAgent : Maybe String
     , agentChain : Array HandoffRecord
@@ -114,14 +115,14 @@ type alias DescriptionOnlyTask =
 {-| A task that has been planned with summary, requirements, criteria, and steps.
 -}
 type alias PlannedTask =
-    { id : String
+    { id : TaskId
     , description : String
     , status : TaskStatus
     , createdAt : Time.Posix
     , updatedAt : Time.Posix
-    , sessionId : Maybe String
+    , sessionId : Maybe SessionId
     , source : SourceInfo
-    , agentWorkspace : String
+    , workspacePath : String
     , attachments : Array Attachment
     , currentAgent : Maybe String
     , agentChain : Array HandoffRecord
@@ -190,7 +191,7 @@ type alias History =
 {-| A message waiting to be processed.
 -}
 type alias QueuedMessage =
-    { id : String
+    { id : MessageId
     , content : String
     , receivedAt : Time.Posix
     }
@@ -209,7 +210,7 @@ type alias Queue =
 
 {-| Get the ID of a task.
 -}
-taskId : Task -> String
+taskId : Task -> TaskId
 taskId task =
     when task is
         DescriptionOnly t ->
@@ -269,7 +270,7 @@ taskUpdatedAt task =
 
 {-| Get the session ID of a task.
 -}
-taskSessionId : Task -> Maybe String
+taskSessionId : Task -> Maybe SessionId
 taskSessionId task =
     when task is
         DescriptionOnly t ->
@@ -291,16 +292,16 @@ taskSource task =
             t.source
 
 
-{-| Get the agent workspace of a task.
+{-| Get the workspace path of a task.
 -}
-taskAgentWorkspace : Task -> String
-taskAgentWorkspace task =
+taskWorkspacePath : Task -> String
+taskWorkspacePath task =
     when task is
         DescriptionOnly t ->
-            t.agentWorkspace
+            t.workspacePath
 
         Planned t ->
-            t.agentWorkspace
+            t.workspacePath
 
 
 {-| Get the attachments of a task.
@@ -370,7 +371,7 @@ planTask task fields =
                 , updatedAt = t.updatedAt
                 , sessionId = t.sessionId
                 , source = t.source
-                , agentWorkspace = t.agentWorkspace
+                , workspacePath = t.workspacePath
                 , attachments = t.attachments
                 , currentAgent = t.currentAgent
                 , agentChain = t.agentChain
@@ -447,6 +448,9 @@ setAgentChain chain task =
     The discriminator is named "taskType" rather than "type" because "type"
     is already used as the discriminator inside the nested status object
     (e.g. {"type": "active"}). Using "taskType" avoids ambiguity.
+
+    The workspace path is encoded as "workspacePath" (renamed from the
+    former "agentWorkspace" key).
 -}
 encodeTask : Task -> Encode.Value
 encodeTask task =
@@ -454,14 +458,14 @@ encodeTask task =
         DescriptionOnly t ->
             Encode.object
                 [ { key = "taskType", value = Encode.string "descriptionOnly" }
-                , { key = "id", value = Encode.string t.id }
+                , { key = "id", value = Id.encodeTaskId t.id }
                 , { key = "description", value = Encode.string t.description }
                 , { key = "status", value = encodeStatus t.status }
                 , { key = "createdAt", value = Encode.int (Time.posixToMillis t.createdAt) }
                 , { key = "updatedAt", value = Encode.int (Time.posixToMillis t.updatedAt) }
-                , { key = "sessionId", value = encodeMaybe Encode.string t.sessionId }
+                , { key = "sessionId", value = encodeMaybe Id.encodeSessionId t.sessionId }
                 , { key = "source", value = encodeSourceInfo t.source }
-                , { key = "agentWorkspace", value = Encode.string t.agentWorkspace }
+                , { key = "workspacePath", value = Encode.string t.workspacePath }
                 , { key = "attachments", value = Encode.array encodeAttachment t.attachments }
                 , { key = "currentAgent", value = encodeMaybe Encode.string t.currentAgent }
                 , { key = "agentChain", value = Encode.array encodeHandoffRecord t.agentChain }
@@ -470,14 +474,14 @@ encodeTask task =
         Planned t ->
             Encode.object
                 [ { key = "taskType", value = Encode.string "planned" }
-                , { key = "id", value = Encode.string t.id }
+                , { key = "id", value = Id.encodeTaskId t.id }
                 , { key = "description", value = Encode.string t.description }
                 , { key = "status", value = encodeStatus t.status }
                 , { key = "createdAt", value = Encode.int (Time.posixToMillis t.createdAt) }
                 , { key = "updatedAt", value = Encode.int (Time.posixToMillis t.updatedAt) }
-                , { key = "sessionId", value = encodeMaybe Encode.string t.sessionId }
+                , { key = "sessionId", value = encodeMaybe Id.encodeSessionId t.sessionId }
                 , { key = "source", value = encodeSourceInfo t.source }
-                , { key = "agentWorkspace", value = Encode.string t.agentWorkspace }
+                , { key = "workspacePath", value = Encode.string t.workspacePath }
                 , { key = "attachments", value = Encode.array encodeAttachment t.attachments }
                 , { key = "currentAgent", value = encodeMaybe Encode.string t.currentAgent }
                 , { key = "agentChain", value = Encode.array encodeHandoffRecord t.agentChain }
@@ -589,7 +593,7 @@ encodeQueue queue =
 encodeMessage : QueuedMessage -> Encode.Value
 encodeMessage msg =
     Encode.object
-        [ { key = "id", value = Encode.string msg.id }
+        [ { key = "id", value = Id.encodeMessageId msg.id }
         , { key = "content", value = Encode.string msg.content }
         , { key = "receivedAt", value = Encode.int (Time.posixToMillis msg.receivedAt) }
         ]
@@ -618,7 +622,7 @@ taskDecoder =
 descriptionOnlyTaskDecoder : Decoder Task
 descriptionOnlyTaskDecoder =
     Decode.map8
-        (\id description status createdAt updatedAt sessionId source agentWorkspace ->
+        (\id description status createdAt updatedAt sessionId source workspacePath ->
             { id = id
             , description = description
             , status = status
@@ -626,20 +630,26 @@ descriptionOnlyTaskDecoder =
             , updatedAt = updatedAt
             , sessionId = sessionId
             , source = source
-            , agentWorkspace = agentWorkspace
+            , workspacePath = workspacePath
             , attachments = []
             , currentAgent = Nothing
             , agentChain = []
             }
         )
-        (Decode.field "id" Decode.string)
+        (Decode.field "id" Id.taskIdDecoder)
         (Decode.field "description" Decode.string)
         (Decode.field "status" statusDecoder)
         (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
         (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "sessionId" (Decode.maybe Decode.string))
+        (Decode.field "sessionId" (Decode.maybe Id.sessionIdDecoder))
         (Decode.field "source" sourceInfoDecoder)
-        (Decode.field "agentWorkspace" Decode.string)
+        -- TODO: Remove "agentWorkspace" fallback once all persisted task.json
+        -- files have been re-written with the "workspacePath" key.
+        (Decode.oneOf
+            [ Decode.field "workspacePath" Decode.string
+            , Decode.field "agentWorkspace" Decode.string
+            ]
+        )
         |> Decode.andThen
             (\task ->
                 Decode.field "attachments" (Decode.array attachmentDecoder)
@@ -666,7 +676,7 @@ descriptionOnlyTaskDecoder =
 plannedTaskDecoder : Decoder Task
 plannedTaskDecoder =
     Decode.map8
-        (\id description status createdAt updatedAt sessionId source agentWorkspace ->
+        (\id description status createdAt updatedAt sessionId source workspacePath ->
             { id = id
             , description = description
             , status = status
@@ -674,7 +684,7 @@ plannedTaskDecoder =
             , updatedAt = updatedAt
             , sessionId = sessionId
             , source = source
-            , agentWorkspace = agentWorkspace
+            , workspacePath = workspacePath
             , attachments = []
             , currentAgent = Nothing
             , agentChain = []
@@ -684,14 +694,20 @@ plannedTaskDecoder =
             , plan = []
             }
         )
-        (Decode.field "id" Decode.string)
+        (Decode.field "id" Id.taskIdDecoder)
         (Decode.field "description" Decode.string)
         (Decode.field "status" statusDecoder)
         (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))
         (Decode.field "updatedAt" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "sessionId" (Decode.maybe Decode.string))
+        (Decode.field "sessionId" (Decode.maybe Id.sessionIdDecoder))
         (Decode.field "source" sourceInfoDecoder)
-        (Decode.field "agentWorkspace" Decode.string)
+        -- TODO: Remove "agentWorkspace" fallback once all persisted task.json
+        -- files have been re-written with the "workspacePath" key.
+        (Decode.oneOf
+            [ Decode.field "workspacePath" Decode.string
+            , Decode.field "agentWorkspace" Decode.string
+            ]
+        )
         |> Decode.andThen
             (\task ->
                 Decode.field "attachments" (Decode.array attachmentDecoder)
@@ -845,7 +861,7 @@ messageDecoder =
             , receivedAt = receivedAt
             }
         )
-        (Decode.field "id" Decode.string)
+        (Decode.field "id" Id.messageIdDecoder)
         (Decode.field "content" Decode.string)
         (Decode.field "receivedAt" (Decode.map Time.millisToPosix Decode.int))
 

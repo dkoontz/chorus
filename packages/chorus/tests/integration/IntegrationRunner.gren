@@ -15,6 +15,7 @@ import Json.Decode as Decode
 import Node
 import Stream
 import Task as GrenTask
+import Id
 import Task.Queue as Queue
 import Task.Registry as Registry exposing (Registry)
 import Types exposing (TaskStatus(..))
@@ -266,23 +267,8 @@ initRegistry ctx subdir =
         { registryRoot = Path.toPosixString registryRoot
         , workspacesRoot = Path.toPosixString workspacesRoot
         }
-        |> GrenTask.mapError registryErrorToString
+        |> GrenTask.mapError Registry.errorToString
 
-
-registryErrorToString : Registry.Error -> String
-registryErrorToString err =
-    when err is
-        Registry.FileSystemError msg ->
-            "FileSystemError: " ++ msg
-
-        Registry.JsonDecodeError msg ->
-            "JsonDecodeError: " ++ msg
-
-        Registry.TaskNotFound id ->
-            "TaskNotFound: " ++ id
-
-        Registry.RegistryCorrupt msg ->
-            "RegistryCorrupt: " ++ msg
 
 
 assertFileExists : FileSystem.Permission -> Path -> GrenTask.Task String {}
@@ -361,19 +347,19 @@ testCreateTaskCreatesTask ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\task ->
                 -- UUID should be 36 characters (8-4-4-4-12 format)
                 let
-                    tid =
-                        Types.taskId task
+                    tidStr =
+                        Id.taskIdToString (Types.taskId task)
                 in
-                if String.unitLength tid == 36 then
+                if String.unitLength tidStr == 36 then
                     GrenTask.succeed {}
                 else
-                    GrenTask.fail ("Expected UUID to be 36 chars, got " ++ String.fromInt (String.unitLength tid))
+                    GrenTask.fail ("Expected UUID to be 36 chars, got " ++ String.fromInt (String.unitLength tidStr))
             )
 
 
@@ -390,13 +376,13 @@ testCreateTaskWritesTaskJson ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\task ->
                 let
                     taskJsonPath =
-                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Types.taskId task ++ "/task.json")) ctx.tempDir
+                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Id.taskIdToString (Types.taskId task) ++ "/task.json")) ctx.tempDir
                 in
                 assertFileExists ctx.fsPermission taskJsonPath
             )
@@ -415,13 +401,13 @@ testCreateTaskWritesQueueJson ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\task ->
                 let
                     queueJsonPath =
-                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Types.taskId task ++ "/queue.json")) ctx.tempDir
+                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Id.taskIdToString (Types.taskId task) ++ "/queue.json")) ctx.tempDir
                 in
                 assertFileExists ctx.fsPermission queueJsonPath
             )
@@ -440,13 +426,13 @@ testCreateTaskWritesHistoryJson ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\task ->
                 let
                     historyJsonPath =
-                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Types.taskId task ++ "/history.json")) ctx.tempDir
+                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Id.taskIdToString (Types.taskId task) ++ "/history.json")) ctx.tempDir
                 in
                 assertFileExists ctx.fsPermission historyJsonPath
             )
@@ -465,13 +451,13 @@ testGetTaskReturnsTask ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
                     |> GrenTask.map (\task -> { registry = registry, task = task })
             )
         |> GrenTask.andThen
             (\{ registry, task } ->
                 Registry.getTask registry (Types.taskId task)
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
                     |> GrenTask.andThen (assertJust "getTask")
                     |> GrenTask.andThen
                         (\retrieved ->
@@ -485,9 +471,14 @@ testGetTaskReturnsNothingForMissing ctx subdir =
     initRegistry ctx subdir
         |> GrenTask.andThen
             (\registry ->
-                Registry.getTask registry "nonexistent-task-id"
-                    |> GrenTask.mapError registryErrorToString
-                    |> GrenTask.andThen (assertNothing "getTask for missing task")
+                when Id.taskIdFromString "nonexistent-task-id" is
+                    Nothing ->
+                        GrenTask.fail "Could not create test TaskId"
+
+                    Just fakeId ->
+                        Registry.getTask registry fakeId
+                            |> GrenTask.mapError Registry.errorToString
+                            |> GrenTask.andThen (assertNothing "getTask for missing task")
             )
 
 
@@ -504,13 +495,13 @@ testUpdateTaskModifiesStatus ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
                     |> GrenTask.map (\task -> { registry = registry, task = task })
             )
         |> GrenTask.andThen
             (\{ registry, task } ->
                 Registry.updateStatus registry (Types.taskId task) Active
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\updatedTask ->
@@ -537,7 +528,7 @@ testListTasksReturnsAll ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
                     |> GrenTask.map (\_ -> registry)
             )
         |> GrenTask.andThen
@@ -550,13 +541,13 @@ testListTasksReturnsAll ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
                     |> GrenTask.map (\_ -> registry)
             )
         |> GrenTask.andThen
             (\registry ->
                 Registry.listTasks registry Nothing
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\tasks ->
@@ -578,11 +569,11 @@ testListTasksFiltersByStatus ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
                     |> GrenTask.andThen
                         (\task ->
                             Registry.updateStatus registry (Types.taskId task) Active
-                                |> GrenTask.mapError registryErrorToString
+                                |> GrenTask.mapError Registry.errorToString
                                 |> GrenTask.map (\_ -> registry)
                         )
             )
@@ -597,13 +588,13 @@ testListTasksFiltersByStatus ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
                     |> GrenTask.map (\_ -> registry)
             )
         |> GrenTask.andThen
             (\registry ->
                 Registry.listTasks registry (Just Active)
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\tasks ->
@@ -624,7 +615,7 @@ testRecordEventAppendsToHistory ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
                     |> GrenTask.map (\task -> { registry = registry, task = task })
             )
         |> GrenTask.andThen
@@ -633,7 +624,7 @@ testRecordEventAppendsToHistory ctx subdir =
                     { eventType = "test_event"
                     , data = Dict.singleton "key" "value"
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
                     |> GrenTask.map (\_ -> task)
             )
         |> GrenTask.andThen
@@ -641,7 +632,7 @@ testRecordEventAppendsToHistory ctx subdir =
                 -- Read the history file and verify it has 2 events (created + test_event)
                 let
                     historyPath =
-                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Types.taskId task ++ "/history.json")) ctx.tempDir
+                        Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Id.taskIdToString (Types.taskId task) ++ "/history.json")) ctx.tempDir
                 in
                 FileSystem.readFile ctx.fsPermission historyPath
                     |> GrenTask.mapError (\e -> "Failed to read history: " ++ FileSystem.errorToString e)
@@ -673,9 +664,9 @@ testRecordEventAppendsToHistory ctx subdir =
 
 {-| Helper to get the task directory path for queue operations.
 -}
-getTaskDir : Context -> String -> String -> Path
+getTaskDir : Context -> String -> Id.TaskId -> Path
 getTaskDir ctx subdir taskId =
-    Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ taskId)) ctx.tempDir
+    Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Id.taskIdToString taskId)) ctx.tempDir
 
 
 queueErrorToString : Queue.Error -> String
@@ -687,8 +678,8 @@ queueErrorToString err =
         Queue.JsonDecodeError msg ->
             "JsonDecodeError: " ++ msg
 
-        Queue.TaskNotFound id ->
-            "TaskNotFound: " ++ id
+        Queue.TaskNotFound tid ->
+            "TaskNotFound: " ++ Id.taskIdToString tid
 
 
 testEnqueueAddsMessage : Context -> String -> GrenTask.Task String {}
@@ -704,7 +695,7 @@ testEnqueueAddsMessage ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\task ->
@@ -718,10 +709,14 @@ testEnqueueAddsMessage ctx subdir =
         |> GrenTask.andThen
             (\message ->
                 -- Verify the message has a UUID (36 chars)
-                if String.unitLength message.id == 36 then
+                let
+                    msgIdStr =
+                        Id.messageIdToString message.id
+                in
+                if String.unitLength msgIdStr == 36 then
                     assertEqual "message content" "Hello, world!" message.content
                 else
-                    GrenTask.fail ("Expected UUID to be 36 chars, got " ++ String.fromInt (String.unitLength message.id))
+                    GrenTask.fail ("Expected UUID to be 36 chars, got " ++ String.fromInt (String.unitLength msgIdStr))
             )
 
 
@@ -738,7 +733,7 @@ testDequeueFIFO ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\task ->
@@ -804,7 +799,7 @@ testDequeueEmptyQueue ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\task ->
@@ -831,7 +826,7 @@ testPeekDoesNotRemove ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\task ->
@@ -888,13 +883,16 @@ testIsEmpty ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\task ->
                 let
+                    tid =
+                        Types.taskId task
+
                     taskDir =
-                        getTaskDir ctx subdir (Types.taskId task)
+                        getTaskDir ctx subdir tid
                 in
                 -- Should be empty initially
                 Queue.isEmpty ctx.fsPermission taskDir
@@ -902,15 +900,15 @@ testIsEmpty ctx subdir =
                     |> GrenTask.andThen
                         (\empty ->
                             if empty then
-                                GrenTask.succeed taskDir
+                                GrenTask.succeed { taskDir = taskDir, taskId = tid }
                             else
                                 GrenTask.fail "Expected queue to be empty initially"
                         )
             )
         |> GrenTask.andThen
-            (\taskDir ->
+            (\{ taskDir, taskId } ->
                 -- Add a message
-                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir "test" "Message"
+                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir taskId "Message"
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.map (\_ -> taskDir)
             )
@@ -942,7 +940,7 @@ testQueueLength ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
             )
         |> GrenTask.andThen
             (\task ->
@@ -998,7 +996,7 @@ testTaskSummaryIncludesCurrentAgent ctx subdir =
                         , conversationId = Nothing
                         }
                     }
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
                     |> GrenTask.map (\task -> { registry = registry, task = task })
             )
         |> GrenTask.andThen
@@ -1006,7 +1004,7 @@ testTaskSummaryIncludesCurrentAgent ctx subdir =
                 -- Set currentAgent on the task
                 Registry.updateTask registry (Types.taskId task)
                     (\t -> Types.setCurrentAgent (Just "developer") t)
-                    |> GrenTask.mapError registryErrorToString
+                    |> GrenTask.mapError Registry.errorToString
                     |> GrenTask.map (\_ -> Types.taskId task)
             )
         |> GrenTask.andThen
@@ -1043,8 +1041,11 @@ testTaskSummaryIncludesCurrentAgent ctx subdir =
 
                                         Ok summaries ->
                                             let
+                                                taskIdStr =
+                                                    Id.taskIdToString taskId
+
                                                 matchingSummary =
-                                                    Array.findFirst (\s -> s.id == taskId) summaries
+                                                    Array.findFirst (\s -> s.id == taskIdStr) summaries
                                             in
                                             when matchingSummary is
                                                 Nothing ->

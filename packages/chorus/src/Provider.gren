@@ -1,7 +1,6 @@
 module Provider exposing
     ( -- Session types
       Session
-    , SessionId
       -- Response types
     , Response
     , ToolCall
@@ -22,16 +21,11 @@ The executor uses this interface without knowing which provider is active.
 -}
 
 import Agent.Spec exposing (AgentSpec)
+import Id exposing (SessionId)
 import Json.Decode
 
 
 -- SESSION TYPES
-
-
-{-| A unique identifier for a conversation session.
--}
-type alias SessionId =
-    String
 
 
 {-| A session represents an active conversation with an LLM.

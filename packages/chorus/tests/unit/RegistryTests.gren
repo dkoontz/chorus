@@ -3,6 +3,7 @@ module RegistryTests exposing (tests)
 {-| Unit tests for Task.Registry module.
 -}
 
+import Id
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task
@@ -43,6 +44,30 @@ tests =
 -- TEST HELPERS
 
 
+{-| Create a TaskId for testing. Crashes if the string is empty.
+-}
+testTaskId : String -> Id.TaskId
+testTaskId raw =
+    when Id.taskIdFromString raw is
+        Just tid ->
+            tid
+
+        Nothing ->
+            Debug.todo ("Invalid test TaskId: " ++ raw)
+
+
+{-| Create a SessionId for testing. Crashes if the string is empty.
+-}
+testSessionId : String -> Id.SessionId
+testSessionId raw =
+    when Id.sessionIdFromString raw is
+        Just sid ->
+            sid
+
+        Nothing ->
+            Debug.todo ("Invalid test SessionId: " ++ raw)
+
+
 expectEqual : a -> a -> Task.Task String {}
 expectEqual expected actual =
     if expected == actual then
@@ -66,7 +91,7 @@ testTaskEncodeDecode =
         let
             task =
                 DescriptionOnly
-                    { id = "test-id-123"
+                    { id = testTaskId "test-id-123"
                     , description = "Test Task"
                     , status = Pending
                     , createdAt = Time.millisToPosix 1707048600000
@@ -77,7 +102,7 @@ testTaskEncodeDecode =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , agentWorkspace = "/tmp/workspace"
+                    , workspacePath = "/tmp/workspace"
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -130,7 +155,7 @@ testStatusRoundTrip status =
     let
         task =
             DescriptionOnly
-                { id = "test"
+                { id = testTaskId "test"
                 , description = "Test"
                 , status = status
                 , createdAt = Time.millisToPosix 0
@@ -141,7 +166,7 @@ testStatusRoundTrip status =
                     , userId = "test"
                     , conversationId = Nothing
                     }
-                , agentWorkspace = "/tmp"
+                , workspacePath = "/tmp"
                 , attachments = []
                 , currentAgent = Nothing
                 , agentChain = []
@@ -171,18 +196,18 @@ testSourceInfoEncodeDecode =
         let
             task =
                 DescriptionOnly
-                    { id = "test"
+                    { id = testTaskId "test"
                     , description = "Test"
                     , status = Pending
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
-                    , sessionId = Just "session-123"
+                    , sessionId = Just (testSessionId "session-123")
                     , source =
                         { sourceType = "xmpp"
                         , userId = "user@example.com"
                         , conversationId = Just "thread-456"
                         }
-                    , agentWorkspace = "/tmp"
+                    , workspacePath = "/tmp"
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -199,7 +224,7 @@ testSourceInfoEncodeDecode =
         in
         when decoded is
             Ok decodedTask ->
-                if Types.taskSessionId decodedTask == Just "session-123" && (Types.taskSource decodedTask).conversationId == Just "thread-456" then
+                if Types.taskSessionId decodedTask == Just (testSessionId "session-123") && (Types.taskSource decodedTask).conversationId == Just "thread-456" then
                     Task.succeed {}
                 else
                     Task.fail "sessionId or conversationId mismatch"
@@ -230,7 +255,7 @@ testAttachmentRoundTrip =
 
             task =
                 DescriptionOnly
-                    { id = "test-attach"
+                    { id = testTaskId "test-attach"
                     , description = "Task with attachments"
                     , status = Pending
                     , createdAt = Time.millisToPosix 1707048600000
@@ -241,7 +266,7 @@ testAttachmentRoundTrip =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , agentWorkspace = "/tmp/workspace"
+                    , workspacePath = "/tmp/workspace"
                     , attachments = [ attachment1, attachment2 ]
                     , currentAgent = Nothing
                     , agentChain = []
@@ -362,7 +387,7 @@ testTaskEncodeDecodeWithPlanningFields =
         let
             task =
                 Planned
-                    { id = "plan-task-1"
+                    { id = testTaskId "plan-task-1"
                     , description = "Task with planning data"
                     , status = Pending
                     , createdAt = Time.millisToPosix 1707048600000
@@ -373,7 +398,7 @@ testTaskEncodeDecodeWithPlanningFields =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , agentWorkspace = "/tmp/workspace"
+                    , workspacePath = "/tmp/workspace"
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -408,18 +433,18 @@ testDescriptionOnlyRoundTrip =
         let
             task =
                 DescriptionOnly
-                    { id = "desc-only"
+                    { id = testTaskId "desc-only"
                     , description = "Simple task"
                     , status = Active
                     , createdAt = Time.millisToPosix 1707048600000
                     , updatedAt = Time.millisToPosix 1707048600000
-                    , sessionId = Just "sess-1"
+                    , sessionId = Just (testSessionId "sess-1")
                     , source =
                         { sourceType = "web"
                         , userId = "user1"
                         , conversationId = Nothing
                         }
-                    , agentWorkspace = "/tmp/ws"
+                    , workspacePath = "/tmp/ws"
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -523,7 +548,7 @@ testTaskWithHandoffFieldsEncodeDecode =
 
             task =
                 DescriptionOnly
-                    { id = "handoff-test"
+                    { id = testTaskId "handoff-test"
                     , description = "Test handoff fields"
                     , status = Active
                     , createdAt = Time.millisToPosix 1707048500000
@@ -534,7 +559,7 @@ testTaskWithHandoffFieldsEncodeDecode =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , agentWorkspace = "/tmp/workspace"
+                    , workspacePath = "/tmp/workspace"
                     , attachments = []
                     , currentAgent = Just "qa"
                     , agentChain = [ handoffRecord ]
@@ -583,7 +608,7 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
 
             task =
                 Planned
-                    { id = "planned-handoff-test"
+                    { id = testTaskId "planned-handoff-test"
                     , description = "Test planned task with handoff"
                     , status = Active
                     , createdAt = Time.millisToPosix 1707048500000
@@ -594,7 +619,7 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , agentWorkspace = "/tmp/workspace"
+                    , workspacePath = "/tmp/workspace"
                     , attachments = []
                     , currentAgent = Just "developer"
                     , agentChain = [ handoffRecord ]
@@ -648,7 +673,7 @@ testPlanTaskCarriesHandoffFields =
 
             descTask =
                 DescriptionOnly
-                    { id = "plan-carry"
+                    { id = testTaskId "plan-carry"
                     , description = "Test carry forward"
                     , status = Active
                     , createdAt = Time.millisToPosix 1707048500000
@@ -659,7 +684,7 @@ testPlanTaskCarriesHandoffFields =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , agentWorkspace = "/tmp/workspace"
+                    , workspacePath = "/tmp/workspace"
                     , attachments = []
                     , currentAgent = Just "planner"
                     , agentChain = [ handoffRecord ]
@@ -696,14 +721,14 @@ testTaskCurrentAgentAccessor =
         let
             descTask =
                 DescriptionOnly
-                    { id = "t1"
+                    { id = testTaskId "t1"
                     , description = "Test"
                     , status = Pending
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , agentWorkspace = "/tmp"
+                    , workspacePath = "/tmp"
                     , attachments = []
                     , currentAgent = Just "developer"
                     , agentChain = []
@@ -711,14 +736,14 @@ testTaskCurrentAgentAccessor =
 
             plannedTask =
                 Planned
-                    { id = "t2"
+                    { id = testTaskId "t2"
                     , description = "Test"
                     , status = Active
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , agentWorkspace = "/tmp"
+                    , workspacePath = "/tmp"
                     , attachments = []
                     , currentAgent = Just "qa"
                     , agentChain = []
@@ -754,14 +779,14 @@ testTaskAgentChainAccessor =
 
             task =
                 DescriptionOnly
-                    { id = "chain-test"
+                    { id = testTaskId "chain-test"
                     , description = "Test"
                     , status = Active
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , agentWorkspace = "/tmp"
+                    , workspacePath = "/tmp"
                     , attachments = []
                     , currentAgent = Just "qa"
                     , agentChain = [ record1, record2 ]
@@ -806,14 +831,14 @@ testSetCurrentAgentMutator =
         let
             task =
                 DescriptionOnly
-                    { id = "mutator-test"
+                    { id = testTaskId "mutator-test"
                     , description = "Test"
                     , status = Pending
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , agentWorkspace = "/tmp"
+                    , workspacePath = "/tmp"
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -844,14 +869,14 @@ testSetAgentChainMutator =
 
             descTask =
                 DescriptionOnly
-                    { id = "chain-mutator-test"
+                    { id = testTaskId "chain-mutator-test"
                     , description = "Test"
                     , status = Pending
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , agentWorkspace = "/tmp"
+                    , workspacePath = "/tmp"
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -859,14 +884,14 @@ testSetAgentChainMutator =
 
             plannedTask =
                 Planned
-                    { id = "chain-mutator-test-2"
+                    { id = testTaskId "chain-mutator-test-2"
                     , description = "Test"
                     , status = Active
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , agentWorkspace = "/tmp"
+                    , workspacePath = "/tmp"
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []

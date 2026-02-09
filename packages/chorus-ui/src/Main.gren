@@ -22,6 +22,7 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Http
+import Id
 import Json.Decode
 import Task
 import Time
@@ -614,7 +615,7 @@ update msg model =
                                     }
                     in
                     { model = model
-                    , command = Api.updateTaskPlanning (Types.taskId task) params PlanningUpdated
+                    , command = Api.updateTaskPlanning (Id.taskIdToString (Types.taskId task)) params PlanningUpdated
                     }
 
                 _ ->

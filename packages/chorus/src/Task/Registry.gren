@@ -1,6 +1,7 @@
 module Task.Registry exposing
     ( Registry
     , Error(..)
+    , errorToString
     , init
     , createTask
     , getTask
@@ -34,6 +35,7 @@ import Crypto exposing (SecureContext)
 import Dict exposing (Dict)
 import FileSystem
 import FileSystem.Path as Path exposing (Path)
+import Id exposing (TaskId, SessionId)
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import Task as GrenTask
@@ -60,8 +62,26 @@ type Registry
 type Error
     = FileSystemError String
     | JsonDecodeError String
-    | TaskNotFound String
+    | TaskNotFound TaskId
     | RegistryCorrupt String
+
+
+{-| Convert a registry error to a human-readable string.
+-}
+errorToString : Error -> String
+errorToString err =
+    when err is
+        FileSystemError msg ->
+            "File system error: " ++ msg
+
+        JsonDecodeError msg ->
+            "JSON decode error: " ++ msg
+
+        TaskNotFound tid ->
+            "Task not found: " ++ Id.taskIdToString tid
+
+        RegistryCorrupt msg ->
+            "Registry corrupt: " ++ msg
 
 
 
@@ -82,7 +102,7 @@ setUpdatedAt time task =
 
 {-| Set the session ID on a task. Internal use only.
 -}
-setSessionId : Maybe String -> Task -> Task
+setSessionId : Maybe SessionId -> Task -> Task
 setSessionId sid task =
     when task is
         DescriptionOnly t ->
@@ -181,109 +201,117 @@ createTask (Registry config) { description, source } =
             )
         |> GrenTask.andThen
             (\{ newId, now } ->
-                let
-                    taskDir =
-                        Path.append (Path.fromPosixString newId) config.registryRoot
+                when Id.taskIdFromString newId is
+                    Nothing ->
+                        GrenTask.fail (FileSystemError "Generated UUID was empty")
 
-                    workspaceDir =
-                        Path.append (Path.fromPosixString newId) config.workspacesRoot
+                    Just newTaskId ->
+                        let
+                            taskDir =
+                                Path.append (Path.fromPosixString newId) config.registryRoot
 
-                    task =
-                        DescriptionOnly
-                            { id = newId
-                            , description = description
-                            , status = Pending
-                            , createdAt = now
-                            , updatedAt = now
-                            , sessionId = Nothing
-                            , source = source
-                            , agentWorkspace = Path.toPosixString workspaceDir
-                            , attachments = []
-                            , currentAgent = Nothing
-                            , agentChain = []
-                            }
-                in
-                -- 2. Create task directory
-                ensureDirectoryExists config.fsPermission taskDir
-                    -- 3. Create workspace directory
-                    |> GrenTask.andThen (\_ -> ensureDirectoryExists config.fsPermission workspaceDir)
-                    -- 4. Write task.json
-                    |> GrenTask.andThen
-                        (\_ ->
-                            let
-                                taskPath =
-                                    Path.append (Path.fromPosixString "task.json") taskDir
+                            workspaceDir =
+                                Path.append (Path.fromPosixString newId) config.workspacesRoot
 
-                                taskJson =
-                                    Types.encodeTask task
-                                        |> Encode.encode 2
-                            in
-                            writeFileAtomic config.fsPermission taskPath taskJson
-                                |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
-                        )
-                    -- 5. Write queue.json (empty queue)
-                    |> GrenTask.andThen
-                        (\_ ->
-                            let
-                                queuePath =
-                                    Path.append (Path.fromPosixString "queue.json") taskDir
-
-                                queueJson =
-                                    Types.encodeQueue { messages = [] }
-                                        |> Encode.encode 2
-                            in
-                            writeFileAtomic config.fsPermission queuePath queueJson
-                                |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
-                        )
-                    -- 6. Write history.json with task_created event
-                    |> GrenTask.andThen
-                        (\_ ->
-                            let
-                                historyPath =
-                                    Path.append (Path.fromPosixString "history.json") taskDir
-
-                                initialEvent =
-                                    { timestamp = now
-                                    , eventType = "task_created"
-                                    , data = Dict.singleton "description" description
+                            task =
+                                DescriptionOnly
+                                    { id = newTaskId
+                                    , description = description
+                                    , status = Pending
+                                    , createdAt = now
+                                    , updatedAt = now
+                                    , sessionId = Nothing
+                                    , source = source
+                                    , workspacePath = Path.toPosixString workspaceDir
+                                    , attachments = []
+                                    , currentAgent = Nothing
+                                    , agentChain = []
                                     }
-
-                                historyJson =
-                                    Types.encodeHistory { events = [ initialEvent ] }
-                                        |> Encode.encode 2
-                            in
-                            writeFileAtomic config.fsPermission historyPath historyJson
-                                |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
-                        )
-                    -- 7. Update registry.json index
-                    |> GrenTask.andThen
-                        (\_ ->
-                            updateRegistryIndex config.fsPermission config.registryRoot
-                                (\index ->
+                        in
+                        -- 2. Create task directory
+                        ensureDirectoryExists config.fsPermission taskDir
+                            -- 3. Create workspace directory
+                            |> GrenTask.andThen (\_ -> ensureDirectoryExists config.fsPermission workspaceDir)
+                            -- 4. Write task.json
+                            |> GrenTask.andThen
+                                (\_ ->
                                     let
-                                        summary =
-                                            { id = newId
-                                            , description = description
-                                            , status = Pending
-                                            , createdAt = now
-                                            , updatedAt = now
-                                            , currentAgent = Nothing
-                                            }
+                                        taskPath =
+                                            Path.append (Path.fromPosixString "task.json") taskDir
+
+                                        taskJson =
+                                            Types.encodeTask task
+                                                |> Encode.encode 2
                                     in
-                                    { index | tasks = Array.pushLast summary index.tasks }
+                                    writeFileAtomic config.fsPermission taskPath taskJson
+                                        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
                                 )
-                        )
-                    |> GrenTask.map (\_ -> task)
+                            -- 5. Write queue.json (empty queue)
+                            |> GrenTask.andThen
+                                (\_ ->
+                                    let
+                                        queuePath =
+                                            Path.append (Path.fromPosixString "queue.json") taskDir
+
+                                        queueJson =
+                                            Types.encodeQueue { messages = [] }
+                                                |> Encode.encode 2
+                                    in
+                                    writeFileAtomic config.fsPermission queuePath queueJson
+                                        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+                                )
+                            -- 6. Write history.json with task_created event
+                            |> GrenTask.andThen
+                                (\_ ->
+                                    let
+                                        historyPath =
+                                            Path.append (Path.fromPosixString "history.json") taskDir
+
+                                        initialEvent =
+                                            { timestamp = now
+                                            , eventType = "task_created"
+                                            , data = Dict.singleton "description" description
+                                            }
+
+                                        historyJson =
+                                            Types.encodeHistory { events = [ initialEvent ] }
+                                                |> Encode.encode 2
+                                    in
+                                    writeFileAtomic config.fsPermission historyPath historyJson
+                                        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+                                )
+                            -- 7. Update registry.json index
+                            |> GrenTask.andThen
+                                (\_ ->
+                                    updateRegistryIndex config.fsPermission config.registryRoot
+                                        (\index ->
+                                            let
+                                                summary =
+                                                    { id = newTaskId
+                                                    , description = description
+                                                    , status = Pending
+                                                    , createdAt = now
+                                                    , updatedAt = now
+                                                    , currentAgent = Nothing
+                                                    }
+                                            in
+                                            { index | tasks = Array.pushLast summary index.tasks }
+                                        )
+                                )
+                            |> GrenTask.map (\_ -> task)
             )
 
 
 {-| Get a task by ID.
 -}
-getTask : Registry -> String -> GrenTask.Task Error (Maybe Task)
+getTask : Registry -> TaskId -> GrenTask.Task Error (Maybe Task)
 getTask (Registry config) tid =
     let
+        tidStr =
+            Id.taskIdToString tid
+
         taskDir =
-            Path.append (Path.fromPosixString tid) config.registryRoot
+            Path.append (Path.fromPosixString tidStr) config.registryRoot
 
         taskPath =
             Path.append (Path.fromPosixString "task.json") taskDir
@@ -330,7 +358,7 @@ getTask (Registry config) tid =
 -}
 updateTask :
     Registry
-    -> String
+    -> TaskId
     -> (Task -> Task)
     -> GrenTask.Task Error Task
 updateTask (Registry config) theTaskId updateFn =
@@ -347,12 +375,15 @@ updateTask (Registry config) theTaskId updateFn =
                             |> GrenTask.andThen
                                 (\now ->
                                     let
+                                        theTaskIdStr =
+                                            Id.taskIdToString theTaskId
+
                                         updatedTask =
                                             updateFn task
                                                 |> setUpdatedAt now
 
                                         taskDir =
-                                            Path.append (Path.fromPosixString theTaskId) config.registryRoot
+                                            Path.append (Path.fromPosixString theTaskIdStr) config.registryRoot
 
                                         taskPath =
                                             Path.append (Path.fromPosixString "task.json") taskDir
@@ -394,7 +425,7 @@ updateTask (Registry config) theTaskId updateFn =
 -}
 updateStatus :
     Registry
-    -> String
+    -> TaskId
     -> TaskStatus
     -> GrenTask.Task Error Task
 updateStatus registry theTaskId newStatus =
@@ -465,13 +496,16 @@ getRecentTasks registry limit =
 -}
 recordEvent :
     Registry
-    -> String
+    -> TaskId
     -> { eventType : String, data : Dict String String }
     -> GrenTask.Task Error {}
 recordEvent (Registry config) tid event =
     let
+        tidStr =
+            Id.taskIdToString tid
+
         taskDir =
-            Path.append (Path.fromPosixString tid) config.registryRoot
+            Path.append (Path.fromPosixString tidStr) config.registryRoot
 
         historyPath =
             Path.append (Path.fromPosixString "history.json") taskDir
@@ -511,7 +545,7 @@ recordEvent (Registry config) tid event =
 {-| Summary of a task stored in the registry index.
 -}
 type alias TaskSummary =
-    { id : String
+    { id : TaskId
     , description : String
     , status : TaskStatus
     , createdAt : Time.Posix
@@ -592,7 +626,7 @@ encodeRegistryIndex index =
 encodeTaskSummary : TaskSummary -> Encode.Value
 encodeTaskSummary summary =
     Encode.object
-        [ { key = "id", value = Encode.string summary.id }
+        [ { key = "id", value = Id.encodeTaskId summary.id }
         , { key = "description", value = Encode.string summary.description }
         , { key = "status", value = Types.encodeStatus summary.status }
         , { key = "createdAt", value = Encode.int (Time.posixToMillis summary.createdAt) }
@@ -621,7 +655,7 @@ taskSummaryDecoder =
             , currentAgent = Nothing
             }
         )
-        (Decode.field "id" Decode.string)
+        (Decode.field "id" Id.taskIdDecoder)
         (Decode.field "description" Decode.string)
         (Decode.field "status" Types.statusDecoder)
         (Decode.field "createdAt" (Decode.map Time.millisToPosix Decode.int))

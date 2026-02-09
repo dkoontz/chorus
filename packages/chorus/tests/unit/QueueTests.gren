@@ -3,6 +3,7 @@ module QueueTests exposing (tests)
 {-| Unit tests for Task.Queue module.
 -}
 
+import Id
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task
@@ -19,6 +20,18 @@ tests =
 
 
 -- TEST HELPERS
+
+
+{-| Create a MessageId for testing. Crashes if the string is empty.
+-}
+testMessageId : String -> Id.MessageId
+testMessageId raw =
+    when Id.messageIdFromString raw is
+        Just mid ->
+            mid
+
+        Nothing ->
+            Debug.todo ("Invalid test MessageId: " ++ raw)
 
 
 expectEqual : a -> a -> Task.Task String {}
@@ -70,11 +83,11 @@ testQueueWithMessagesEncodeDecode =
         let
             queue =
                 { messages =
-                    [ { id = "msg-1"
+                    [ { id = testMessageId "msg-1"
                       , content = "First message"
                       , receivedAt = Time.millisToPosix 1707048600000
                       }
-                    , { id = "msg-2"
+                    , { id = testMessageId "msg-2"
                       , content = "Second message"
                       , receivedAt = Time.millisToPosix 1707048601000
                       }
@@ -95,7 +108,7 @@ testQueueWithMessagesEncodeDecode =
                 if Array.length decodedQueue.messages == 2 then
                     when Array.first decodedQueue.messages is
                         Just firstMsg ->
-                            if firstMsg.id == "msg-1" && firstMsg.content == "First message" then
+                            if firstMsg.id == testMessageId "msg-1" && firstMsg.content == "First message" then
                                 Task.succeed {}
                             else
                                 Task.fail "First message content mismatch"
@@ -117,9 +130,9 @@ testMessageOrder =
         let
             queue =
                 { messages =
-                    [ { id = "first", content = "1", receivedAt = Time.millisToPosix 1000 }
-                    , { id = "second", content = "2", receivedAt = Time.millisToPosix 2000 }
-                    , { id = "third", content = "3", receivedAt = Time.millisToPosix 3000 }
+                    [ { id = testMessageId "first", content = "1", receivedAt = Time.millisToPosix 1000 }
+                    , { id = testMessageId "second", content = "2", receivedAt = Time.millisToPosix 2000 }
+                    , { id = testMessageId "third", content = "3", receivedAt = Time.millisToPosix 3000 }
                     ]
                 }
 
@@ -136,7 +149,7 @@ testMessageOrder =
             Ok decodedQueue ->
                 let
                     ids =
-                        Array.map .id decodedQueue.messages
+                        Array.map (\msg -> Id.messageIdToString msg.id) decodedQueue.messages
                 in
                 expectEqual [ "first", "second", "third" ] ids
 

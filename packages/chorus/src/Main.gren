@@ -21,6 +21,7 @@ import FileSystem
 import FileSystem.Path as Path exposing (Path)
 import HttpServer
 import HttpServer.Response as Response exposing (Response)
+import Id exposing (TaskId)
 import Init
 import Json.Decode as Decode
 import Json.Encode as Encode
@@ -73,7 +74,7 @@ type alias Model =
 {-| State of an active agent executor, keyed by task ID.
 -}
 type alias ExecutorState =
-    { taskId : String
+    { taskId : TaskId
     , agentName : String
     , agentConfig : AgentRegistry.AgentConfig
     , status : ExecutorStatus
@@ -190,10 +191,10 @@ type Msg
     | GotStaticFile { id : Int, response : Response, result : Static.StaticFileResult }
     | GotApiResult { response : Response, result : Api.ApiResult }
     | GotBinaryResult { response : Response, result : Api.BinaryResult }
-    | GotAgentLookup { taskId : String, prompt : String, response : Response, result : Result AgentRegistry.Error AgentRegistry.AgentConfig }
-    | GotHandoffRecorded { taskId : String, prompt : String, response : Response, agentConfig : AgentRegistry.AgentConfig, apiResult : Api.ApiResult }
-    | GotAgentComplete { taskId : String, result : Result String String }
-    | GotAgentSpecLoaded { taskId : String, prompt : String, agentConfig : AgentRegistry.AgentConfig, result : Result String String }
+    | GotAgentLookup { taskId : TaskId, prompt : String, response : Response, result : Result AgentRegistry.Error AgentRegistry.AgentConfig }
+    | GotHandoffRecorded { taskId : TaskId, prompt : String, response : Response, agentConfig : AgentRegistry.AgentConfig, apiResult : Api.ApiResult }
+    | GotAgentComplete { taskId : TaskId, result : Result String String }
+    | GotAgentSpecLoaded { taskId : TaskId, prompt : String, agentConfig : AgentRegistry.AgentConfig, result : Result String String }
     | GotInternalApiResult Api.ApiResult
     | NoOp
 
@@ -298,8 +299,8 @@ update msg model =
                     }
 
                 Err err ->
-                    { model = { model | status = Error (registryErrorToString err) }
-                    , command = Logging.logError model.logger ("Registry error: " ++ registryErrorToString err) NoOp
+                    { model = { model | status = Error (Registry.errorToString err) }
+                    , command = Logging.logError model.logger ("Registry error: " ++ Registry.errorToString err) NoOp
                     }
 
         GotAgentRegistry result ->
@@ -441,7 +442,7 @@ update msg model =
                     , runDuration = ChildProcess.Milliseconds 600000
                     }
             in
-            { model = { model | activeExecutors = Dict.set taskId executorState model.activeExecutors }
+            { model = { model | activeExecutors = Dict.set (Id.taskIdToString taskId) executorState model.activeExecutors }
             , command =
                 Cmd.batch
                     [ ChildProcess.run model.cpPermission "bash" [ "-c", shellCommand ] options
@@ -484,7 +485,7 @@ update msg model =
                                 GrenTask.succeed (Err errMsg)
                             )
                         |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
-                    , Logging.logInfo model.logger ("Spawned agent " ++ agentConfig.name ++ " for task " ++ taskId) NoOp
+                    , Logging.logInfo model.logger ("Spawned agent " ++ agentConfig.name ++ " for task " ++ Id.taskIdToString taskId) NoOp
                     ]
             }
 
@@ -492,7 +493,7 @@ update msg model =
             let
                 -- Remove executor from active
                 updatedExecutors =
-                    Dict.remove taskId model.activeExecutors
+                    Dict.remove (Id.taskIdToString taskId) model.activeExecutors
 
                 updatedModel =
                     { model | activeExecutors = updatedExecutors }
@@ -519,7 +520,7 @@ update msg model =
                                 Cmd.batch
                                     [ Api.requestCompleteHandoff ctx taskId { output = outputText }
                                         (\apiResult -> GotInternalApiResult apiResult)
-                                    , Logging.logInfo model.logger ("Agent completed for task " ++ taskId ++ " (output length: " ++ String.fromInt (String.unitLength outputText) ++ ")") NoOp
+                                    , Logging.logInfo model.logger ("Agent completed for task " ++ Id.taskIdToString taskId ++ " (output length: " ++ String.fromInt (String.unitLength outputText) ++ ")") NoOp
                                     ]
                             }
 
@@ -527,7 +528,7 @@ update msg model =
                     when model.registry is
                         Nothing ->
                             { model = updatedModel
-                            , command = Logging.logError model.logger ("Agent failed for task " ++ taskId ++ ": " ++ errMsg) NoOp
+                            , command = Logging.logError model.logger ("Agent failed for task " ++ Id.taskIdToString taskId ++ ": " ++ errMsg) NoOp
                             }
 
                         Just registry ->
@@ -544,7 +545,7 @@ update msg model =
                                 Cmd.batch
                                     [ Api.requestCompleteHandoff ctx taskId { output = "Agent failed: " ++ errMsg }
                                         (\apiResult -> GotInternalApiResult apiResult)
-                                    , Logging.logError model.logger ("Agent failed for task " ++ taskId ++ ": " ++ errMsg) NoOp
+                                    , Logging.logError model.logger ("Agent failed for task " ++ Id.taskIdToString taskId ++ ": " ++ errMsg) NoOp
                                     ]
                             }
 
@@ -1001,23 +1002,6 @@ subscriptions model =
 
 -- HELPERS
 
-
-{-| Convert registry error to string.
--}
-registryErrorToString : Registry.Error -> String
-registryErrorToString err =
-    when err is
-        Registry.FileSystemError msg ->
-            "File system error: " ++ msg
-
-        Registry.JsonDecodeError msg ->
-            "JSON decode error: " ++ msg
-
-        Registry.TaskNotFound id ->
-            "Task not found: " ++ id
-
-        Registry.RegistryCorrupt msg ->
-            "Registry corrupt: " ++ msg
 
 
 {-| Get a SecureContext for cryptographic operations.

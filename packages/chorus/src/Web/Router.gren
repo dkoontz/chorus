@@ -12,6 +12,7 @@ Parses incoming request URLs and extracts route parameters.
 
 import Dict exposing (Dict)
 import HttpServer exposing (Method(..))
+import Id exposing (TaskId)
 
 
 -- ROUTES
@@ -21,18 +22,18 @@ import HttpServer exposing (Method(..))
 -}
 type Route
     = ListTasks (Maybe String)                -- GET /api/tasks?status=...
-    | GetTask String                           -- GET /api/tasks/:id
+    | GetTask TaskId                           -- GET /api/tasks/:id
     | CreateTask                               -- POST /api/tasks
-    | UpdateTaskStatus String                  -- PUT /api/tasks/:id/status
-    | UpdateTaskPlanning String                -- PUT /api/tasks/:id/planning
-    | GetTaskHistory String                    -- GET /api/tasks/:id/history
-    | GetTaskQueue String                      -- GET /api/tasks/:id/queue
-    | EnqueueMessage String                    -- POST /api/tasks/:id/queue
-    | UploadAttachment { taskId : String, filename : String }   -- POST /api/tasks/:id/attachments?filename=...
-    | DownloadAttachment { taskId : String, filename : String } -- GET /api/tasks/:id/attachments/:filename
-    | DeleteAttachment { taskId : String, filename : String }   -- DELETE /api/tasks/:id/attachments/:filename
-    | StartHandoff String                      -- POST /api/tasks/:id/handoff
-    | CompleteHandoff String                   -- PUT /api/tasks/:id/handoff/complete
+    | UpdateTaskStatus TaskId                  -- PUT /api/tasks/:id/status
+    | UpdateTaskPlanning TaskId                -- PUT /api/tasks/:id/planning
+    | GetTaskHistory TaskId                    -- GET /api/tasks/:id/history
+    | GetTaskQueue TaskId                      -- GET /api/tasks/:id/queue
+    | EnqueueMessage TaskId                    -- POST /api/tasks/:id/queue
+    | UploadAttachment { taskId : TaskId, filename : String }   -- POST /api/tasks/:id/attachments?filename=...
+    | DownloadAttachment { taskId : TaskId, filename : String } -- GET /api/tasks/:id/attachments/:filename
+    | DeleteAttachment { taskId : TaskId, filename : String }   -- DELETE /api/tasks/:id/attachments/:filename
+    | StartHandoff TaskId                      -- POST /api/tasks/:id/handoff
+    | CompleteHandoff TaskId                   -- PUT /api/tasks/:id/handoff/complete
     | ListAgents                               -- GET /api/agents
     | GetAgent String                          -- GET /api/agents/:name
     | StaticFile String                        -- GET /* (for frontend assets)
@@ -67,55 +68,65 @@ parseRoute method path =
         { method = GET, segments = [ "api", "tasks" ] } ->
             ListTasks (Dict.get "status" queryParams)
 
-        { method = GET, segments = [ "api", "tasks", taskId ] } ->
-            GetTask taskId
+        { method = GET, segments = [ "api", "tasks", rawId ] } ->
+            withTaskId rawId GetTask
 
         { method = POST, segments = [ "api", "tasks" ] } ->
             CreateTask
 
-        { method = PUT, segments = [ "api", "tasks", taskId, "status" ] } ->
-            UpdateTaskStatus taskId
+        { method = PUT, segments = [ "api", "tasks", rawId, "status" ] } ->
+            withTaskId rawId UpdateTaskStatus
 
-        { method = PUT, segments = [ "api", "tasks", taskId, "planning" ] } ->
-            UpdateTaskPlanning taskId
+        { method = PUT, segments = [ "api", "tasks", rawId, "planning" ] } ->
+            withTaskId rawId UpdateTaskPlanning
 
-        { method = GET, segments = [ "api", "tasks", taskId, "history" ] } ->
-            GetTaskHistory taskId
+        { method = GET, segments = [ "api", "tasks", rawId, "history" ] } ->
+            withTaskId rawId GetTaskHistory
 
-        { method = GET, segments = [ "api", "tasks", taskId, "queue" ] } ->
-            GetTaskQueue taskId
+        { method = GET, segments = [ "api", "tasks", rawId, "queue" ] } ->
+            withTaskId rawId GetTaskQueue
 
-        { method = POST, segments = [ "api", "tasks", taskId, "queue" ] } ->
-            EnqueueMessage taskId
+        { method = POST, segments = [ "api", "tasks", rawId, "queue" ] } ->
+            withTaskId rawId EnqueueMessage
 
-        { method = POST, segments = [ "api", "tasks", taskId, "attachments" ] } ->
-            when Dict.get "filename" queryParams is
-                Just filename ->
+        { method = POST, segments = [ "api", "tasks", rawId, "attachments" ] } ->
+            when { tid = Id.taskIdFromString rawId, filename = Dict.get "filename" queryParams } is
+                { tid = Just tid, filename = Just fname } ->
+                    if isValidFilename fname then
+                        UploadAttachment { taskId = tid, filename = fname }
+                    else
+                        NotFound
+
+                _ ->
+                    NotFound
+
+        { method = GET, segments = [ "api", "tasks", rawId, "attachments", filename ] } ->
+            when Id.taskIdFromString rawId is
+                Just tid ->
                     if isValidFilename filename then
-                        UploadAttachment { taskId = taskId, filename = filename }
+                        DownloadAttachment { taskId = tid, filename = filename }
                     else
                         NotFound
 
                 Nothing ->
                     NotFound
 
-        { method = GET, segments = [ "api", "tasks", taskId, "attachments", filename ] } ->
-            if isValidFilename filename then
-                DownloadAttachment { taskId = taskId, filename = filename }
-            else
-                NotFound
+        { method = DELETE, segments = [ "api", "tasks", rawId, "attachments", filename ] } ->
+            when Id.taskIdFromString rawId is
+                Just tid ->
+                    if isValidFilename filename then
+                        DeleteAttachment { taskId = tid, filename = filename }
+                    else
+                        NotFound
 
-        { method = DELETE, segments = [ "api", "tasks", taskId, "attachments", filename ] } ->
-            if isValidFilename filename then
-                DeleteAttachment { taskId = taskId, filename = filename }
-            else
-                NotFound
+                Nothing ->
+                    NotFound
 
-        { method = POST, segments = [ "api", "tasks", taskId, "handoff" ] } ->
-            StartHandoff taskId
+        { method = POST, segments = [ "api", "tasks", rawId, "handoff" ] } ->
+            withTaskId rawId StartHandoff
 
-        { method = PUT, segments = [ "api", "tasks", taskId, "handoff", "complete" ] } ->
-            CompleteHandoff taskId
+        { method = PUT, segments = [ "api", "tasks", rawId, "handoff", "complete" ] } ->
+            withTaskId rawId CompleteHandoff
 
         { method = GET, segments = [ "api", "agents" ] } ->
             ListAgents
@@ -132,6 +143,20 @@ parseRoute method path =
 
         -- Fallback
         _ ->
+            NotFound
+
+
+{-| Parse a raw URL segment as a TaskId and apply a route constructor.
+
+Returns NotFound if the segment is not a valid TaskId.
+-}
+withTaskId : String -> (TaskId -> Route) -> Route
+withTaskId raw toRoute =
+    when Id.taskIdFromString raw is
+        Just tid ->
+            toRoute tid
+
+        Nothing ->
             NotFound
 
 
@@ -224,41 +249,41 @@ routeToString route =
                 Nothing ->
                     "ListTasks"
 
-        GetTask id ->
-            "GetTask(" ++ id ++ ")"
+        GetTask tid ->
+            "GetTask(" ++ Id.taskIdToString tid ++ ")"
 
         CreateTask ->
             "CreateTask"
 
-        UpdateTaskStatus id ->
-            "UpdateTaskStatus(" ++ id ++ ")"
+        UpdateTaskStatus tid ->
+            "UpdateTaskStatus(" ++ Id.taskIdToString tid ++ ")"
 
-        UpdateTaskPlanning id ->
-            "UpdateTaskPlanning(" ++ id ++ ")"
+        UpdateTaskPlanning tid ->
+            "UpdateTaskPlanning(" ++ Id.taskIdToString tid ++ ")"
 
-        GetTaskHistory id ->
-            "GetTaskHistory(" ++ id ++ ")"
+        GetTaskHistory tid ->
+            "GetTaskHistory(" ++ Id.taskIdToString tid ++ ")"
 
-        GetTaskQueue id ->
-            "GetTaskQueue(" ++ id ++ ")"
+        GetTaskQueue tid ->
+            "GetTaskQueue(" ++ Id.taskIdToString tid ++ ")"
 
-        EnqueueMessage id ->
-            "EnqueueMessage(" ++ id ++ ")"
+        EnqueueMessage tid ->
+            "EnqueueMessage(" ++ Id.taskIdToString tid ++ ")"
 
         UploadAttachment { taskId } ->
-            "UploadAttachment(" ++ taskId ++ ")"
+            "UploadAttachment(" ++ Id.taskIdToString taskId ++ ")"
 
         DownloadAttachment { taskId, filename } ->
-            "DownloadAttachment(" ++ taskId ++ ", " ++ filename ++ ")"
+            "DownloadAttachment(" ++ Id.taskIdToString taskId ++ ", " ++ filename ++ ")"
 
         DeleteAttachment { taskId, filename } ->
-            "DeleteAttachment(" ++ taskId ++ ", " ++ filename ++ ")"
+            "DeleteAttachment(" ++ Id.taskIdToString taskId ++ ", " ++ filename ++ ")"
 
-        StartHandoff taskId ->
-            "StartHandoff(" ++ taskId ++ ")"
+        StartHandoff tid ->
+            "StartHandoff(" ++ Id.taskIdToString tid ++ ")"
 
-        CompleteHandoff taskId ->
-            "CompleteHandoff(" ++ taskId ++ ")"
+        CompleteHandoff tid ->
+            "CompleteHandoff(" ++ Id.taskIdToString tid ++ ")"
 
         ListAgents ->
             "ListAgents"

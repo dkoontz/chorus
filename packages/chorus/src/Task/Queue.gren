@@ -30,6 +30,7 @@ import Bytes
 import Crypto exposing (SecureContext)
 import FileSystem
 import FileSystem.Path as Path exposing (Path)
+import Id exposing (TaskId)
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import Task as GrenTask
@@ -45,7 +46,7 @@ import Types exposing (QueuedMessage, Queue)
 type Error
     = FileSystemError String
     | JsonDecodeError String
-    | TaskNotFound String
+    | TaskNotFound TaskId
 
 
 
@@ -58,7 +59,7 @@ enqueue :
     FileSystem.Permission
     -> SecureContext
     -> Path
-    -> String
+    -> TaskId
     -> String
     -> GrenTask.Task Error QueuedMessage
 enqueue fsPermission secureContext taskDir taskId content =
@@ -69,19 +70,24 @@ enqueue fsPermission secureContext taskDir taskId content =
     Crypto.randomUuidV4 secureContext
         |> GrenTask.mapError (\_ -> FileSystemError "Failed to generate UUID")
         |> GrenTask.andThen
-            (\msgId ->
-                GrenTask.map2
-                    (\queue now ->
-                        { queue = queue
-                        , message =
-                            { id = msgId
-                            , content = content
-                            , receivedAt = now
-                            }
-                        }
-                    )
-                    (readQueue fsPermission queuePath)
-                    Time.now
+            (\msgIdStr ->
+                when Id.messageIdFromString msgIdStr is
+                    Nothing ->
+                        GrenTask.fail (FileSystemError "Generated UUID was empty")
+
+                    Just msgId ->
+                        GrenTask.map2
+                            (\queue now ->
+                                { queue = queue
+                                , message =
+                                    { id = msgId
+                                    , content = content
+                                    , receivedAt = now
+                                    }
+                                }
+                            )
+                            (readQueue fsPermission queuePath)
+                            Time.now
             )
         |> GrenTask.andThen
             (\{ queue, message } ->

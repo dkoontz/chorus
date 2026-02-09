@@ -38,6 +38,7 @@ import FileSystem
 import FileSystem.Path as Path exposing (Path)
 import HttpServer exposing (Request)
 import HttpServer.Response as Response exposing (Response)
+import Id exposing (TaskId)
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task as GrenTask exposing (Task)
@@ -140,21 +141,21 @@ requestTasks ctx maybeStatus toMsg =
             )
         |> GrenTask.onError
             (\err ->
-                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = registryErrorToString err })
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err })
             )
         |> GrenTask.perform toMsg
 
 
 {-| GET /api/tasks/:id - Get a single task.
 -}
-requestTask : ApiContext -> String -> (ApiResult -> msg) -> Cmd msg
+requestTask : ApiContext -> TaskId -> (ApiResult -> msg) -> Cmd msg
 requestTask ctx taskId toMsg =
     Registry.getTask ctx.registry taskId
         |> GrenTask.andThen
             (\maybeTask ->
                 when maybeTask is
                     Nothing ->
-                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ taskId })
+                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ Id.taskIdToString taskId })
 
                     Just task ->
                         Time.now
@@ -169,7 +170,7 @@ requestTask ctx taskId toMsg =
             )
         |> GrenTask.onError
             (\err ->
-                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = registryErrorToString err })
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err })
             )
         |> GrenTask.perform toMsg
 
@@ -196,14 +197,14 @@ requestCreateTask ctx params toMsg =
             )
         |> GrenTask.onError
             (\err ->
-                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = registryErrorToString err })
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err })
             )
         |> GrenTask.perform toMsg
 
 
 {-| PUT /api/tasks/:id/status - Update task status.
 -}
-requestUpdateStatus : ApiContext -> String -> TaskStatus -> (ApiResult -> msg) -> Cmd msg
+requestUpdateStatus : ApiContext -> TaskId -> TaskStatus -> (ApiResult -> msg) -> Cmd msg
 requestUpdateStatus ctx taskId status toMsg =
     Registry.updateStatus ctx.registry taskId status
         |> GrenTask.andThen
@@ -224,10 +225,10 @@ requestUpdateStatus ctx taskId status toMsg =
                     { statusCode, message } =
                         when err is
                             Registry.TaskNotFound _ ->
-                                { statusCode = 404, message = "Task not found: " ++ taskId }
+                                { statusCode = 404, message = "Task not found: " ++ Id.taskIdToString taskId }
 
                             _ ->
-                                { statusCode = 500, message = registryErrorToString err }
+                                { statusCode = 500, message = Registry.errorToString err }
                 in
                 GrenTask.succeed (ApiError { statusCode = statusCode, code = "REGISTRY_ERROR", message = message })
             )
@@ -237,7 +238,7 @@ requestUpdateStatus ctx taskId status toMsg =
 {-| PUT /api/tasks/:id/planning - Update task planning fields.
     Converts a DescriptionOnly task to Planned when planning fields are set.
 -}
-requestUpdatePlanning : ApiContext -> String -> UpdatePlanningParams -> (ApiResult -> msg) -> Cmd msg
+requestUpdatePlanning : ApiContext -> TaskId -> UpdatePlanningParams -> (ApiResult -> msg) -> Cmd msg
 requestUpdatePlanning ctx taskId params toMsg =
     Registry.updateTask ctx.registry taskId
         (\task ->
@@ -286,10 +287,10 @@ requestUpdatePlanning ctx taskId params toMsg =
                     { statusCode, message } =
                         when err is
                             Registry.TaskNotFound _ ->
-                                { statusCode = 404, message = "Task not found: " ++ taskId }
+                                { statusCode = 404, message = "Task not found: " ++ Id.taskIdToString taskId }
 
                             _ ->
-                                { statusCode = 500, message = registryErrorToString err }
+                                { statusCode = 500, message = Registry.errorToString err }
                 in
                 GrenTask.succeed (ApiError { statusCode = statusCode, code = "REGISTRY_ERROR", message = message })
             )
@@ -298,12 +299,15 @@ requestUpdatePlanning ctx taskId params toMsg =
 
 {-| GET /api/tasks/:id/history - Get task event history.
 -}
-requestHistory : ApiContext -> String -> (ApiResult -> msg) -> Cmd msg
+requestHistory : ApiContext -> TaskId -> (ApiResult -> msg) -> Cmd msg
 requestHistory ctx taskId toMsg =
     let
+        taskIdStr =
+            Id.taskIdToString taskId
+
         historyPath =
             Path.append
-                (Path.fromPosixString (taskId ++ "/history.json"))
+                (Path.fromPosixString (taskIdStr ++ "/history.json"))
                 ctx.registryRoot
     in
     FileSystem.readFile ctx.fsPermission historyPath
@@ -334,19 +338,22 @@ requestHistory ctx taskId toMsg =
             )
         |> GrenTask.onError
             (\_ ->
-                GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "History not found for task: " ++ taskId })
+                GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "History not found for task: " ++ taskIdStr })
             )
         |> GrenTask.perform toMsg
 
 
 {-| GET /api/tasks/:id/queue - Get task message queue.
 -}
-requestQueue : ApiContext -> String -> (ApiResult -> msg) -> Cmd msg
+requestQueue : ApiContext -> TaskId -> (ApiResult -> msg) -> Cmd msg
 requestQueue ctx taskId toMsg =
     let
+        taskIdStr =
+            Id.taskIdToString taskId
+
         queuePath =
             Path.append
-                (Path.fromPosixString (taskId ++ "/queue.json"))
+                (Path.fromPosixString (taskIdStr ++ "/queue.json"))
                 ctx.registryRoot
     in
     FileSystem.readFile ctx.fsPermission queuePath
@@ -377,18 +384,21 @@ requestQueue ctx taskId toMsg =
             )
         |> GrenTask.onError
             (\_ ->
-                GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Queue not found for task: " ++ taskId })
+                GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Queue not found for task: " ++ taskIdStr })
             )
         |> GrenTask.perform toMsg
 
 
 {-| POST /api/tasks/:id/queue - Add message to task queue.
 -}
-requestEnqueue : ApiContext -> String -> String -> (ApiResult -> msg) -> Cmd msg
+requestEnqueue : ApiContext -> TaskId -> String -> (ApiResult -> msg) -> Cmd msg
 requestEnqueue ctx taskId content toMsg =
     let
+        taskIdStr =
+            Id.taskIdToString taskId
+
         taskDir =
-            Path.append (Path.fromPosixString taskId) ctx.registryRoot
+            Path.append (Path.fromPosixString taskIdStr) ctx.registryRoot
     in
     Queue.enqueue ctx.fsPermission ctx.secureContext taskDir taskId content
         |> GrenTask.andThen
@@ -399,7 +409,7 @@ requestEnqueue ctx taskId content toMsg =
                             let
                                 msgJson =
                                     Encode.object
-                                        [ { key = "id", value = Encode.string message.id }
+                                        [ { key = "id", value = Id.encodeMessageId message.id }
                                         , { key = "content", value = Encode.string message.content }
                                         , { key = "receivedAt", value = Encode.int (Time.posixToMillis message.receivedAt) }
                                         ]
@@ -422,7 +432,7 @@ requestEnqueue ctx taskId content toMsg =
 -}
 requestUploadAttachment :
     ApiContext
-    -> String
+    -> TaskId
     -> String
     -> Bytes.Bytes
     -> String
@@ -441,11 +451,14 @@ requestUploadAttachment ctx taskId filename fileBytes uploadDir toMsg =
             |> GrenTask.perform toMsg
     else
         let
+            taskIdStr =
+                Id.taskIdToString taskId
+
             contentType =
                 Registry.contentTypeFromExtension filename
 
             taskUploadDir =
-                Path.append (Path.fromPosixString taskId) (Path.fromPosixString uploadDir)
+                Path.append (Path.fromPosixString taskIdStr) (Path.fromPosixString uploadDir)
 
             filePath =
                 Path.append (Path.fromPosixString filename) taskUploadDir
@@ -493,7 +506,7 @@ requestUploadAttachment ctx taskId filename fileBytes uploadDir toMsg =
                 )
             |> GrenTask.onError
                 (\err ->
-                    GrenTask.succeed (ApiError { statusCode = 500, code = "UPLOAD_ERROR", message = registryErrorToString err })
+                    GrenTask.succeed (ApiError { statusCode = 500, code = "UPLOAD_ERROR", message = Registry.errorToString err })
                 )
             |> GrenTask.perform toMsg
 
@@ -502,15 +515,18 @@ requestUploadAttachment ctx taskId filename fileBytes uploadDir toMsg =
 -}
 requestDownloadAttachment :
     ApiContext
-    -> String
+    -> TaskId
     -> String
     -> String
     -> (BinaryResult -> msg)
     -> Cmd msg
 requestDownloadAttachment ctx taskId filename uploadDir toMsg =
     let
+        taskIdStr =
+            Id.taskIdToString taskId
+
         taskUploadDir =
-            Path.append (Path.fromPosixString taskId) (Path.fromPosixString uploadDir)
+            Path.append (Path.fromPosixString taskIdStr) (Path.fromPosixString uploadDir)
 
         filePath =
             Path.append (Path.fromPosixString filename) taskUploadDir
@@ -547,7 +563,7 @@ requestDownloadAttachment ctx taskId filename uploadDir toMsg =
             (\err ->
                 let
                     errMsg =
-                        registryErrorToString err
+                        Registry.errorToString err
                 in
                 if String.contains "ENOENT" errMsg || String.contains "no such file" errMsg then
                     GrenTask.succeed (BinaryError { statusCode = 404, code = "NOT_FOUND", message = "Attachment not found: " ++ filename })
@@ -561,15 +577,18 @@ requestDownloadAttachment ctx taskId filename uploadDir toMsg =
 -}
 requestDeleteAttachment :
     ApiContext
-    -> String
+    -> TaskId
     -> String
     -> String
     -> (ApiResult -> msg)
     -> Cmd msg
 requestDeleteAttachment ctx taskId filename uploadDir toMsg =
     let
+        taskIdStr =
+            Id.taskIdToString taskId
+
         taskUploadDir =
-            Path.append (Path.fromPosixString taskId) (Path.fromPosixString uploadDir)
+            Path.append (Path.fromPosixString taskIdStr) (Path.fromPosixString uploadDir)
 
         filePath =
             Path.append (Path.fromPosixString filename) taskUploadDir
@@ -604,7 +623,7 @@ requestDeleteAttachment ctx taskId filename uploadDir toMsg =
             (\err ->
                 let
                     errMsg =
-                        registryErrorToString err
+                        Registry.errorToString err
                 in
                 if String.contains "ENOENT" errMsg || String.contains "no such file" errMsg then
                     GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Attachment not found: " ++ filename })
@@ -621,7 +640,7 @@ Sets currentAgent, appends a HandoffRecord to agentChain, records a history even
 and transitions the task to Active if it was Pending or Waiting.
 The actual agent spawning is handled by the caller (Main.gren).
 -}
-requestStartHandoff : ApiContext -> String -> StartHandoffParams -> (ApiResult -> msg) -> Cmd msg
+requestStartHandoff : ApiContext -> TaskId -> StartHandoffParams -> (ApiResult -> msg) -> Cmd msg
 requestStartHandoff ctx taskId params toMsg =
     -- First check if the task exists and currentAgent is not already set
     Registry.getTask ctx.registry taskId
@@ -629,7 +648,7 @@ requestStartHandoff ctx taskId params toMsg =
             (\maybeTask ->
                 when maybeTask is
                     Nothing ->
-                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ taskId })
+                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ Id.taskIdToString taskId })
 
                     Just task ->
                         when Types.taskCurrentAgent task is
@@ -702,7 +721,7 @@ requestStartHandoff ctx taskId params toMsg =
             )
         |> GrenTask.onError
             (\err ->
-                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = registryErrorToString err })
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err })
             )
         |> GrenTask.perform toMsg
 
@@ -712,14 +731,14 @@ requestStartHandoff ctx taskId params toMsg =
 Sets completedAt on the last agentChain entry, stores the output,
 clears currentAgent, sets status to Waiting, and records a history event.
 -}
-requestCompleteHandoff : ApiContext -> String -> CompleteHandoffParams -> (ApiResult -> msg) -> Cmd msg
+requestCompleteHandoff : ApiContext -> TaskId -> CompleteHandoffParams -> (ApiResult -> msg) -> Cmd msg
 requestCompleteHandoff ctx taskId params toMsg =
     Registry.getTask ctx.registry taskId
         |> GrenTask.andThen
             (\maybeTask ->
                 when maybeTask is
                     Nothing ->
-                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ taskId })
+                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ Id.taskIdToString taskId })
 
                     Just task ->
                         Time.now
@@ -783,7 +802,7 @@ requestCompleteHandoff ctx taskId params toMsg =
             )
         |> GrenTask.onError
             (\err ->
-                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = registryErrorToString err })
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err })
             )
         |> GrenTask.perform toMsg
 
@@ -936,23 +955,6 @@ wrapResponse data timestamp =
         |> Encode.encode 0
 
 
-{-| Convert registry error to string.
--}
-registryErrorToString : Registry.Error -> String
-registryErrorToString err =
-    when err is
-        Registry.FileSystemError msg ->
-            "File system error: " ++ msg
-
-        Registry.JsonDecodeError msg ->
-            "JSON decode error: " ++ msg
-
-        Registry.TaskNotFound id ->
-            "Task not found: " ++ id
-
-        Registry.RegistryCorrupt msg ->
-            "Registry corrupt: " ++ msg
-
 
 {-| Convert queue error to string.
 -}
@@ -965,5 +967,5 @@ queueErrorToString err =
         Queue.JsonDecodeError msg ->
             "JSON decode error: " ++ msg
 
-        Queue.TaskNotFound id ->
-            "Task not found: " ++ id
+        Queue.TaskNotFound tid ->
+            "Task not found: " ++ Id.taskIdToString tid
