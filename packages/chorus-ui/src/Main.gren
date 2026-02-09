@@ -27,10 +27,9 @@ import Task
 import Time
 import Types exposing (Task(..), TaskStatus(..))
 import Url exposing (Url)
-import View.Dashboard as Dashboard
+import View.Board as Board
 import View.History as History
 import View.TaskDetail as TaskDetail exposing (PlanningSection(..), PlanningEditState)
-import View.TaskList as TaskList
 
 
 -- MAIN
@@ -60,7 +59,6 @@ type alias Model =
     , taskHistory : Maybe Types.History
     , taskQueue : Maybe Types.Queue
     , createForm : CreateTaskForm
-    , statusFilter : Maybe String
     , loading : Bool
     , error : Maybe String
     , lastPoll : Time.Posix
@@ -69,8 +67,7 @@ type alias Model =
 
 
 type Page
-    = DashboardPage
-    | TaskListPage
+    = BoardPage
     | TaskDetailPage String
     | NotFoundPage
 
@@ -106,7 +103,6 @@ type Msg
     | TaskCreated (Result Http.Error Types.Task)
     | StatusUpdated (Result Http.Error Types.Task)
     | Poll Time.Posix
-    | SetStatusFilter (Maybe String)
     | OpenCreateForm
     | CloseCreateForm
     | UpdateCreateDescription String
@@ -147,7 +143,6 @@ init _ url key =
             , taskHistory = Nothing
             , taskQueue = Nothing
             , createForm = emptyCreateForm
-            , statusFilter = Nothing
             , loading = True
             , error = Nothing
             , lastPoll = Time.millisToPosix 0
@@ -163,10 +158,10 @@ urlToPage : Url -> Page
 urlToPage url =
     when url.path is
         "/" ->
-            DashboardPage
+            BoardPage
 
         "/tasks" ->
-            TaskListPage
+            BoardPage
 
         _ ->
             if String.startsWith "/tasks/" url.path then
@@ -175,7 +170,7 @@ urlToPage url =
                         String.dropFirst 7 url.path
                 in
                 if String.isEmpty taskId then
-                    TaskListPage
+                    BoardPage
                 else
                     TaskDetailPage taskId
             else
@@ -185,10 +180,7 @@ urlToPage url =
 loadPageData : Page -> Cmd Msg
 loadPageData page =
     when page is
-        DashboardPage ->
-            Api.getTasks Nothing GotTasks
-
-        TaskListPage ->
+        BoardPage ->
             Api.getTasks Nothing GotTasks
 
         TaskDetailPage taskId ->
@@ -347,11 +339,8 @@ update msg model =
             { model = { model | lastPoll = now }
             , command =
                 when model.page is
-                    DashboardPage ->
-                        Api.getTasks model.statusFilter GotTasks
-
-                    TaskListPage ->
-                        Api.getTasks model.statusFilter GotTasks
+                    BoardPage ->
+                        Api.getTasks Nothing GotTasks
 
                     TaskDetailPage taskId ->
                         Cmd.batch
@@ -361,11 +350,6 @@ update msg model =
 
                     NotFoundPage ->
                         Cmd.none
-            }
-
-        SetStatusFilter filter ->
-            { model = { model | statusFilter = filter, loading = True }
-            , command = Api.getTasks filter GotTasks
             }
 
         OpenCreateForm ->
@@ -696,27 +680,9 @@ viewHeader model =
             , nav [ class "nav" ]
                 [ a
                     [ href "/"
-                    , classList [ { class = "active", enabled = model.page == DashboardPage } ]
+                    , classList [ { class = "active", enabled = model.page == BoardPage } ]
                     ]
-                    [ text "Dashboard" ]
-                , a
-                    [ href "/tasks"
-                    , classList
-                        [ { class = "active"
-                          , enabled =
-                                when model.page is
-                                    TaskListPage ->
-                                        True
-
-                                    TaskDetailPage _ ->
-                                        True
-
-                                    _ ->
-                                        False
-                          }
-                        ]
-                    ]
-                    [ text "Tasks" ]
+                    [ text "Board" ]
                 ]
             , button [ class "btn btn-primary", onClick OpenCreateForm ]
                 [ text "+ New Task" ]
@@ -741,20 +707,11 @@ viewMain : Model -> Html Msg
 viewMain model =
     main_ [ class "main" ]
         [ when model.page is
-            DashboardPage ->
-                Dashboard.view
-                    { tasks = model.tasks
-                    , loading = model.loading
-                    }
-
-            TaskListPage ->
+            BoardPage ->
                 div []
-                    [ TaskList.view
+                    [ Board.view
                         { tasks = model.tasks
-                        , statusFilter = model.statusFilter
                         , loading = model.loading
-                        , onFilterChange = SetStatusFilter
-                        , onStatusUpdate = \tid status -> UpdateTaskStatus { taskId = tid, status = status }
                         }
                     , viewCreateModal model
                     ]
@@ -783,7 +740,7 @@ viewMain model =
                 div [ class "not-found" ]
                     [ h2 [] [ text "Page Not Found" ]
                     , p [] [ text "The page you requested does not exist." ]
-                    , a [ href "/" ] [ text "Go to Dashboard" ]
+                    , a [ href "/" ] [ text "Go to Board" ]
                     ]
         ]
 

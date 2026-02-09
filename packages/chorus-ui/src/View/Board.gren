@@ -1,0 +1,174 @@
+module View.Board exposing (view)
+
+{-| Kanban board view showing tasks organized into columns by status.
+-}
+
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Time
+import Types exposing (Task(..), TaskStatus(..))
+
+
+type alias Props =
+    { tasks : Array Types.Task
+    , loading : Bool
+    }
+
+
+view : Props -> Html msg
+view props =
+    if props.loading && Array.isEmpty props.tasks then
+        div [ class "loading" ] [ text "Loading..." ]
+    else
+        div [ class "kanban-board" ]
+            [ viewColumn "Pending" "pending" Pending props.tasks
+            , viewColumn "Active" "active" Active props.tasks
+            , viewColumn "Waiting" "waiting" Waiting props.tasks
+            , viewColumn "Completed" "completed" Completed props.tasks
+            , viewFailedColumn props.tasks
+            ]
+
+
+viewColumn : String -> String -> Types.TaskStatus -> Array Types.Task -> Html msg
+viewColumn title statusClass status tasks =
+    let
+        columnTasks =
+            tasks
+                |> Array.keepIf (\t -> statusMatches (Types.taskStatus t) status)
+                |> Array.sortBy (\t -> negate (Time.posixToMillis (Types.taskUpdatedAt t)))
+
+        count =
+            Array.length columnTasks
+    in
+    div [ class "kanban-column" ]
+        [ div [ class ("kanban-column-header kanban-column-header-" ++ statusClass) ]
+            [ span [ class "kanban-column-title" ] [ text title ]
+            , span [ class "kanban-column-count" ] [ text (String.fromInt count) ]
+            ]
+        , div [ class "kanban-column-body" ]
+            (if Array.isEmpty columnTasks then
+                [ div [ class "kanban-empty" ] [ text "No tasks" ] ]
+             else
+                Array.map viewCard columnTasks
+            )
+        ]
+
+
+viewFailedColumn : Array Types.Task -> Html msg
+viewFailedColumn tasks =
+    let
+        columnTasks =
+            tasks
+                |> Array.keepIf
+                    (\t ->
+                        when Types.taskStatus t is
+                            Failed _ ->
+                                True
+
+                            _ ->
+                                False
+                    )
+                |> Array.sortBy (\t -> negate (Time.posixToMillis (Types.taskUpdatedAt t)))
+
+        count =
+            Array.length columnTasks
+    in
+    div [ class "kanban-column" ]
+        [ div [ class "kanban-column-header kanban-column-header-failed" ]
+            [ span [ class "kanban-column-title" ] [ text "Failed" ]
+            , span [ class "kanban-column-count" ] [ text (String.fromInt count) ]
+            ]
+        , div [ class "kanban-column-body" ]
+            (if Array.isEmpty columnTasks then
+                [ div [ class "kanban-empty" ] [ text "No tasks" ] ]
+             else
+                Array.map viewCard columnTasks
+            )
+        ]
+
+
+viewCard : Types.Task -> Html msg
+viewCard task =
+    let
+        source =
+            Types.taskSource task
+
+        agentChainLength =
+            Array.length (Types.taskAgentChain task)
+    in
+    div [ class "kanban-card" ]
+        [ a [ href ("/tasks/" ++ Types.taskId task), class "kanban-card-link" ]
+            [ div [ class "kanban-card-description" ]
+                [ text (Types.taskDescription task) ]
+            , viewSummary task
+            , viewCurrentAgent task
+            , viewHandoffCount agentChainLength
+            , div [ class "kanban-card-meta" ]
+                [ span [ class "kanban-card-source" ]
+                    [ text (source.sourceType ++ " / " ++ source.userId) ]
+                , span [ class "kanban-card-updated" ]
+                    [ text (formatTimestamp (Types.taskUpdatedAt task)) ]
+                ]
+            ]
+        ]
+
+
+viewSummary : Types.Task -> Html msg
+viewSummary task =
+    when task is
+        Planned t ->
+            if String.isEmpty t.summary then
+                text ""
+            else
+                div [ class "kanban-card-summary" ]
+                    [ text t.summary ]
+
+        DescriptionOnly _ ->
+            text ""
+
+
+viewCurrentAgent : Types.Task -> Html msg
+viewCurrentAgent task =
+    when Types.taskCurrentAgent task is
+        Just agent ->
+            div [ class "kanban-card-agent" ]
+                [ text agent ]
+
+        Nothing ->
+            text ""
+
+
+viewHandoffCount : Int -> Html msg
+viewHandoffCount count =
+    if count > 0 then
+        div [ class "kanban-card-handoff-count" ]
+            [ text (String.fromInt count ++ " hand-offs") ]
+    else
+        text ""
+
+
+formatTimestamp : Time.Posix -> String
+formatTimestamp posix =
+    String.fromInt (Time.posixToMillis posix)
+
+
+statusMatches : Types.TaskStatus -> Types.TaskStatus -> Bool
+statusMatches a b =
+    when { a = a, b = b } is
+        { a = Pending, b = Pending } ->
+            True
+
+        { a = Active, b = Active } ->
+            True
+
+        { a = Waiting, b = Waiting } ->
+            True
+
+        { a = Completed, b = Completed } ->
+            True
+
+        { a = Failed _, b = Failed _ } ->
+            True
+
+        _ ->
+            False
