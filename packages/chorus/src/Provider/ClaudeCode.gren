@@ -17,10 +17,10 @@ import ChildProcess
 import Id exposing (SessionId)
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
-import Agent.Spec exposing (AgentSpec)
 import Provider
     exposing
-        ( Provider
+        ( AgentSpec
+        , Provider
         , ProviderError(..)
         , Response
         , Session

@@ -36,6 +36,9 @@ type Route
     | CompleteHandoff TaskId                   -- PUT /api/tasks/:id/handoff/complete
     | ListAgents                               -- GET /api/agents
     | GetAgent String                          -- GET /api/agents/:name
+    | CreateAgent                              -- POST /api/agents
+    | UpdateAgent String                       -- PUT /api/agents/:name
+    | DeleteAgent String                       -- DELETE /api/agents/:name
     | StaticFile String                        -- GET /* (for frontend assets)
     | NotFound
 
@@ -133,6 +136,15 @@ parseRoute method path =
 
         { method = GET, segments = [ "api", "agents", agentName ] } ->
             GetAgent agentName
+
+        { method = POST, segments = [ "api", "agents" ] } ->
+            CreateAgent
+
+        { method = PUT, segments = [ "api", "agents", agentName ] } ->
+            UpdateAgent agentName
+
+        { method = DELETE, segments = [ "api", "agents", agentName ] } ->
+            DeleteAgent agentName
 
         -- Static files (anything not matching /api/*)
         { method = GET, segments = segs } ->
@@ -290,6 +302,15 @@ routeToString route =
 
         GetAgent name ->
             "GetAgent(" ++ name ++ ")"
+
+        CreateAgent ->
+            "CreateAgent"
+
+        UpdateAgent name ->
+            "UpdateAgent(" ++ name ++ ")"
+
+        DeleteAgent name ->
+            "DeleteAgent(" ++ name ++ ")"
 
         StaticFile path ->
             "StaticFile(" ++ path ++ ")"

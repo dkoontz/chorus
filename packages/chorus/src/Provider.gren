@@ -1,6 +1,8 @@
 module Provider exposing
     ( -- Session types
       Session
+      -- Agent spec type
+    , AgentSpec
       -- Response types
     , Response
     , ToolCall
@@ -20,9 +22,19 @@ This module defines the abstract interface that all LLM providers must implement
 The executor uses this interface without knowing which provider is active.
 -}
 
-import Agent.Spec exposing (AgentSpec)
 import Id exposing (SessionId)
 import Json.Decode
+
+
+-- AGENT SPEC
+
+
+{-| An agent specification used when creating sessions.
+-}
+type alias AgentSpec =
+    { name : String
+    , systemPrompt : String
+    }
 
 
 -- SESSION TYPES

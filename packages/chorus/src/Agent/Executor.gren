@@ -29,7 +29,6 @@ making it independent of any specific LLM service.
 6. Save session ID for resumption
 -}
 
-import Agent.Spec as Spec exposing (AgentSpec)
 import Bytes
 import ChildProcess
 import FileSystem
@@ -39,14 +38,15 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import Provider
     exposing
-        ( Provider
+        ( AgentSpec
+        , Provider
         , ProviderError
         , Response
         , Session
         , ToolCall
         , ToolResult
         )
-import Task exposing (Task)
+import Task
 
 
 -- TYPES
@@ -88,8 +88,7 @@ type Model
 {-| Errors that can occur during execution.
 -}
 type ExecutorError
-    = SpecParseError Spec.ParseError
-    | ProviderFailed ProviderError
+    = ProviderFailed ProviderError
     | ToolExecutionFailed { tool : String, reason : String }
     | SessionSaveFailed { reason : String }
     | NoInitialMessage
@@ -100,9 +99,6 @@ type ExecutorError
 executorErrorToString : ExecutorError -> String
 executorErrorToString error =
     when error is
-        SpecParseError parseError ->
-            Spec.parseErrorToString parseError
-
         ProviderFailed providerError ->
             Provider.providerErrorToString providerError
 
@@ -127,10 +123,8 @@ type alias ToolExecutionResult =
 {-| Messages for the executor.
 -}
 type Msg
-    = -- Agent spec loading
-      AgentSpecLoaded (Result Spec.ParseError AgentSpec)
-      -- Environment validation
-    | EnvironmentValidated (Result ProviderError {})
+    = -- Environment validation
+      EnvironmentValidated (Result ProviderError {})
       -- Session management
     | SessionCreated (Result ProviderError Session)
     | SessionResumed (Result ProviderError (Maybe Session))
@@ -148,14 +142,13 @@ type Msg
 -- INITIALIZATION
 
 
-{-| Initialize the executor by loading the agent spec.
+{-| Initialize the executor with an agent spec.
 -}
 init :
-    FileSystem.Permission
-    -> Path
-    -> Task Spec.ParseError AgentSpec
-init fsPermission agentSpecPath =
-    Spec.parse fsPermission agentSpecPath
+    AgentSpec
+    -> Model
+init agentSpec =
+    Validating { agentSpec = agentSpec }
 
 
 
@@ -172,21 +165,6 @@ update :
     -> { model : Model, cmd : Cmd msg }
 update msg model config wrapper =
     when msg is
-        AgentSpecLoaded result ->
-            when result is
-                Err parseError ->
-                    { model = Failed { error = SpecParseError parseError }
-                    , cmd = Cmd.none
-                    }
-
-                Ok agentSpec ->
-                    -- First validate the environment before creating a session
-                    { model = Validating { agentSpec = agentSpec }
-                    , cmd =
-                        config.provider.validateEnvironment
-                            (\r -> wrapper.toMsg (EnvironmentValidated r))
-                    }
-
         EnvironmentValidated result ->
             when { result = result, model = model } is
                 { result = Err providerError } ->

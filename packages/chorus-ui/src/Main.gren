@@ -26,8 +26,9 @@ import Id
 import Json.Decode
 import Task
 import Time
-import Types exposing (Task(..), TaskStatus(..))
+import Types exposing (AgentConfig, Task(..), TaskStatus(..))
 import Url exposing (Url)
+import View.Agents as Agents exposing (AgentForm)
 import View.Board as Board
 import View.History as History
 import View.TaskDetail as TaskDetail exposing (PlanningSection(..), PlanningEditState)
@@ -65,12 +66,15 @@ type alias Model =
     , lastPoll : Time.Posix
     , editingPlanning : Maybe PlanningEditState
     , timeZone : Time.Zone
+    , agents : Array AgentConfig
+    , agentForm : Maybe AgentForm
     }
 
 
 type Page
     = BoardPage
     | TaskDetailPage String
+    | AgentsPage
     | NotFoundPage
 
 
@@ -126,6 +130,20 @@ type Msg
     | CancelPlanningEdit
     | PlanningUpdated (Result Http.Error Types.Task)
     | GotZone Time.Zone
+      -- Agent CRUD
+    | GotAgents (Result Http.Error (Array AgentConfig))
+    | GotAgentSaved (Result Http.Error AgentConfig)
+    | GotAgentDeleted { name : String, result : Result Http.Error {} }
+    | OpenAgentCreateForm
+    | OpenAgentEditForm AgentConfig
+    | CloseAgentForm
+    | UpdateAgentName String
+    | UpdateAgentInstructions String
+    | UpdateAgentAllowedTools String
+    | UpdateAgentPermissionMode String
+    | SaveAgent
+    | DeleteAgent String
+    | NoOp
 
 
 
@@ -151,6 +169,8 @@ init _ url key =
             , lastPoll = Time.millisToPosix 0
             , editingPlanning = Nothing
             , timeZone = Time.utc
+            , agents = []
+            , agentForm = Nothing
             }
     in
     { model = model
@@ -170,6 +190,9 @@ urlToPage url =
 
         "/tasks" ->
             BoardPage
+
+        "/agents" ->
+            AgentsPage
 
         _ ->
             if String.startsWith "/tasks/" url.path then
@@ -197,6 +220,9 @@ loadPageData page =
                 , Api.getTaskHistory taskId GotHistory
                 , Api.getTaskQueue taskId GotQueue
                 ]
+
+        AgentsPage ->
+            Api.getAgents GotAgents
 
         NotFoundPage ->
             Cmd.none
@@ -234,6 +260,7 @@ update msg model =
                     , taskQueue = Nothing
                     , loading = True
                     , editingPlanning = Nothing
+                    , agentForm = Nothing
                 }
             , command = loadPageData page
             }
@@ -355,6 +382,9 @@ update msg model =
                             [ Api.getTask taskId GotTask
                             , Api.getTaskHistory taskId GotHistory
                             ]
+
+                    AgentsPage ->
+                        Api.getAgents GotAgents
 
                     NotFoundPage ->
                         Cmd.none
@@ -656,6 +686,168 @@ update msg model =
             { model = { model | timeZone = zone }
             , command = Cmd.none
             }
+        -- Agent CRUD
+
+        GotAgents result ->
+            when result is
+                Ok agents ->
+                    { model = { model | agents = agents, loading = False, error = Nothing }
+                    , command = Cmd.none
+                    }
+
+
+                Err err ->
+                    { model = { model | loading = False, error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
+        GotAgentSaved result ->
+            when result is
+                Ok savedAgent ->
+                    let
+                        updatedAgents =
+                            if Array.any (\a -> a.name == savedAgent.name) model.agents then
+                                Array.map
+                                    (\a ->
+                                        if a.name == savedAgent.name then
+                                            savedAgent
+                                        else
+                                            a
+                                    )
+                                    model.agents
+                            else
+                                Array.pushLast savedAgent model.agents
+                    in
+                    { model =
+                        { model
+                            | agents = updatedAgents
+                            , agentForm = Nothing
+                            , error = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
+        GotAgentDeleted { name, result } ->
+            when result is
+                Ok _ ->
+                    { model =
+                        { model
+                            | agents = Array.keepIf (\a -> a.name /= name) model.agents
+                            , error = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
+        OpenAgentCreateForm ->
+            { model = { model | agentForm = Just Agents.emptyAgentForm }
+            , command = Cmd.none
+            }
+
+        OpenAgentEditForm agent ->
+            { model =
+                { model
+                    | agentForm =
+                        Just
+                            { name = agent.name
+                            , instructions = agent.instructions
+                            , allowedTools = agent.allowedTools
+                            , permissionMode = agent.permissionMode
+                            , isEditing = True
+                            }
+                }
+            , command = Cmd.none
+            }
+
+        CloseAgentForm ->
+            { model = { model | agentForm = Nothing }
+            , command = Cmd.none
+            }
+
+        UpdateAgentName name ->
+            { model =
+                { model
+                    | agentForm =
+                        Maybe.map (\f -> { f | name = name }) model.agentForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateAgentInstructions instructions ->
+            { model =
+                { model
+                    | agentForm =
+                        Maybe.map (\f -> { f | instructions = instructions }) model.agentForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateAgentAllowedTools tools ->
+            { model =
+                { model
+                    | agentForm =
+                        Maybe.map (\f -> { f | allowedTools = tools }) model.agentForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateAgentPermissionMode mode ->
+            { model =
+                { model
+                    | agentForm =
+                        Maybe.map (\f -> { f | permissionMode = mode }) model.agentForm
+                }
+            , command = Cmd.none
+            }
+
+        SaveAgent ->
+            when model.agentForm is
+                Just form ->
+                    if String.isEmpty (String.trim form.name) then
+                        { model = { model | error = Just "Agent name is required" }
+                        , command = Cmd.none
+                        }
+                    else
+                        let
+                            config =
+                                { name = form.name
+                                , instructions = form.instructions
+                                , allowedTools = form.allowedTools
+                                , permissionMode = form.permissionMode
+                                }
+                        in
+                        if form.isEditing then
+                            { model = model
+                            , command = Api.updateAgent form.name config GotAgentSaved
+                            }
+                        else
+                            { model = model
+                            , command = Api.createAgent config GotAgentSaved
+                            }
+
+                Nothing ->
+                    { model = model
+                    , command = Cmd.none
+                    }
+
+        DeleteAgent name ->
+            { model = model
+            , command = Api.deleteAgent name (\result -> GotAgentDeleted { name = name, result = result })
+            }
+
+        NoOp ->
+            { model = model
+            , command = Cmd.none
+            }
 
 
 
@@ -696,6 +888,11 @@ viewHeader model =
                     , classList [ { class = "active", enabled = model.page == BoardPage } ]
                     ]
                     [ text "Board" ]
+                , a
+                    [ href "/agents"
+                    , classList [ { class = "active", enabled = model.page == AgentsPage } ]
+                    ]
+                    [ text "Agents" ]
                 ]
             , button [ class "btn btn-primary", onClick OpenCreateForm ]
                 [ text "+ New Task" ]
@@ -751,6 +948,23 @@ viewMain model =
                     , onCancelPlanningEdit = CancelPlanningEdit
                     , zone = model.timeZone
                     , now = model.lastPoll
+                    }
+
+            AgentsPage ->
+                Agents.view
+                    { agents = model.agents
+                    , loading = model.loading
+                    , agentForm = model.agentForm
+                    , onOpenCreateForm = OpenAgentCreateForm
+                    , onOpenEditForm = OpenAgentEditForm
+                    , onCloseForm = CloseAgentForm
+                    , onUpdateName = UpdateAgentName
+                    , onUpdateInstructions = UpdateAgentInstructions
+                    , onUpdateAllowedTools = UpdateAgentAllowedTools
+                    , onUpdatePermissionMode = UpdateAgentPermissionMode
+                    , onSaveAgent = SaveAgent
+                    , onDeleteAgent = DeleteAgent
+                    , onNoOp = NoOp
                     }
 
             NotFoundPage ->

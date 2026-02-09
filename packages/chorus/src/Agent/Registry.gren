@@ -1,11 +1,11 @@
 module Agent.Registry exposing
     ( AgentRegistry
-    , AgentConfig
     , Error(..)
     , init
     , getAgent
     , listAgents
-    , encodeAgentConfig
+    , updateAgent
+    , deleteAgent
     , errorToString
     )
 
@@ -24,19 +24,10 @@ import FileSystem.Path as Path exposing (Path)
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import Task as GrenTask
+import Types exposing (AgentConfig, encodeAgentConfig, agentConfigDecoder)
 
 
 -- TYPES
-
-
-{-| An agent configuration.
--}
-type alias AgentConfig =
-    { name : String
-    , specPath : String
-    , allowedTools : String
-    , permissionMode : String
-    }
 
 
 {-| Handle to the agent registry. Contains the filesystem permission and root path.
@@ -117,27 +108,27 @@ seedDefaults fsPermission agentsPath =
     let
         defaults =
             [ { name = "developer"
-              , specPath = "agents/developer.md"
+              , instructions = "You are a developer agent responsible for implementing technical requirements."
               , allowedTools = "Bash(file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "developer-review"
-              , specPath = "agents/developer-review.md"
+              , instructions = "You are a code review agent responsible for reviewing implementations."
               , allowedTools = "Bash(file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "qa"
-              , specPath = "agents/qa.md"
+              , instructions = "You are a QA agent responsible for testing implementations."
               , allowedTools = "Bash(file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "planner"
-              , specPath = "agents/planner.md"
+              , instructions = "You are a planner agent responsible for breaking down tasks."
               , allowedTools = "Bash(file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "orchestrator"
-              , specPath = "agents/orchestrator.md"
+              , instructions = "You are an orchestrator agent responsible for coordinating work."
               , allowedTools = "Bash(file-tools *)"
               , permissionMode = "bypassPermissions"
               }
@@ -164,22 +155,7 @@ getAgent (AgentRegistry config) name =
         filePath =
             Path.append (Path.fromPosixString (name ++ ".json")) config.agentsRoot
     in
-    FileSystem.readFile config.fsPermission filePath
-        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
-        |> GrenTask.andThen
-            (\bytes ->
-                when Bytes.toString bytes is
-                    Nothing ->
-                        GrenTask.fail (JsonDecodeError "Could not decode agent config file as UTF-8")
-
-                    Just content ->
-                        when Decode.decodeString agentConfigDecoder content is
-                            Ok agentConfig ->
-                                GrenTask.succeed agentConfig
-
-                            Err err ->
-                                GrenTask.fail (JsonDecodeError (Decode.errorToString err))
-            )
+    readAgentConfigFile config.fsPermission filePath
         |> GrenTask.onError
             (\err ->
                 when err is
@@ -225,6 +201,39 @@ listAgents (AgentRegistry config) =
             )
 
 
+{-| Create or update an agent config.
+-}
+updateAgent : AgentRegistry -> AgentConfig -> GrenTask.Task Error AgentConfig
+updateAgent (AgentRegistry config) agentConfig =
+    writeAgentConfig config.fsPermission config.agentsRoot agentConfig
+        |> GrenTask.map (\_ -> agentConfig)
+
+
+{-| Delete an agent config by name.
+-}
+deleteAgent : AgentRegistry -> String -> GrenTask.Task Error {}
+deleteAgent (AgentRegistry config) name =
+    let
+        filePath =
+            Path.append (Path.fromPosixString (name ++ ".json")) config.agentsRoot
+    in
+    FileSystem.remove config.fsPermission { recursive = False } filePath
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.map (\_ -> {})
+        |> GrenTask.onError
+            (\err ->
+                when err is
+                    FileSystemError msg ->
+                        if String.contains "ENOENT" msg || String.contains "no such file" msg then
+                            GrenTask.fail (AgentNotFound name)
+                        else
+                            GrenTask.fail err
+
+                    _ ->
+                        GrenTask.fail err
+            )
+
+
 
 -- HELPERS
 
@@ -247,13 +256,13 @@ errorToString err =
 {-| Write a single agent config file.
 -}
 writeAgentConfig : FileSystem.Permission -> Path -> AgentConfig -> GrenTask.Task Error {}
-writeAgentConfig fsPermission agentsPath config =
+writeAgentConfig fsPermission agentsPath agentConfig =
     let
         filePath =
-            Path.append (Path.fromPosixString (config.name ++ ".json")) agentsPath
+            Path.append (Path.fromPosixString (agentConfig.name ++ ".json")) agentsPath
 
         json =
-            encodeAgentConfig config
+            encodeAgentConfig agentConfig
                 |> Encode.encode 2
 
         bytes =
@@ -284,37 +293,3 @@ readAgentConfigFile fsPermission filePath =
                             Err err ->
                                 GrenTask.fail (JsonDecodeError (Decode.errorToString err))
             )
-
-
-
--- JSON
-
-
-{-| Encode an agent config to JSON.
--}
-encodeAgentConfig : AgentConfig -> Encode.Value
-encodeAgentConfig config =
-    Encode.object
-        [ { key = "name", value = Encode.string config.name }
-        , { key = "specPath", value = Encode.string config.specPath }
-        , { key = "allowedTools", value = Encode.string config.allowedTools }
-        , { key = "permissionMode", value = Encode.string config.permissionMode }
-        ]
-
-
-{-| Decode an agent config from JSON.
--}
-agentConfigDecoder : Decoder AgentConfig
-agentConfigDecoder =
-    Decode.map4
-        (\name specPath allowedTools permissionMode ->
-            { name = name
-            , specPath = specPath
-            , allowedTools = allowedTools
-            , permissionMode = permissionMode
-            }
-        )
-        (Decode.field "name" Decode.string)
-        (Decode.field "specPath" Decode.string)
-        (Decode.field "allowedTools" Decode.string)
-        (Decode.field "permissionMode" Decode.string)

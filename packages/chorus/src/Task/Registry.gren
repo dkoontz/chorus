@@ -222,7 +222,6 @@ createTask (Registry config) { description, source } =
                                     , updatedAt = now
                                     , sessionId = Nothing
                                     , source = source
-                                    , workspacePath = Path.toPosixString workspaceDir
                                     , attachments = []
                                     , currentAgent = Nothing
                                     , agentChain = []

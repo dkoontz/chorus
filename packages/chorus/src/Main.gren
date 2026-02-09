@@ -76,7 +76,7 @@ type alias Model =
 type alias ExecutorState =
     { taskId : TaskId
     , agentName : String
-    , agentConfig : AgentRegistry.AgentConfig
+    , agentConfig : Types.AgentConfig
     , status : ExecutorStatus
     }
 
@@ -191,10 +191,9 @@ type Msg
     | GotStaticFile { id : Int, response : Response, result : Static.StaticFileResult }
     | GotApiResult { response : Response, result : Api.ApiResult }
     | GotBinaryResult { response : Response, result : Api.BinaryResult }
-    | GotAgentLookup { taskId : TaskId, prompt : String, response : Response, result : Result AgentRegistry.Error AgentRegistry.AgentConfig }
-    | GotHandoffRecorded { taskId : TaskId, prompt : String, response : Response, agentConfig : AgentRegistry.AgentConfig, apiResult : Api.ApiResult }
+    | GotAgentLookup { taskId : TaskId, prompt : String, response : Response, result : Result AgentRegistry.Error Types.AgentConfig }
+    | GotHandoffRecorded { taskId : TaskId, prompt : String, response : Response, agentConfig : Types.AgentConfig, apiResult : Api.ApiResult }
     | GotAgentComplete { taskId : TaskId, result : Result String String }
-    | GotAgentSpecLoaded { taskId : TaskId, prompt : String, agentConfig : AgentRegistry.AgentConfig, result : Result String String }
     | GotInternalApiResult Api.ApiResult
     | NoOp
 
@@ -357,7 +356,7 @@ update msg model =
                             }
 
         GotHandoffRecorded { taskId, prompt, response, agentConfig, apiResult } ->
-            -- The task update completed. Send the HTTP response first, then load the agent spec and spawn.
+            -- The task update completed. Send the HTTP response first, then spawn the agent.
             let
                 sendResponseCmd =
                     Api.sendApiResponse response apiResult
@@ -370,124 +369,92 @@ update msg model =
                     }
 
                 Api.ApiSuccess _ ->
-                    -- Task updated successfully, send response and load the agent spec file
-                    { model = model
+                    -- Task updated successfully. Use inline instructions directly.
+                    let
+                        systemPrompt =
+                            if String.isEmpty agentConfig.instructions then
+                                Nothing
+                            else
+                                Just agentConfig.instructions
+
+                        workspaceRoot =
+                            model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
+
+                        executorState =
+                            { taskId = taskId
+                            , agentName = agentConfig.name
+                            , agentConfig = agentConfig
+                            , status = ExecRunning
+                            }
+
+                        cliArgs =
+                            { systemPrompt = systemPrompt
+                            , resumeSessionId = Nothing
+                            , workspaceRoot = workspaceRoot
+                            , fileToolsPath = model.config.fileToolsPath
+                            , message = prompt
+                            , allowedTools = Just agentConfig.allowedTools
+                            , permissionMode = Just agentConfig.permissionMode
+                            }
+
+                        shellCommand =
+                            ClaudeCode.buildShellCommand cliArgs
+
+                        options =
+                            { shell = ChildProcess.NoShell
+                            , workingDirectory = ChildProcess.InheritWorkingDirectory
+                            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+                            , maximumBytesWrittenToStreams = 10 * 1024 * 1024
+                            , runDuration = ChildProcess.Milliseconds 600000
+                            }
+                    in
+                    { model = { model | activeExecutors = Dict.set (Id.taskIdToString taskId) executorState model.activeExecutors }
                     , command =
                         Cmd.batch
                             [ sendResponseCmd
-                            , FileSystem.readFile model.fsPermission (Path.fromPosixString agentConfig.specPath)
+                            , ChildProcess.run model.cpPermission "bash" [ "-c", shellCommand ] options
                                 |> GrenTask.map
-                                    (\bytes ->
-                                        Ok (Bytes.toString bytes |> Maybe.withDefault "")
+                                    (\cliResult ->
+                                        let
+                                            output =
+                                                cliResult.stdout
+                                                    |> Bytes.toString
+                                                    |> Maybe.withDefault ""
+
+                                            -- Extract the result text from CLI JSON output
+                                            resultText =
+                                                when Decode.decodeString (Decode.field "result" Decode.string) output is
+                                                    Ok text ->
+                                                        text
+
+                                                    Err _ ->
+                                                        output
+                                        in
+                                        Ok resultText
                                     )
                                 |> GrenTask.onError
-                                    (\_ ->
-                                        -- Spec file not found or unreadable; proceed without a system prompt
-                                        GrenTask.succeed (Ok "")
+                                    (\runError ->
+                                        let
+                                            errMsg =
+                                                when runError is
+                                                    ChildProcess.InitError { errorCode } ->
+                                                        "Failed to start agent CLI: " ++ errorCode
+
+                                                    ChildProcess.ProgramError { exitCode, stderr } ->
+                                                        let
+                                                            stderrStr =
+                                                                stderr
+                                                                    |> Bytes.toString
+                                                                    |> Maybe.withDefault ""
+                                                        in
+                                                        "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                                        in
+                                        GrenTask.succeed (Err errMsg)
                                     )
-                                |> GrenTask.perform
-                                    (\r ->
-                                        GotAgentSpecLoaded
-                                            { taskId = taskId
-                                            , prompt = prompt
-                                            , agentConfig = agentConfig
-                                            , result = r
-                                            }
-                                    )
+                                |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
+                            , Logging.logInfo model.logger ("Spawned agent " ++ agentConfig.name ++ " for task " ++ Id.taskIdToString taskId) NoOp
                             ]
                     }
-
-        GotAgentSpecLoaded { taskId, prompt, agentConfig, result } ->
-            -- Agent spec loaded (or empty if not found). Now spawn the CLI process.
-            let
-                specContent =
-                    when result is
-                        Ok content ->
-                            content
-
-                        Err _ ->
-                            ""
-
-                systemPrompt =
-                    if String.isEmpty specContent then
-                        Nothing
-                    else
-                        Just specContent
-
-                executorState =
-                    { taskId = taskId
-                    , agentName = agentConfig.name
-                    , agentConfig = agentConfig
-                    , status = ExecRunning
-                    }
-
-                cliArgs =
-                    { systemPrompt = systemPrompt
-                    , resumeSessionId = Nothing
-                    , workspaceRoot = ""
-                    , fileToolsPath = model.config.fileToolsPath
-                    , message = prompt
-                    , allowedTools = Just agentConfig.allowedTools
-                    , permissionMode = Just agentConfig.permissionMode
-                    }
-
-                shellCommand =
-                    ClaudeCode.buildShellCommand cliArgs
-
-                options =
-                    { shell = ChildProcess.NoShell
-                    , workingDirectory = ChildProcess.InheritWorkingDirectory
-                    , environmentVariables = ChildProcess.InheritEnvironmentVariables
-                    , maximumBytesWrittenToStreams = 10 * 1024 * 1024
-                    , runDuration = ChildProcess.Milliseconds 600000
-                    }
-            in
-            { model = { model | activeExecutors = Dict.set (Id.taskIdToString taskId) executorState model.activeExecutors }
-            , command =
-                Cmd.batch
-                    [ ChildProcess.run model.cpPermission "bash" [ "-c", shellCommand ] options
-                        |> GrenTask.map
-                            (\cliResult ->
-                                let
-                                    output =
-                                        cliResult.stdout
-                                            |> Bytes.toString
-                                            |> Maybe.withDefault ""
-
-                                    -- Extract the result text from CLI JSON output
-                                    resultText =
-                                        when Decode.decodeString (Decode.field "result" Decode.string) output is
-                                            Ok text ->
-                                                text
-
-                                            Err _ ->
-                                                output
-                                in
-                                Ok resultText
-                            )
-                        |> GrenTask.onError
-                            (\runError ->
-                                let
-                                    errMsg =
-                                        when runError is
-                                            ChildProcess.InitError { errorCode } ->
-                                                "Failed to start agent CLI: " ++ errorCode
-
-                                            ChildProcess.ProgramError { exitCode, stderr } ->
-                                                let
-                                                    stderrStr =
-                                                        stderr
-                                                            |> Bytes.toString
-                                                            |> Maybe.withDefault ""
-                                                in
-                                                "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
-                                in
-                                GrenTask.succeed (Err errMsg)
-                            )
-                        |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
-                    , Logging.logInfo model.logger ("Spawned agent " ++ agentConfig.name ++ " for task " ++ Id.taskIdToString taskId) NoOp
-                    ]
-            }
 
         GotAgentComplete { taskId, result } ->
             let
@@ -757,6 +724,40 @@ handleRoute model route request response =
                                 Just agentReg ->
                                     Api.requestAgent agentReg agentName toMsg
 
+                        Router.CreateAgent ->
+                            when model.agentRegistry is
+                                Nothing ->
+                                    sendServiceUnavailable response
+
+                                Just agentReg ->
+                                    when parseAgentBody request is
+                                        Ok agentConfig ->
+                                            Api.requestCreateAgent agentReg agentConfig toMsg
+
+                                        Err errMsg ->
+                                            sendBadRequest response errMsg
+
+                        Router.UpdateAgent agentName ->
+                            when model.agentRegistry is
+                                Nothing ->
+                                    sendServiceUnavailable response
+
+                                Just agentReg ->
+                                    when parseAgentBody request is
+                                        Ok agentConfig ->
+                                            Api.requestUpdateAgent agentReg agentName agentConfig toMsg
+
+                                        Err errMsg ->
+                                            sendBadRequest response errMsg
+
+                        Router.DeleteAgent agentName ->
+                            when model.agentRegistry is
+                                Nothing ->
+                                    sendServiceUnavailable response
+
+                                Just agentReg ->
+                                    Api.requestDeleteAgent agentReg agentName toMsg
+
                         Router.NotFound ->
                             sendNotFound response
 
@@ -780,10 +781,23 @@ sendServiceUnavailable response =
 -}
 sendBadRequest : Response -> String -> Cmd Msg
 sendBadRequest response message =
+    let
+        body =
+            Encode.object
+                [ { key = "error"
+                  , value =
+                        Encode.object
+                            [ { key = "code", value = Encode.string "BAD_REQUEST" }
+                            , { key = "message", value = Encode.string message }
+                            ]
+                  }
+                ]
+                |> Encode.encode 0
+    in
     response
         |> Response.setStatus 400
         |> Response.setHeader "Content-Type" "application/json"
-        |> Response.setBody ("{\"error\":{\"code\":\"BAD_REQUEST\",\"message\":\"" ++ message ++ "\"}}")
+        |> Response.setBody body
         |> Response.send
 
 
@@ -984,6 +998,18 @@ parseCompleteHandoffBody request =
 
         Err _ ->
             Err "Invalid JSON body for handoff completion"
+
+
+{-| Parse the body for POST /api/agents or PUT /api/agents/:name.
+-}
+parseAgentBody : HttpServer.Request -> Result String Types.AgentConfig
+parseAgentBody request =
+    when HttpServer.bodyFromJson Types.agentConfigDecoder request is
+        Ok agentConfig ->
+            Ok agentConfig
+
+        Err _ ->
+            Err "Invalid JSON body for agent config"
 
 
 -- SUBSCRIPTIONS

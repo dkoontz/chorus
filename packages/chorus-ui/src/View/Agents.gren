@@ -1,0 +1,225 @@
+module View.Agents exposing
+    ( view
+    , AgentForm
+    , emptyAgentForm
+    )
+
+{-| Agent management view for listing, creating, editing, and deleting agents.
+-}
+
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Html.Events exposing (onClick, onInput, onSubmit)
+import Json.Decode
+import Types exposing (AgentConfig)
+
+
+{-| Form state for creating or editing an agent.
+-}
+type alias AgentForm =
+    { name : String
+    , instructions : String
+    , allowedTools : String
+    , permissionMode : String
+    , isEditing : Bool  -- True when editing an existing agent
+    }
+
+
+{-| Empty form for creating a new agent.
+-}
+emptyAgentForm : AgentForm
+emptyAgentForm =
+    { name = ""
+    , instructions = ""
+    , allowedTools = "Read,Grep,Glob,Write,Edit,Bash"
+    , permissionMode = "default"
+    , isEditing = False
+    }
+
+
+type alias Props msg =
+    { agents : Array AgentConfig
+    , loading : Bool
+    , agentForm : Maybe AgentForm
+    , onOpenCreateForm : msg
+    , onOpenEditForm : AgentConfig -> msg
+    , onCloseForm : msg
+    , onUpdateName : String -> msg
+    , onUpdateInstructions : String -> msg
+    , onUpdateAllowedTools : String -> msg
+    , onUpdatePermissionMode : String -> msg
+    , onSaveAgent : msg
+    , onDeleteAgent : String -> msg
+    , onNoOp : msg
+    }
+
+
+view : Props msg -> Html msg
+view props =
+    div [ class "agents-page" ]
+        [ viewAgentsHeader props
+        , viewAgentsList props
+        , viewAgentFormModal props
+        ]
+
+
+viewAgentsHeader : Props msg -> Html msg
+viewAgentsHeader props =
+    div [ class "agents-header" ]
+        [ h2 [] [ text "Agents" ]
+        , button [ class "btn btn-primary", onClick props.onOpenCreateForm ]
+            [ text "+ New Agent" ]
+        ]
+
+
+viewAgentsList : Props msg -> Html msg
+viewAgentsList props =
+    if props.loading && Array.isEmpty props.agents then
+        div [ class "loading" ] [ text "Loading agents..." ]
+    else if Array.isEmpty props.agents then
+        div [ class "empty-state" ]
+            [ p [] [ text "No agents configured yet." ]
+            , p [] [ text "Create an agent to get started." ]
+            ]
+    else
+        div [ class "agents-list" ]
+            (Array.map (viewAgentCard props) props.agents)
+
+
+viewAgentCard : Props msg -> AgentConfig -> Html msg
+viewAgentCard props agent =
+    div [ class "agent-card card" ]
+        [ div [ class "agent-card-header" ]
+            [ h3 [ class "agent-card-name" ] [ text agent.name ]
+            , div [ class "agent-card-actions" ]
+                [ button
+                    [ class "btn btn-small btn-secondary"
+                    , onClick (props.onOpenEditForm agent)
+                    ]
+                    [ text "Edit" ]
+                , button
+                    [ class "btn btn-small btn-danger"
+                    , onClick (props.onDeleteAgent agent.name)
+                    ]
+                    [ text "Delete" ]
+                ]
+            ]
+        , dl [ class "info-list" ]
+            [ dt [] [ text "Permission Mode" ]
+            , dd [] [ text agent.permissionMode ]
+            , dt [] [ text "Allowed Tools" ]
+            , dd [ class "monospace" ] [ text agent.allowedTools ]
+            ]
+        , div [ class "agent-card-instructions" ]
+            [ h4 [] [ text "Instructions" ]
+            , if String.isEmpty agent.instructions then
+                p [ class "empty-state-text" ] [ text "No instructions" ]
+              else
+                pre [ class "agent-instructions-preview" ]
+                    [ text (truncateInstructions 300 agent.instructions) ]
+            ]
+        ]
+
+
+truncateInstructions : Int -> String -> String
+truncateInstructions maxLen str =
+    if String.unitLength str <= maxLen then
+        str
+    else
+        String.takeFirst maxLen str ++ "..."
+
+
+viewAgentFormModal : Props msg -> Html msg
+viewAgentFormModal props =
+    when props.agentForm is
+        Nothing ->
+            text ""
+
+        Just form ->
+            div [ class "modal-overlay", onClick props.onCloseForm ]
+                [ div
+                    [ class "modal modal-wide"
+                    , Html.Events.stopPropagationOn "click"
+                        (Json.Decode.succeed
+                            { message = props.onNoOp
+                            , stopPropagation = True
+                            }
+                        )
+                    ]
+                    [ h2 []
+                        [ text
+                            (if form.isEditing then
+                                "Edit Agent"
+                             else
+                                "Create Agent"
+                            )
+                        ]
+                    , Html.form [ onSubmit props.onSaveAgent ]
+                        [ div [ class "form-group" ]
+                            [ label [ for "agent-name" ] [ text "Name" ]
+                            , input
+                                [ id "agent-name"
+                                , type_ "text"
+                                , value form.name
+                                , onInput props.onUpdateName
+                                , placeholder "e.g. developer"
+                                , disabled form.isEditing
+                                , autofocus (not form.isEditing)
+                                ]
+                                []
+                            ]
+                        , div [ class "form-group" ]
+                            [ label [ for "agent-instructions" ] [ text "Instructions" ]
+                            , textarea
+                                [ id "agent-instructions"
+                                , value form.instructions
+                                , onInput props.onUpdateInstructions
+                                , placeholder "Enter agent system prompt / instructions..."
+                                , Html.Attributes.rows 12
+                                ]
+                                []
+                            ]
+                        , div [ class "form-group" ]
+                            [ label [ for "agent-tools" ] [ text "Allowed Tools" ]
+                            , input
+                                [ id "agent-tools"
+                                , type_ "text"
+                                , value form.allowedTools
+                                , onInput props.onUpdateAllowedTools
+                                , placeholder "Comma-separated tool names"
+                                ]
+                                []
+                            ]
+                        , div [ class "form-group" ]
+                            [ label [ for "agent-permission" ] [ text "Permission Mode" ]
+                            , input
+                                [ id "agent-permission"
+                                , type_ "text"
+                                , value form.permissionMode
+                                , onInput props.onUpdatePermissionMode
+                                , placeholder "e.g. default"
+                                ]
+                                []
+                            ]
+                        , div [ class "form-actions" ]
+                            [ button
+                                [ type_ "button"
+                                , class "btn btn-secondary"
+                                , onClick props.onCloseForm
+                                ]
+                                [ text "Cancel" ]
+                            , button
+                                [ type_ "submit"
+                                , class "btn btn-primary"
+                                ]
+                                [ text
+                                    (if form.isEditing then
+                                        "Update"
+                                     else
+                                        "Create"
+                                    )
+                                ]
+                            ]
+                        ]
+                    ]
+                ]

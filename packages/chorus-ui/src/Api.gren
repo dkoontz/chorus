@@ -8,6 +8,11 @@ module Api exposing
     , getTaskQueue
     , uploadAttachment
     , deleteAttachment
+    , getAgents
+    , getAgent
+    , createAgent
+    , updateAgent
+    , deleteAgent
     , dataDecoder
     )
 
@@ -22,7 +27,7 @@ import Bytes exposing (Bytes)
 import Http
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
-import Types exposing (History, Queue, SourceInfo, Task)
+import Types exposing (AgentConfig, History, Queue, SourceInfo, Task)
 
 
 
@@ -210,6 +215,71 @@ deleteAttachment tid filename toMsg =
         , url = "/api/tasks/" ++ tid ++ "/attachments/" ++ filename
         , body = Http.emptyBody
         , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+
+-- AGENT API FUNCTIONS
+
+
+{-| Get all agents.
+-}
+getAgents : (Result Http.Error (Array AgentConfig) -> msg) -> Cmd msg
+getAgents toMsg =
+    Http.get
+        { url = "/api/agents"
+        , expect = Http.expectJson toMsg (dataDecoder (Decode.array Types.agentConfigDecoder))
+        }
+
+
+{-| Get a single agent by name.
+-}
+getAgent : String -> (Result Http.Error AgentConfig -> msg) -> Cmd msg
+getAgent name toMsg =
+    Http.get
+        { url = "/api/agents/" ++ name
+        , expect = Http.expectJson toMsg (dataDecoder Types.agentConfigDecoder)
+        }
+
+
+{-| Create a new agent.
+-}
+createAgent : AgentConfig -> (Result Http.Error AgentConfig -> msg) -> Cmd msg
+createAgent config toMsg =
+    Http.post
+        { url = "/api/agents"
+        , body = Http.jsonBody (Types.encodeAgentConfig config)
+        , expect = Http.expectJson toMsg (dataDecoder Types.agentConfigDecoder)
+        }
+
+
+{-| Update an existing agent.
+-}
+updateAgent : String -> AgentConfig -> (Result Http.Error AgentConfig -> msg) -> Cmd msg
+updateAgent name config toMsg =
+    Http.request
+        { method = "PUT"
+        , headers = []
+        , url = "/api/agents/" ++ name
+        , body = Http.jsonBody (Types.encodeAgentConfig config)
+        , expect = Http.expectJson toMsg (dataDecoder Types.agentConfigDecoder)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+{-| Delete an agent.
+-}
+deleteAgent : String -> (Result Http.Error {} -> msg) -> Cmd msg
+deleteAgent name toMsg =
+    Http.request
+        { method = "DELETE"
+        , headers = []
+        , url = "/api/agents/" ++ name
+        , body = Http.emptyBody
+        , expect = Http.expectJson toMsg (Decode.succeed {})
         , timeout = Nothing
         , tracker = Nothing
         }

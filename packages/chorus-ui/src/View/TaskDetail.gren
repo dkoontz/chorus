@@ -189,8 +189,6 @@ viewTaskInfo zone now task =
             , dt [] [ text "Session ID" ]
             , dd [ class "monospace" ]
                 [ text (Maybe.withDefault "None" (Maybe.map Id.sessionIdToString (Types.taskSessionId task))) ]
-            , dt [] [ text "Workspace" ]
-            , dd [ class "monospace truncate" ] [ text (Types.taskWorkspacePath task) ]
             , dt [] [ text "Created" ]
             , dd [] [ text (FormatTime.format zone now (Types.taskCreatedAt task)) ]
             , dt [] [ text "Updated" ]

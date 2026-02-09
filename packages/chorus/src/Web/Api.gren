@@ -16,6 +16,9 @@ module Web.Api exposing
     , requestCompleteHandoff
     , requestAgents
     , requestAgent
+    , requestCreateAgent
+    , requestUpdateAgent
+    , requestDeleteAgent
     , sendApiResponse
     , sendBinaryResponse
     , CreateTaskParams
@@ -30,7 +33,7 @@ Each endpoint produces an ApiResult that should be sent back via the Response.
 
 -}
 
-import Agent.Registry as AgentRegistry exposing (encodeAgentConfig)
+import Agent.Registry as AgentRegistry
 import Bytes exposing (Bytes)
 import Crypto exposing (SecureContext)
 import Dict exposing (Dict)
@@ -45,7 +48,7 @@ import Task as GrenTask exposing (Task)
 import Task.Queue as Queue
 import Task.Registry as Registry
 import Time
-import Types exposing (Task(..), TaskStatus(..), SourceInfo, PlanningFields, HandoffRecord, setAgentChain)
+import Types exposing (Task(..), TaskStatus(..), SourceInfo, PlanningFields, HandoffRecord, AgentConfig, encodeAgentConfig, setAgentChain)
 import Web.Router exposing (Route(..))
 
 
@@ -844,6 +847,97 @@ requestAgent agentRegistry name toMsg =
                     |> GrenTask.map
                         (\now ->
                             ApiSuccess { statusCode = 200, body = wrapResponse (encodeAgentConfig agentConfig) now }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                when err is
+                    AgentRegistry.AgentNotFound _ ->
+                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = AgentRegistry.errorToString err })
+
+                    _ ->
+                        GrenTask.succeed (ApiError { statusCode = 500, code = "AGENT_REGISTRY_ERROR", message = AgentRegistry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| POST /api/agents - Create a new agent config.
+
+Fails with 409 Conflict if an agent with the same name already exists.
+-}
+requestCreateAgent : AgentRegistry.AgentRegistry -> AgentConfig -> (ApiResult -> msg) -> Cmd msg
+requestCreateAgent agentRegistry agentConfig toMsg =
+    -- First check if an agent with this name already exists
+    AgentRegistry.getAgent agentRegistry agentConfig.name
+        |> GrenTask.andThen
+            (\_ ->
+                -- Agent exists - return conflict
+                GrenTask.succeed (ApiError { statusCode = 409, code = "CONFLICT", message = "Agent already exists: " ++ agentConfig.name })
+            )
+        |> GrenTask.onError
+            (\err ->
+                when err is
+                    AgentRegistry.AgentNotFound _ ->
+                        -- Agent does not exist - proceed with creation
+                        AgentRegistry.updateAgent agentRegistry agentConfig
+                            |> GrenTask.andThen
+                                (\created ->
+                                    Time.now
+                                        |> GrenTask.mapError (\_ -> AgentRegistry.FileSystemError "Failed to get time")
+                                        |> GrenTask.map
+                                            (\now ->
+                                                ApiSuccess { statusCode = 201, body = wrapResponse (encodeAgentConfig created) now }
+                                            )
+                                )
+                            |> GrenTask.onError
+                                (\createErr ->
+                                    GrenTask.succeed (ApiError { statusCode = 500, code = "AGENT_REGISTRY_ERROR", message = AgentRegistry.errorToString createErr })
+                                )
+
+                    _ ->
+                        -- Some other error (filesystem, etc.) - report it
+                        GrenTask.succeed (ApiError { statusCode = 500, code = "AGENT_REGISTRY_ERROR", message = AgentRegistry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| PUT /api/agents/:name - Update an existing agent config.
+-}
+requestUpdateAgent : AgentRegistry.AgentRegistry -> String -> AgentConfig -> (ApiResult -> msg) -> Cmd msg
+requestUpdateAgent agentRegistry name agentConfig toMsg =
+    let
+        configWithName =
+            { agentConfig | name = name }
+    in
+    AgentRegistry.updateAgent agentRegistry configWithName
+        |> GrenTask.andThen
+            (\updated ->
+                Time.now
+                    |> GrenTask.mapError (\_ -> AgentRegistry.FileSystemError "Failed to get time")
+                    |> GrenTask.map
+                        (\now ->
+                            ApiSuccess { statusCode = 200, body = wrapResponse (encodeAgentConfig updated) now }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "AGENT_REGISTRY_ERROR", message = AgentRegistry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| DELETE /api/agents/:name - Delete an agent config.
+-}
+requestDeleteAgent : AgentRegistry.AgentRegistry -> String -> (ApiResult -> msg) -> Cmd msg
+requestDeleteAgent agentRegistry name toMsg =
+    AgentRegistry.deleteAgent agentRegistry name
+        |> GrenTask.andThen
+            (\_ ->
+                Time.now
+                    |> GrenTask.mapError (\_ -> AgentRegistry.FileSystemError "Failed to get time")
+                    |> GrenTask.map
+                        (\now ->
+                            ApiSuccess { statusCode = 200, body = wrapResponse (Encode.object [ { key = "deleted", value = Encode.string name } ]) now }
                         )
             )
         |> GrenTask.onError

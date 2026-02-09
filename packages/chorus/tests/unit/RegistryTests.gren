@@ -102,7 +102,7 @@ testTaskEncodeDecode =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , workspacePath = "/tmp/workspace"
+
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -166,7 +166,6 @@ testStatusRoundTrip status =
                     , userId = "test"
                     , conversationId = Nothing
                     }
-                , workspacePath = "/tmp"
                 , attachments = []
                 , currentAgent = Nothing
                 , agentChain = []
@@ -207,7 +206,7 @@ testSourceInfoEncodeDecode =
                         , userId = "user@example.com"
                         , conversationId = Just "thread-456"
                         }
-                    , workspacePath = "/tmp"
+
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -266,7 +265,7 @@ testAttachmentRoundTrip =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , workspacePath = "/tmp/workspace"
+
                     , attachments = [ attachment1, attachment2 ]
                     , currentAgent = Nothing
                     , agentChain = []
@@ -398,7 +397,7 @@ testTaskEncodeDecodeWithPlanningFields =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , workspacePath = "/tmp/workspace"
+
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -444,7 +443,7 @@ testDescriptionOnlyRoundTrip =
                         , userId = "user1"
                         , conversationId = Nothing
                         }
-                    , workspacePath = "/tmp/ws"
+
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -559,7 +558,7 @@ testTaskWithHandoffFieldsEncodeDecode =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , workspacePath = "/tmp/workspace"
+
                     , attachments = []
                     , currentAgent = Just "qa"
                     , agentChain = [ handoffRecord ]
@@ -619,7 +618,7 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , workspacePath = "/tmp/workspace"
+
                     , attachments = []
                     , currentAgent = Just "developer"
                     , agentChain = [ handoffRecord ]
@@ -684,7 +683,7 @@ testPlanTaskCarriesHandoffFields =
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
-                    , workspacePath = "/tmp/workspace"
+
                     , attachments = []
                     , currentAgent = Just "planner"
                     , agentChain = [ handoffRecord ]
@@ -728,7 +727,7 @@ testTaskCurrentAgentAccessor =
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , workspacePath = "/tmp"
+
                     , attachments = []
                     , currentAgent = Just "developer"
                     , agentChain = []
@@ -743,7 +742,7 @@ testTaskCurrentAgentAccessor =
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , workspacePath = "/tmp"
+
                     , attachments = []
                     , currentAgent = Just "qa"
                     , agentChain = []
@@ -786,7 +785,7 @@ testTaskAgentChainAccessor =
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , workspacePath = "/tmp"
+
                     , attachments = []
                     , currentAgent = Just "qa"
                     , agentChain = [ record1, record2 ]
@@ -838,7 +837,7 @@ testSetCurrentAgentMutator =
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , workspacePath = "/tmp"
+
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -876,7 +875,7 @@ testSetAgentChainMutator =
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , workspacePath = "/tmp"
+
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
@@ -891,7 +890,7 @@ testSetAgentChainMutator =
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = "test", userId = "test", conversationId = Nothing }
-                    , workspacePath = "/tmp"
+
                     , attachments = []
                     , currentAgent = Nothing
                     , agentChain = []
