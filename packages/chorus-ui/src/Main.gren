@@ -68,6 +68,7 @@ type alias Model =
     , timeZone : Time.Zone
     , agents : Array AgentConfig
     , agentForm : Maybe AgentForm
+    , startingAgent : Maybe String
     }
 
 
@@ -142,6 +143,9 @@ type Msg
     | UpdateAgentAllowedTools String
     | SaveAgent
     | DeleteAgent String
+    | SelectStartAgent String
+    | StartTask String
+    | HandoffStarted (Result Http.Error Types.Task)
     | NoOp
 
 
@@ -170,6 +174,7 @@ init _ url key =
             , timeZone = Time.utc
             , agents = []
             , agentForm = Nothing
+            , startingAgent = Nothing
             }
     in
     { model = model
@@ -218,6 +223,7 @@ loadPageData page =
                 [ Api.getTask taskId GotTask
                 , Api.getTaskHistory taskId GotHistory
                 , Api.getTaskQueue taskId GotQueue
+                , Api.getAgents GotAgents
                 ]
 
         AgentsPage ->
@@ -260,6 +266,7 @@ update msg model =
                     , loading = True
                     , editingPlanning = Nothing
                     , agentForm = Nothing
+                    , startingAgent = Nothing
                 }
             , command = loadPageData page
             }
@@ -836,6 +843,55 @@ update msg model =
             , command = Api.deleteAgent name (\result -> GotAgentDeleted { name = name, result = result })
             }
 
+        SelectStartAgent agentName ->
+            { model = { model | startingAgent = Just agentName }
+            , command = Cmd.none
+            }
+
+        StartTask taskId ->
+            when { task = model.selectedTask, agent = model.startingAgent } is
+                { task = Just task, agent = Just agentName } ->
+                    let
+                        prompt =
+                            buildAgentPrompt task
+                    in
+                    { model = model
+                    , command = Api.startHandoff taskId { agentName = agentName, prompt = prompt } HandoffStarted
+                    }
+
+                _ ->
+                    { model = { model | error = Just "Select an agent before starting" }
+                    , command = Cmd.none
+                    }
+
+        HandoffStarted result ->
+            when result is
+                Ok updatedTask ->
+                    let
+                        updateTask t =
+                            if Types.taskId t == Types.taskId updatedTask then
+                                updatedTask
+                            else
+                                t
+
+                        newTasks =
+                            Array.map updateTask model.tasks
+                    in
+                    { model =
+                        { model
+                            | tasks = newTasks
+                            , selectedTask = Just updatedTask
+                            , startingAgent = Nothing
+                            , error = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
         NoOp ->
             { model = model
             , command = Cmd.none
@@ -927,6 +983,10 @@ viewMain model =
                     , queue = model.taskQueue
                     , loading = model.loading
                     , onStatusUpdate = \tid status -> UpdateTaskStatus { taskId = tid, status = status }
+                    , onStartTask = StartTask
+                    , onSelectStartAgent = SelectStartAgent
+                    , agents = Array.map .name model.agents
+                    , selectedStartAgent = model.startingAgent
                     , onRefresh = RefreshTask taskId
                     , onFileSelected = FileSelected
                     , onDeleteAttachment = \filename -> DeleteAttachment { taskId = taskId, filename = filename }
@@ -1011,6 +1071,40 @@ viewCreateModal model =
 
 
 -- HELPERS
+
+
+{-| Build a prompt for an agent from the task's planning fields.
+-}
+buildAgentPrompt : Types.Task -> String
+buildAgentPrompt task =
+    when task is
+        DescriptionOnly t ->
+            t.description
+
+        Planned t ->
+            let
+                sections =
+                    Array.keepIf (\s -> not (String.isEmpty s))
+                        [ "## Task\n" ++ t.description
+                        , if String.isEmpty t.summary then
+                            ""
+                          else
+                            "## Summary\n" ++ t.summary
+                        , if Array.isEmpty t.requirements then
+                            ""
+                          else
+                            "## Requirements\n" ++ String.join "\n" (Array.map (\r -> "- " ++ r) t.requirements)
+                        , if Array.isEmpty t.acceptanceCriteria then
+                            ""
+                          else
+                            "## Acceptance Criteria\n" ++ String.join "\n" (Array.map (\a -> "- " ++ a) t.acceptanceCriteria)
+                        , if Array.isEmpty t.plan then
+                            ""
+                          else
+                            "## Plan\n" ++ String.join "\n" (Array.indexedMap (\i step -> String.fromInt (i + 1) ++ ". " ++ step) t.plan)
+                        ]
+            in
+            String.join "\n\n" sections
 
 
 httpErrorToString : Http.Error -> String

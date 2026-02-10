@@ -4,6 +4,7 @@ module Api exposing
     , createTask
     , updateTaskStatus
     , updateTaskPlanning
+    , startHandoff
     , getTaskHistory
     , getTaskQueue
     , uploadAttachment
@@ -157,6 +158,27 @@ updateTaskPlanning tid params toMsg =
         , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
         , tracker = Nothing
+        }
+
+
+{-| Start a handoff by dispatching an agent on a task.
+-}
+startHandoff :
+    String
+    -> { agentName : String, prompt : String }
+    -> (Result Http.Error Task -> msg)
+    -> Cmd msg
+startHandoff tid params toMsg =
+    Http.post
+        { url = "/api/tasks/" ++ tid ++ "/handoff"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ { key = "agentName", value = Encode.string params.agentName }
+                    , { key = "prompt", value = Encode.string params.prompt }
+                    ]
+                )
+        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         }
 
 

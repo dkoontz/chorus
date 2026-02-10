@@ -43,6 +43,10 @@ type alias Props msg =
     , queue : Maybe Types.Queue
     , loading : Bool
     , onStatusUpdate : String -> String -> msg
+    , onStartTask : String -> msg
+    , onSelectStartAgent : String -> msg
+    , agents : Array String
+    , selectedStartAgent : Maybe String
     , onRefresh : msg
     , onFileSelected : File.File -> msg
     , onDeleteAttachment : String -> msg
@@ -133,12 +137,7 @@ viewStatusActions props task =
                 ]
 
             ReadyToStart ->
-                [ button
-                    [ class "btn btn-primary"
-                    , onClick (props.onStatusUpdate tid "active")
-                    ]
-                    [ text "Start Task" ]
-                ]
+                viewStartWithAgent props tid
 
             Active ->
                 [ button
@@ -187,6 +186,43 @@ viewStatusActions props task =
                     [ text "Retry" ]
                 ]
         )
+
+
+viewStartWithAgent : Props msg -> String -> Array (Html msg)
+viewStartWithAgent props tid =
+    let
+        hasAgent =
+            when props.selectedStartAgent is
+                Just _ ->
+                    True
+
+                Nothing ->
+                    False
+    in
+    [ select
+        [ class "agent-select"
+        , onInput props.onSelectStartAgent
+        ]
+        (Array.pushFirst
+            (option [ value "" ] [ text "Select agent..." ])
+            (Array.map
+                (\name ->
+                    option
+                        [ value name
+                        , selected (props.selectedStartAgent == Just name)
+                        ]
+                        [ text name ]
+                )
+                props.agents
+            )
+        )
+    , button
+        [ class "btn btn-primary"
+        , onClick (props.onStartTask tid)
+        , disabled (not hasAgent)
+        ]
+        [ text "Start Task" ]
+    ]
 
 
 viewTaskInfo : Time.Zone -> Time.Posix -> Types.Task -> Html msg
