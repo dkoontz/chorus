@@ -52,26 +52,26 @@ Add history event recording for planning lifecycle and status transitions so the
 
 ### Patterns to Follow
 
-- Use `Registry.recordEvent` for all event recording, same pattern as `agent_handoff_started` in `requestStartHandoff` (Web/Api.gren lines 894-898)
+- Use `Registry.recordEvent` for all event recording, same pattern as `agent_handoff_started` in `requestStartHandoff` (Web/Api.gren around line 900)
 - Event data uses `Dict String String` -- all values must be strings. Use `String.fromInt` for numeric values.
-- In `Main.gren`, where you don't have an `ApiContext` but have `model.registry`, call `Registry.recordEvent reg taskId { eventType = "...", data = ... }` piped through `GrenTask.onError (\_ -> GrenTask.succeed {})` and `GrenTask.perform (\_ -> NoOp)`, matching the `tool_executed` pattern at Main.gren line 754
+- In `Main.gren`, where you don't have an `ApiContext` but have `model.registry`, call `Registry.recordEvent reg taskId { eventType = "...", data = ... }` piped through `GrenTask.onError (\_ -> GrenTask.succeed {})` and `GrenTask.perform (\_ -> NoOp)`, matching the `tool_executed` pattern at Main.gren around line 755
 - For `status_changed` events, use `Types.statusToString` to convert status values to strings for the `"from"` and `"to"` data keys
 - In Api.gren functions that chain multiple tasks (like `requestApplyPlan`), add the `recordEvent` call after the task update succeeds, using `GrenTask.andThen` to chain it before the response is built
 - Fire-and-forget pattern: when recording events from `Main.gren` Msg handlers that don't need to wait for the result, use `Cmd.batch` to fire the event recording alongside other commands
 
 ### Where to Add Each Event
 
-1. **`planning_started`**: In `Main.gren` `dispatchPlanner` function, after `Registry.updateStatus registry taskId Types.Planning` succeeds (around line 1593). Add a `recordEvent` call chained after the status update.
+1. **`planning_started`**: In `Main.gren` `dispatchPlanner` function, after `Registry.updateStatus registry taskId Types.Planning` succeeds (around line 1582). Add a `recordEvent` call chained after the status update.
 
-2. **`planning_completed`**: In `Main.gren` `GotPlannerComplete` handler, in the `PlanResult fields` branch (around line 848). Add to the `Cmd.batch` alongside `requestApplyPlan`.
+2. **`planning_completed`**: In `Main.gren` `GotPlannerComplete` handler, in the `PlanResult fields` branch (around line 847). Add to the `Cmd.batch` alongside `requestApplyPlan`.
 
-3. **`planning_questions_returned`**: In `Main.gren` `GotPlannerComplete` handler, in the `QuestionsResult questions` branch (around line 857). Add to the `Cmd.batch` alongside `requestSetQuestions`.
+3. **`planning_questions_returned`**: In `Main.gren` `GotPlannerComplete` handler, in the `QuestionsResult questions` branch (around line 856). Add to the `Cmd.batch` alongside `requestSetQuestions`.
 
-4. **`planning_failed`**: In `Main.gren` `GotPlannerComplete` handler, in the `PlannerParseError` branch (around line 866) and the `Err` branch (around line 874). Add to the `Cmd.batch` alongside `requestUpdateStatus`.
+4. **`planning_failed`**: In `Main.gren` `GotPlannerComplete` handler, in the `PlannerParseError` branch (around line 865) and the `Err` branch (around line 874). Add to the `Cmd.batch` alongside `requestUpdateStatus`.
 
 5. **`answers_submitted`**: In `Main.gren` `GotAnswersSubmitted` handler (around line 883), in the `ApiSuccess` branch. Add to the `Cmd.batch`. The answers have already been persisted by `requestSubmitAnswers` at this point.
 
-6. **`status_changed`**: In `Web/Api.gren` `requestUpdateStatus` (around line 230), after `Registry.updateStatus` succeeds. Chain a `recordEvent` call. Also in `requestApplyPlan` (status goes to ReadyToStart), `requestSetQuestions` (status goes to AwaitingInput), and `Web/ToolExecution.gren` `dispatchCompletionReport` (status goes to Completed/Waiting/Failed based on report).
+6. **`status_changed`**: In `Web/Api.gren` `requestUpdateStatus` (around line 215), after `Registry.updateStatus` succeeds. Chain a `recordEvent` call. Also in `requestApplyPlan` (around line 335, status goes to ReadyToStart), `requestSetQuestions` (around line 360, status goes to AwaitingInput), and `Web/ToolExecution.gren` `dispatchCompletionReport` (around line 277, status goes to Completed/Waiting/Failed based on report).
 
 ## Testing Requirements
 
