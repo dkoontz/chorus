@@ -218,7 +218,7 @@ type Msg
     | GotInternalApiResult Api.ApiResult
     | GotTaskCreated { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
     | GotPlannerComplete { taskId : TaskId, result : Result String String }
-    | GotAnswersSubmitted { response : Response, taskId : TaskId, enrichedPrompt : String, questions : Array String, answers : Array String, result : Api.ApiResult }
+    | GotAnswersSubmitted { response : Response, taskId : TaskId, enrichedPrompt : String, result : Api.ApiResult }
     | GotToolGrant { taskId : TaskId, addTools : Array String, removeTools : Array String, response : Response }
     | NoOp
 
@@ -845,92 +845,85 @@ update msg model =
                         Ok output ->
                             when parsePlannerOutput output is
                                 PlanResult fields ->
+                                    let
+                                        mergeInto =
+                                            \source target -> Dict.foldl Dict.set target source
+
+                                        baseDict =
+                                            Dict.empty
+                                                |> Dict.set "summary" fields.summary
+                                                |> mergeInto (indexedArrayToDict "requirement_" fields.requirements)
+                                                |> mergeInto (indexedArrayToDict "acceptance_criteria_" fields.acceptanceCriteria)
+                                                |> mergeInto (indexedArrayToDict "plan_step_" fields.plan)
+
+                                        planningCompletedData =
+                                            when fields.assignedAgent is
+                                                Just agent ->
+                                                    baseDict
+                                                        |> Dict.set "assigned_agent" agent
+
+                                                Nothing ->
+                                                    baseDict
+                                    in
                                     { model = model
                                     , command =
                                         Cmd.batch
-                                            [ Api.requestApplyPlan ctx taskId fields (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                                            [ Api.requestApplyPlan ctx taskId fields planningCompletedData (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
                                             , Logging.logInfo model.logger ("Planner produced plan for task " ++ taskIdStr) NoOp
-                                            , let
-                                                mergeInto =
-                                                    \source target -> Dict.foldl Dict.set target source
-
-                                                baseDict =
-                                                    Dict.empty
-                                                        |> Dict.set "summary" fields.summary
-                                                        |> mergeInto (indexedArrayToDict "requirement_" fields.requirements)
-                                                        |> mergeInto (indexedArrayToDict "acceptance_criteria_" fields.acceptanceCriteria)
-                                                        |> mergeInto (indexedArrayToDict "plan_step_" fields.plan)
-
-                                                fullDict =
-                                                    when fields.assignedAgent is
-                                                        Just agent ->
-                                                            baseDict
-                                                                |> Dict.set "assigned_agent" agent
-
-                                                        Nothing ->
-                                                            baseDict
-                                              in
-                                              Registry.recordEvent registry taskId
-                                                { eventType = "planning_completed"
-                                                , data = fullDict
-                                                }
-                                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
-                                                |> GrenTask.perform (\_ -> NoOp)
                                             ]
                                     }
 
                                 QuestionsResult questions ->
+                                    let
+                                        questionsEventData =
+                                            indexedArrayToDict "question_" questions
+                                                |> Dict.set "questionCount" (String.fromInt (Array.length questions))
+                                    in
                                     { model = model
                                     , command =
                                         Cmd.batch
-                                            [ Api.requestSetQuestions ctx taskId questions (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                                            [ Api.requestSetQuestions ctx taskId questions questionsEventData (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
                                             , Logging.logInfo model.logger ("Planner asked " ++ String.fromInt (Array.length questions) ++ " questions for task " ++ taskIdStr) NoOp
-                                            , Registry.recordEvent registry taskId
-                                                { eventType = "planning_questions_returned"
-                                                , data =
-                                                    indexedArrayToDict "question_" questions
-                                                        |> Dict.set "questionCount" (String.fromInt (Array.length questions))
-                                                }
-                                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
-                                                |> GrenTask.perform (\_ -> NoOp)
                                             ]
                                     }
 
                                 PlannerParseError errMsg ->
-                                    { model = model
-                                    , command =
-                                        Cmd.batch
-                                            [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner output parse error: " ++ errMsg)) (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
-                                            , Logging.logError model.logger ("Planner parse error for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
-                                            , Registry.recordEvent registry taskId
+                                    let
+                                        planningFailedEvent =
+                                            Just
                                                 { eventType = "planning_failed"
                                                 , data =
                                                     Dict.empty
                                                         |> Dict.set "error" ("Planner output parse error: " ++ errMsg)
                                                 }
-                                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
-                                                |> GrenTask.perform (\_ -> NoOp)
+                                    in
+                                    { model = model
+                                    , command =
+                                        Cmd.batch
+                                            [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner output parse error: " ++ errMsg)) planningFailedEvent (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                                            , Logging.logError model.logger ("Planner parse error for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
                                             ]
                                     }
 
                         Err errMsg ->
-                            { model = model
-                            , command =
-                                Cmd.batch
-                                    [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner failed: " ++ errMsg)) (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
-                                    , Logging.logError model.logger ("Planner failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
-                                    , Registry.recordEvent registry taskId
+                            let
+                                planningFailedEvent =
+                                    Just
                                         { eventType = "planning_failed"
                                         , data =
                                             Dict.empty
                                                 |> Dict.set "error" ("Planner failed: " ++ errMsg)
                                         }
-                                        |> GrenTask.onError (\_ -> GrenTask.succeed {})
-                                        |> GrenTask.perform (\_ -> NoOp)
+                            in
+                            { model = model
+                            , command =
+                                Cmd.batch
+                                    [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner failed: " ++ errMsg)) planningFailedEvent (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                                    , Logging.logError model.logger ("Planner failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
                                     ]
                             }
 
-        GotAnswersSubmitted { response, taskId, enrichedPrompt, questions, answers, result } ->
+        GotAnswersSubmitted { response, taskId, enrichedPrompt, result } ->
             let
                 sendResponseCmd =
                     Api.sendApiResponse response result
@@ -939,33 +932,11 @@ update msg model =
                 Api.ApiSuccess _ ->
                     when model.agentRegistry is
                         Just agentReg ->
-                            let
-                                answersEventCmd =
-                                    when model.registry is
-                                        Nothing ->
-                                            Cmd.none
-
-                                        Just reg ->
-                                            let
-                                                combinedDict =
-                                                    Dict.foldl Dict.set
-                                                        (indexedArrayToDict "question_" questions)
-                                                        (indexedArrayToDict "answer_" answers)
-                                                        |> Dict.set "answerCount" (String.fromInt (Array.length answers))
-                                            in
-                                            Registry.recordEvent reg taskId
-                                                { eventType = "answers_submitted"
-                                                , data = combinedDict
-                                                }
-                                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
-                                                |> GrenTask.perform (\_ -> NoOp)
-                            in
                             { model = model
                             , command =
                                 Cmd.batch
                                     [ sendResponseCmd
                                     , dispatchPlanner model agentReg taskId enrichedPrompt
-                                    , answersEventCmd
                                     ]
                             }
 
@@ -1117,7 +1088,7 @@ handleRoute model route request response =
                         Router.UpdateTaskStatus taskId ->
                             when parseStatusBody request is
                                 Ok status ->
-                                    Api.requestUpdateStatus ctx taskId status toMsg
+                                    Api.requestUpdateStatus ctx taskId status Nothing toMsg
 
                                 Err errMsg ->
                                     sendBadRequest response errMsg
@@ -1221,8 +1192,8 @@ handleRoute model route request response =
                             when parseSubmitAnswersBody request is
                                 Ok answers ->
                                     Api.requestSubmitAnswers ctx taskId answers
-                                        (\{ apiResult, enrichedPrompt, questions, answers = returnedAnswers } ->
-                                            GotAnswersSubmitted { response = response, taskId = taskId, enrichedPrompt = enrichedPrompt, questions = questions, answers = returnedAnswers, result = apiResult }
+                                        (\{ apiResult, enrichedPrompt } ->
+                                            GotAnswersSubmitted { response = response, taskId = taskId, enrichedPrompt = enrichedPrompt, result = apiResult }
                                         )
 
                                 Err errMsg ->

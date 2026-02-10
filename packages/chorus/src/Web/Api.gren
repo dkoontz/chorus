@@ -211,9 +211,11 @@ requestCreateTask ctx params toMsg =
 
 {-| PUT /api/tasks/:id/status - Update task status.
     Validates that the transition is allowed before updating.
+    Accepts an optional extra event to record in the same sequential chain
+    (before the status_changed event) to avoid race conditions.
 -}
-requestUpdateStatus : ApiContext -> TaskId -> TaskStatus -> (ApiResult -> msg) -> Cmd msg
-requestUpdateStatus ctx taskId status toMsg =
+requestUpdateStatus : ApiContext -> TaskId -> TaskStatus -> Maybe { eventType : String, data : Dict String String } -> (ApiResult -> msg) -> Cmd msg
+requestUpdateStatus ctx taskId status maybeExtraEvent toMsg =
     Registry.getTask ctx.registry taskId
         |> GrenTask.andThen
             (\maybeTask ->
@@ -230,14 +232,28 @@ requestUpdateStatus ctx taskId status toMsg =
                             Registry.updateStatus ctx.registry taskId status
                                 |> GrenTask.andThen
                                     (\updatedTask ->
-                                        Registry.recordEvent ctx.registry taskId
-                                            { eventType = "status_changed"
-                                            , data =
-                                                Dict.empty
-                                                    |> Dict.set "from" (Types.statusToString currentStatus)
-                                                    |> Dict.set "to" (Types.statusToString status)
-                                            }
-                                            |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                        let
+                                            recordExtraEvent =
+                                                when maybeExtraEvent is
+                                                    Just extraEvent ->
+                                                        Registry.recordEvent ctx.registry taskId extraEvent
+                                                            |> GrenTask.onError (\_ -> GrenTask.succeed {})
+
+                                                    Nothing ->
+                                                        GrenTask.succeed {}
+                                        in
+                                        recordExtraEvent
+                                            |> GrenTask.andThen
+                                                (\_ ->
+                                                    Registry.recordEvent ctx.registry taskId
+                                                        { eventType = "status_changed"
+                                                        , data =
+                                                            Dict.empty
+                                                                |> Dict.set "from" (Types.statusToString currentStatus)
+                                                                |> Dict.set "to" (Types.statusToString status)
+                                                        }
+                                                        |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                                )
                                             |> GrenTask.andThen
                                                 (\_ ->
                                                     Time.now
@@ -342,9 +358,11 @@ requestUpdatePlanning ctx taskId params toMsg =
 
 {-| Apply a planner's plan result to a task.
     Converts the task to Planned, sets status to ReadyToStart.
+    Also records the planning_completed event in the same sequential chain
+    to avoid race conditions with concurrent history.json writes.
 -}
-requestApplyPlan : ApiContext -> TaskId -> Types.PlanningFields -> (ApiResult -> msg) -> Cmd msg
-requestApplyPlan ctx taskId fields toMsg =
+requestApplyPlan : ApiContext -> TaskId -> Types.PlanningFields -> Dict String String -> (ApiResult -> msg) -> Cmd msg
+requestApplyPlan ctx taskId fields planningCompletedData toMsg =
     Registry.updateTask ctx.registry taskId
         (\task ->
             Types.planTask task fields
@@ -353,13 +371,21 @@ requestApplyPlan ctx taskId fields toMsg =
         |> GrenTask.andThen
             (\updatedTask ->
                 Registry.recordEvent ctx.registry taskId
-                    { eventType = "status_changed"
-                    , data =
-                        Dict.empty
-                            |> Dict.set "from" (Types.statusToString Types.Planning)
-                            |> Dict.set "to" (Types.statusToString Types.ReadyToStart)
+                    { eventType = "planning_completed"
+                    , data = planningCompletedData
                     }
                     |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                    |> GrenTask.andThen
+                        (\_ ->
+                            Registry.recordEvent ctx.registry taskId
+                                { eventType = "status_changed"
+                                , data =
+                                    Dict.empty
+                                        |> Dict.set "from" (Types.statusToString Types.Planning)
+                                        |> Dict.set "to" (Types.statusToString Types.ReadyToStart)
+                                }
+                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                        )
                     |> GrenTask.andThen
                         (\_ ->
                             Time.now
@@ -378,9 +404,11 @@ requestApplyPlan ctx taskId fields toMsg =
 
 {-| Set planning questions on a task (from planner).
     Converts the task to Planned with empty plan fields, sets status to AwaitingInput.
+    Also records the planning_questions_returned event in the same sequential chain
+    to avoid race conditions with concurrent history.json writes.
 -}
-requestSetQuestions : ApiContext -> TaskId -> Array String -> (ApiResult -> msg) -> Cmd msg
-requestSetQuestions ctx taskId questionStrings toMsg =
+requestSetQuestions : ApiContext -> TaskId -> Array String -> Dict String String -> (ApiResult -> msg) -> Cmd msg
+requestSetQuestions ctx taskId questionStrings questionsEventData toMsg =
     let
         questions =
             Array.map (\q -> { question = q, answer = Nothing }) questionStrings
@@ -402,13 +430,21 @@ requestSetQuestions ctx taskId questionStrings toMsg =
         |> GrenTask.andThen
             (\updatedTask ->
                 Registry.recordEvent ctx.registry taskId
-                    { eventType = "status_changed"
-                    , data =
-                        Dict.empty
-                            |> Dict.set "from" (Types.statusToString Types.Planning)
-                            |> Dict.set "to" (Types.statusToString Types.AwaitingInput)
+                    { eventType = "planning_questions_returned"
+                    , data = questionsEventData
                     }
                     |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                    |> GrenTask.andThen
+                        (\_ ->
+                            Registry.recordEvent ctx.registry taskId
+                                { eventType = "status_changed"
+                                , data =
+                                    Dict.empty
+                                        |> Dict.set "from" (Types.statusToString Types.Planning)
+                                        |> Dict.set "to" (Types.statusToString Types.AwaitingInput)
+                                }
+                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                        )
                     |> GrenTask.andThen
                         (\_ ->
                             Time.now
@@ -428,8 +464,10 @@ requestSetQuestions ctx taskId questionStrings toMsg =
 {-| POST /api/tasks/:id/answers - Submit answers to planning questions.
     Updates the task's questions with answers, sets status to Planning,
     and returns the enriched prompt for re-dispatching the planner.
+    Also records the answers_submitted event in the same sequential chain
+    to avoid race conditions with concurrent history.json writes.
 -}
-requestSubmitAnswers : ApiContext -> TaskId -> Array String -> ({ apiResult : ApiResult, enrichedPrompt : String, questions : Array String, answers : Array String } -> msg) -> Cmd msg
+requestSubmitAnswers : ApiContext -> TaskId -> Array String -> ({ apiResult : ApiResult, enrichedPrompt : String } -> msg) -> Cmd msg
 requestSubmitAnswers ctx taskId answers toMsg =
     Registry.getTask ctx.registry taskId
         |> GrenTask.andThen
@@ -439,8 +477,6 @@ requestSubmitAnswers ctx taskId answers toMsg =
                         GrenTask.succeed
                             { apiResult = ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ Id.taskIdToString taskId }
                             , enrichedPrompt = ""
-                            , questions = []
-                            , answers = []
                             }
 
                     Just task ->
@@ -497,22 +533,34 @@ requestSubmitAnswers ctx taskId answers toMsg =
                                         , questions = updatedQuestions
                                         , assignedAgent = Nothing
                                         }
+
+                            answersEventData =
+                                Dict.foldl Dict.set (indexedArrayToDict "question_" questionStrings) (indexedArrayToDict "answer_" answers)
+                                    |> Dict.set "answerCount" (String.fromInt (Array.length answers))
                         in
                         Registry.updateTask ctx.registry taskId
                             (\t ->
                                 Types.planTask t currentFields
-                                    |> Types.setTaskStatus Planning
+                                    |> Types.setTaskStatus Types.Planning
                             )
                             |> GrenTask.andThen
                                 (\updatedTask ->
                                     Registry.recordEvent ctx.registry taskId
-                                        { eventType = "status_changed"
-                                        , data =
-                                            Dict.empty
-                                                |> Dict.set "from" (Types.statusToString AwaitingInput)
-                                                |> Dict.set "to" (Types.statusToString Planning)
+                                        { eventType = "answers_submitted"
+                                        , data = answersEventData
                                         }
                                         |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                        |> GrenTask.andThen
+                                            (\_ ->
+                                                Registry.recordEvent ctx.registry taskId
+                                                    { eventType = "status_changed"
+                                                    , data =
+                                                        Dict.empty
+                                                            |> Dict.set "from" (Types.statusToString Types.AwaitingInput)
+                                                            |> Dict.set "to" (Types.statusToString Types.Planning)
+                                                    }
+                                                    |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                            )
                                         |> GrenTask.andThen
                                             (\_ ->
                                                 Time.now
@@ -520,8 +568,6 @@ requestSubmitAnswers ctx taskId answers toMsg =
                                                         (\now ->
                                                             { apiResult = ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
                                                             , enrichedPrompt = enrichedPrompt
-                                                            , questions = questionStrings
-                                                            , answers = answers
                                                             }
                                                         )
                                             )
@@ -532,8 +578,6 @@ requestSubmitAnswers ctx taskId answers toMsg =
                 GrenTask.succeed
                     { apiResult = ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err }
                     , enrichedPrompt = ""
-                    , questions = []
-                    , answers = []
                     }
             )
         |> GrenTask.perform toMsg
@@ -1400,3 +1444,19 @@ queueErrorToString err =
 
         Queue.TaskNotFound tid ->
             "Task not found: " ++ Id.taskIdToString tid
+
+
+{-| Convert an Array of strings into a Dict with numbered keys.
+    `indexedArrayToDict "requirement_" ["A", "B"]` produces
+    `Dict.fromArray [{ key = "requirement_1", value = "A" }, { key = "requirement_2", value = "B" }]`
+-}
+indexedArrayToDict : String -> Array String -> Dict String String
+indexedArrayToDict prefix items =
+    items
+        |> Array.indexedMap
+            (\i v ->
+                { key = prefix ++ String.fromInt (i + 1)
+                , value = v
+                }
+            )
+        |> Array.foldl (\entry d -> Dict.set entry.key entry.value d) Dict.empty

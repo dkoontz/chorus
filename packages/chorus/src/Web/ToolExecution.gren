@@ -347,6 +347,7 @@ dispatchCompletionReport ctx requestBody toMsg =
                                                 |> Dict.set "status" (Types.completionStatusToString report.status)
                                                 |> Dict.set "summary" report.summary
                                         }
+                                        |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                         |> GrenTask.andThen
                                             (\_ ->
                                                 -- Record status_changed event
@@ -357,6 +358,7 @@ dispatchCompletionReport ctx requestBody toMsg =
                                                             |> Dict.set "from" (Types.statusToString previousStatus)
                                                             |> Dict.set "to" (Types.statusToString newStatus)
                                                     }
+                                                    |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                             )
                                         |> GrenTask.map
                                             (\_ ->
