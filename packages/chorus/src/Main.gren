@@ -850,11 +850,29 @@ update msg model =
                                         Cmd.batch
                                             [ Api.requestApplyPlan ctx taskId fields (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
                                             , Logging.logInfo model.logger ("Planner produced plan for task " ++ taskIdStr) NoOp
-                                            , Registry.recordEvent registry taskId
-                                                { eventType = "planning_completed"
-                                                , data =
+                                            , let
+                                                mergeInto =
+                                                    \source target -> Dict.foldl Dict.set target source
+
+                                                baseDict =
                                                     Dict.empty
                                                         |> Dict.set "summary" fields.summary
+                                                        |> mergeInto (indexedArrayToDict "requirement_" fields.requirements)
+                                                        |> mergeInto (indexedArrayToDict "acceptance_criteria_" fields.acceptanceCriteria)
+                                                        |> mergeInto (indexedArrayToDict "plan_step_" fields.plan)
+
+                                                fullDict =
+                                                    when fields.assignedAgent is
+                                                        Just agent ->
+                                                            baseDict
+                                                                |> Dict.set "assigned_agent" agent
+
+                                                        Nothing ->
+                                                            baseDict
+                                              in
+                                              Registry.recordEvent registry taskId
+                                                { eventType = "planning_completed"
+                                                , data = fullDict
                                                 }
                                                 |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                                 |> GrenTask.perform (\_ -> NoOp)
@@ -867,21 +885,10 @@ update msg model =
                                         Cmd.batch
                                             [ Api.requestSetQuestions ctx taskId questions (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
                                             , Logging.logInfo model.logger ("Planner asked " ++ String.fromInt (Array.length questions) ++ " questions for task " ++ taskIdStr) NoOp
-                                            , let
-                                                questionsDict =
-                                                    questions
-                                                        |> Array.indexedMap
-                                                            (\i q ->
-                                                                { key = "question_" ++ String.fromInt (i + 1)
-                                                                , value = q
-                                                                }
-                                                            )
-                                                        |> Array.foldl (\entry d -> Dict.set entry.key entry.value d) Dict.empty
-                                              in
-                                              Registry.recordEvent registry taskId
+                                            , Registry.recordEvent registry taskId
                                                 { eventType = "planning_questions_returned"
                                                 , data =
-                                                    questionsDict
+                                                    indexedArrayToDict "question_" questions
                                                         |> Dict.set "questionCount" (String.fromInt (Array.length questions))
                                                 }
                                                 |> GrenTask.onError (\_ -> GrenTask.succeed {})
@@ -940,28 +947,10 @@ update msg model =
 
                                         Just reg ->
                                             let
-                                                questionsDict =
-                                                    questions
-                                                        |> Array.indexedMap
-                                                            (\i q ->
-                                                                { key = "question_" ++ String.fromInt (i + 1)
-                                                                , value = q
-                                                                }
-                                                            )
-                                                        |> Array.foldl (\entry d -> Dict.set entry.key entry.value d) Dict.empty
-
-                                                answersDict =
-                                                    answers
-                                                        |> Array.indexedMap
-                                                            (\i a ->
-                                                                { key = "answer_" ++ String.fromInt (i + 1)
-                                                                , value = a
-                                                                }
-                                                            )
-                                                        |> Array.foldl (\entry d -> Dict.set entry.key entry.value d) Dict.empty
-
                                                 combinedDict =
-                                                    Dict.foldl Dict.set questionsDict answersDict
+                                                    Dict.foldl Dict.set
+                                                        (indexedArrayToDict "question_" questions)
+                                                        (indexedArrayToDict "answer_" answers)
                                                         |> Dict.set "answerCount" (String.fromInt (Array.length answers))
                                             in
                                             Registry.recordEvent reg taskId
@@ -1870,6 +1859,21 @@ questionsResultDecoder =
 
 -- HELPERS
 
+
+{-| Convert an Array of strings into a Dict with numbered keys.
+    `indexedArrayToDict "requirement_" ["A", "B"]` produces
+    `Dict.fromArray [{ key = "requirement_1", value = "A" }, { key = "requirement_2", value = "B" }]`
+-}
+indexedArrayToDict : String -> Array String -> Dict String String
+indexedArrayToDict prefix items =
+    items
+        |> Array.indexedMap
+            (\i v ->
+                { key = prefix ++ String.fromInt (i + 1)
+                , value = v
+                }
+            )
+        |> Array.foldl (\entry d -> Dict.set entry.key entry.value d) Dict.empty
 
 
 {-| Get a SecureContext for cryptographic operations.
