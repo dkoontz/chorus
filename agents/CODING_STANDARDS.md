@@ -371,3 +371,77 @@ defaultPagination =
 ```
 
 The key difference: the caller makes the decision to apply a default, and it is visible at the call site. The parser itself does not hide the absence of data.
+
+## Do Not Silently Swallow Errors in Tasks
+
+Never discard an error from a `Task` by replacing it with a success value. If an operation can fail, propagate the error so the caller can detect it and decide how to respond — log it, retry, show a message to the user, or abort. Silently replacing a failure with `Task.succeed {}` hides the problem and leaves the user with no explanation for why an expected outcome did not occur.
+
+### Why?
+
+- **User confusion**: The operation appears to succeed, but its side effects (saved data, recorded events, written files) are missing. The user has no way to understand what went wrong.
+- **Silent data loss**: Errors during persistence (writing to disk, recording events) mean data is permanently lost with no trace.
+- **Difficult debugging**: Without an error signal, there is nothing to investigate. The failure is invisible in logs, in the UI, and in the data.
+
+### Bad: Swallowing the error
+
+```gren
+-- BAD: If recording fails, no one finds out
+Registry.recordEvent registry taskId event
+    |> Task.onError (\_ -> Task.succeed {})
+```
+
+If `recordEvent` fails (disk full, permission error, corrupt state), the error is silently discarded. The caller continues as if the event was recorded. The user sees a successful operation but the event is missing from the history.
+
+### Bad: Swallowing inside a branch
+
+```gren
+-- BAD: Failure in one branch is hidden
+when maybeExtraEvent is
+    Just extraEvent ->
+        Registry.recordEvent registry taskId extraEvent
+            |> Task.onError (\_ -> Task.succeed {})
+
+    Nothing ->
+        Task.succeed {}
+```
+
+Same problem. The `Nothing` branch legitimately has nothing to do, but the `Just` branch silently eats errors. If the event fails to record, the user performed an action that appeared to succeed but left no trace.
+
+### Good: Propagate the error to the caller
+
+```gren
+-- GOOD: Caller sees the failure and can decide what to do
+when maybeExtraEvent is
+    Just extraEvent ->
+        Registry.recordEvent registry taskId extraEvent
+
+    Nothing ->
+        Task.succeed {}
+```
+
+The caller receives the error and can handle it — log a warning, return an error response, or retry.
+
+### Good: Map the error into the caller's error type
+
+```gren
+-- GOOD: Wrap the error with context for the caller
+type ExecutionError
+    = ProviderFailed String
+    | EventRecordingFailed String
+
+recordIfPresent : Registry -> TaskId -> Maybe Event -> Task ExecutionError {}
+recordIfPresent registry taskId maybeEvent =
+    when maybeEvent is
+        Just event ->
+            Registry.recordEvent registry taskId event
+                |> Task.mapError (\err -> EventRecordingFailed (errorToString err))
+
+        Nothing ->
+            Task.succeed {}
+```
+
+The caller gets a typed error explaining what failed and why, and can take appropriate action.
+
+### The rule
+
+If a `Task` can fail, its error must be propagated — either directly or mapped into the caller's error type. The only code that should decide to drop an error is the top-level handler that has full context about what the user should see.

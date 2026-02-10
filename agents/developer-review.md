@@ -61,6 +61,7 @@ The `.env` file is sourced automatically. Do NOT source it manually.
 ### 5. Correctness Concerns
 - Are there edge cases that aren't handled?
 - Could any operations fail unexpectedly?
+- Are errors handled explicitly vs being silently swallowed?
 - Are assumptions validated?
 
 ## Severity Levels
