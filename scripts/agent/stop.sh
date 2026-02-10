@@ -4,7 +4,7 @@ set -e
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 [ -f "$PROJECT_ROOT/.env" ] && set -a && source "$PROJECT_ROOT/.env" && set +a
 
-PID_FILE="$PROJECT_ROOT/data/.pid"
+PID_FILE="$PROJECT_ROOT/dist/data/.pid"
 
 if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
@@ -29,7 +29,7 @@ if [ -f "$PID_FILE" ]; then
     rm -f "$PID_FILE"
 else
     # Fallback: try to find and kill the process
-    if pkill -f 'build/chorus' 2>/dev/null; then
+    if pkill -f 'dist/chorus' 2>/dev/null; then
         echo "App stopped." >&2
     else
         echo "App not running." >&2

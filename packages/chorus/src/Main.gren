@@ -124,7 +124,7 @@ defaultConfig =
     , staticRoot = "./static"
     , uploadDir = "./data/uploads"
     , agentsRoot = "./data/agents"
-    , fileToolsPath = "./file-tools"
+    , fileToolsPath = "./tools/file-tools"
     , logLevel = LogInfo
     }
 

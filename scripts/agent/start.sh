@@ -5,7 +5,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 [ -f "$PROJECT_ROOT/.env" ] && set -a && source "$PROJECT_ROOT/.env" && set +a
 
 LOG_FILE="/tmp/$(echo "$PROJECT_ROOT" | tr '/' '-').log"
-DATA_DIR="$PROJECT_ROOT/data"
+DATA_DIR="$PROJECT_ROOT/dist/data"
 
 # Create data directories if needed
 mkdir -p "$DATA_DIR/registry" "$DATA_DIR/workspaces" "$DATA_DIR/uploads"
@@ -14,9 +14,9 @@ mkdir -p "$DATA_DIR/registry" "$DATA_DIR/workspaces" "$DATA_DIR/uploads"
 : > "$LOG_FILE"
 
 echo "Starting app..." >&2
-cd "$PROJECT_ROOT/packages/chorus"
-CHORUS_DATA_DIR="$DATA_DIR" ./build/chorus > "$LOG_FILE" 2>&1 &
-echo $! > "$PROJECT_ROOT/data/.pid"
+cd "$PROJECT_ROOT/dist"
+./chorus > "$LOG_FILE" 2>&1 &
+echo $! > "$PROJECT_ROOT/dist/data/.pid"
 
 echo "Waiting for app to be ready..." >&2
 elapsed=0

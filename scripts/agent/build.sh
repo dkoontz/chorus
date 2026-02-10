@@ -6,5 +6,5 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 echo "Building app..." >&2
 cd "$PROJECT_ROOT"
-npm run build:app
+npm run build:dist
 echo "Build complete." >&2

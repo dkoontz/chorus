@@ -114,27 +114,27 @@ seedDefaults fsPermission agentsPath =
               }
             , { name = "planner"
               , instructions = plannerInstructions
-              , allowedTools = "Bash(file-tools *)"
+              , allowedTools = "Bash(tools/file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "writer-workflow"
               , instructions = writerWorkflowInstructions
-              , allowedTools = "Bash(handoff-tool *)"
+              , allowedTools = "Bash(tools/handoff-tool *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "writer"
               , instructions = writerInstructions
-              , allowedTools = "Bash(file-tools *)"
+              , allowedTools = "Bash(tools/file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "editor"
               , instructions = editorInstructions
-              , allowedTools = "Bash(file-tools *)"
+              , allowedTools = "Bash(tools/file-tools *)"
               , permissionMode = "bypassPermissions"
               }
             , { name = "fact-checker"
               , instructions = factCheckerInstructions
-              , allowedTools = "Bash(file-tools *) WebSearch"
+              , allowedTools = "Bash(tools/file-tools *) WebSearch"
               , permissionMode = "bypassPermissions"
               }
             ]

@@ -332,7 +332,7 @@ buildCliArgs args =
 
         allowedToolsValue =
             args.allowedTools
-                |> Maybe.withDefault "Bash(file-tools *)"
+                |> Maybe.withDefault "Bash(tools/file-tools *)"
 
         toolsFlag =
             toolCliFlagFromAllowedTools allowedToolsValue
@@ -404,7 +404,7 @@ buildShellCommand args =
 
         allowedToolsValue =
             args.allowedTools
-                |> Maybe.withDefault "Bash(file-tools *)"
+                |> Maybe.withDefault "Bash(tools/file-tools *)"
 
         toolsFlag =
             toolCliFlagFromAllowedTools allowedToolsValue
