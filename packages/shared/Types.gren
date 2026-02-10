@@ -4,6 +4,8 @@ module Types exposing
     , PlannedTask
     , PlanningFields
     , HandoffRecord
+    , CompletionReport
+    , CompletionStatus(..)
     , TaskStatus(..)
     , SourceInfo
     , Attachment
@@ -23,6 +25,7 @@ module Types exposing
     , encodeMessage
     , encodeMaybe
     , encodeHandoffRecord
+    , encodeCompletionReport
     , encodeAgentConfig
     -- Decoders
     , taskDecoder
@@ -34,6 +37,7 @@ module Types exposing
     , queueDecoder
     , messageDecoder
     , handoffRecordDecoder
+    , completionReportDecoder
     , agentConfigDecoder
     -- Accessors
     , taskId
@@ -57,6 +61,7 @@ module Types exposing
     , statusToString
     , statusFromString
     , statusEquals
+    , completionStatusToString
     )
 
 {-| Shared types, encoders, and decoders for the Chorus API contract.
@@ -94,6 +99,25 @@ type alias HandoffRecord =
     , startedAt : Time.Posix
     , completedAt : Maybe Time.Posix
     , output : String
+    , completionReport : Maybe CompletionReport
+    }
+
+
+{-| Status of a completion report submitted by an agent.
+-}
+type CompletionStatus
+    = ReportComplete
+    | ReportBlocked
+    | ReportFailed
+
+
+{-| Structured output submitted by an agent via the completion-report tool.
+-}
+type alias CompletionReport =
+    { status : CompletionStatus
+    , summary : String
+    , output : String
+    , blockedReason : Maybe String
     }
 
 
@@ -507,7 +531,35 @@ encodeHandoffRecord record =
         , { key = "startedAt", value = Encode.int (Time.posixToMillis record.startedAt) }
         , { key = "completedAt", value = encodeMaybe (\t -> Encode.int (Time.posixToMillis t)) record.completedAt }
         , { key = "output", value = Encode.string record.output }
+        , { key = "completionReport", value = encodeMaybe encodeCompletionReport record.completionReport }
         ]
+
+
+{-| Encode a completion report to JSON.
+-}
+encodeCompletionReport : CompletionReport -> Encode.Value
+encodeCompletionReport report =
+    Encode.object
+        [ { key = "status", value = Encode.string (completionStatusToString report.status) }
+        , { key = "summary", value = Encode.string report.summary }
+        , { key = "output", value = Encode.string report.output }
+        , { key = "blockedReason", value = encodeMaybe Encode.string report.blockedReason }
+        ]
+
+
+{-| Convert a CompletionStatus to its string representation.
+-}
+completionStatusToString : CompletionStatus -> String
+completionStatusToString status =
+    when status is
+        ReportComplete ->
+            "complete"
+
+        ReportBlocked ->
+            "blocked"
+
+        ReportFailed ->
+            "failed"
 
 
 encodeStatus : TaskStatus -> Encode.Value
@@ -752,18 +804,58 @@ plannedTaskDecoder =
 -}
 handoffRecordDecoder : Decoder HandoffRecord
 handoffRecordDecoder =
-    Decode.map4
-        (\agentName startedAt completedAt output ->
+    Decode.map5
+        (\agentName startedAt completedAt output completionReport ->
             { agentName = agentName
             , startedAt = startedAt
             , completedAt = completedAt
             , output = output
+            , completionReport = completionReport
             }
         )
         (Decode.field "agentName" Decode.string)
         (Decode.field "startedAt" (Decode.map Time.millisToPosix Decode.int))
         (Decode.field "completedAt" (Decode.maybe (Decode.map Time.millisToPosix Decode.int)))
         (Decode.field "output" Decode.string)
+        (Decode.field "completionReport" (Decode.maybe completionReportDecoder))
+
+
+{-| Decode a completion report from JSON.
+-}
+completionReportDecoder : Decoder CompletionReport
+completionReportDecoder =
+    Decode.map4
+        (\status summary output blockedReason ->
+            { status = status
+            , summary = summary
+            , output = output
+            , blockedReason = blockedReason
+            }
+        )
+        (Decode.field "status" completionStatusDecoder)
+        (Decode.field "summary" Decode.string)
+        (Decode.field "output" Decode.string)
+        (Decode.field "blockedReason" (Decode.maybe Decode.string))
+
+
+completionStatusDecoder : Decoder CompletionStatus
+completionStatusDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\str ->
+                when str is
+                    "complete" ->
+                        Decode.succeed ReportComplete
+
+                    "blocked" ->
+                        Decode.succeed ReportBlocked
+
+                    "failed" ->
+                        Decode.succeed ReportFailed
+
+                    _ ->
+                        Decode.fail ("Unknown completion status: " ++ str)
+            )
 
 
 attachmentDecoder : Decoder Attachment

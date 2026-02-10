@@ -79,6 +79,7 @@ type alias ExecutorState =
     , agentName : String
     , agentConfig : Types.AgentConfig
     , status : ExecutorStatus
+    , completionReportReceived : Bool
     }
 
 
@@ -345,6 +346,7 @@ update msg model =
                                         , secureContext = model.secureContext
                                         , registryRoot = Path.fromPosixString model.config.registryRoot
                                         }
+                                    , taskId = taskId
                                     }
 
                                 toolName =
@@ -415,11 +417,14 @@ update msg model =
                 Api.ApiSuccess _ ->
                     -- Task updated successfully. Use inline instructions directly.
                     let
+                        completionReportInstruction =
+                            "\n\nIMPORTANT: Before finishing your work, you MUST call the completion-report tool to submit your results. Use: {\"tool\": \"completion-report\", \"status\": \"complete\", \"summary\": \"Brief summary of what was done\", \"output\": \"Detailed output\"}\nFor blocked work, use status \"blocked\" with a \"blockedReason\". For failures, use status \"failed\"."
+
                         systemPrompt =
                             if String.isEmpty agentConfig.instructions then
-                                Nothing
+                                Just completionReportInstruction
                             else
-                                Just agentConfig.instructions
+                                Just (agentConfig.instructions ++ completionReportInstruction)
 
                         workspaceRoot =
                             model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
@@ -429,6 +434,7 @@ update msg model =
                             , agentName = agentConfig.name
                             , agentConfig = agentConfig
                             , status = ExecRunning
+                            , completionReportReceived = False
                             }
 
                         cliArgs =
@@ -503,63 +509,107 @@ update msg model =
 
         GotAgentComplete { taskId, result } ->
             let
+                taskIdStr =
+                    Id.taskIdToString taskId
+
+                -- Check if completion report was already received
+                hadCompletionReport =
+                    Dict.get taskIdStr model.activeExecutors
+                        |> Maybe.map .completionReportReceived
+                        |> Maybe.withDefault False
+
                 -- Remove executor from active
                 updatedExecutors =
-                    Dict.remove (Id.taskIdToString taskId) model.activeExecutors
+                    Dict.remove taskIdStr model.activeExecutors
 
                 updatedModel =
                     { model | activeExecutors = updatedExecutors }
             in
-            when result is
-                Ok outputText ->
-                    when model.registry is
-                        Nothing ->
-                            { model = updatedModel
-                            , command = Logging.logError model.logger "Agent completed but registry not available" NoOp
-                            }
+            if hadCompletionReport then
+                -- Completion report already handled status/output; just complete the handoff record timestamps
+                when model.registry is
+                    Nothing ->
+                        { model = updatedModel
+                        , command = Cmd.none
+                        }
 
-                        Just registry ->
-                            let
-                                ctx =
-                                    { registry = registry
-                                    , fsPermission = model.fsPermission
-                                    , secureContext = model.secureContext
-                                    , registryRoot = Path.fromPosixString model.config.registryRoot
-                                    }
-                            in
-                            { model = updatedModel
-                            , command =
-                                Cmd.batch
-                                    [ Api.requestCompleteHandoff ctx taskId { output = outputText }
-                                        (\apiResult -> GotInternalApiResult apiResult)
-                                    , Logging.logInfo model.logger ("Agent completed for task " ++ Id.taskIdToString taskId ++ " (output length: " ++ String.fromInt (String.unitLength outputText) ++ ")") NoOp
-                                    ]
-                            }
+                    Just registry ->
+                        let
+                            ctx =
+                                { registry = registry
+                                , fsPermission = model.fsPermission
+                                , secureContext = model.secureContext
+                                , registryRoot = Path.fromPosixString model.config.registryRoot
+                                }
 
-                Err errMsg ->
-                    when model.registry is
-                        Nothing ->
-                            { model = updatedModel
-                            , command = Logging.logError model.logger ("Agent failed for task " ++ Id.taskIdToString taskId ++ ": " ++ errMsg) NoOp
-                            }
+                            rawOutput =
+                                when result is
+                                    Ok text ->
+                                        text
 
-                        Just registry ->
-                            let
-                                ctx =
-                                    { registry = registry
-                                    , fsPermission = model.fsPermission
-                                    , secureContext = model.secureContext
-                                    , registryRoot = Path.fromPosixString model.config.registryRoot
-                                    }
-                            in
-                            { model = updatedModel
-                            , command =
-                                Cmd.batch
-                                    [ Api.requestCompleteHandoff ctx taskId { output = "Agent failed: " ++ errMsg }
-                                        (\apiResult -> GotInternalApiResult apiResult)
-                                    , Logging.logError model.logger ("Agent failed for task " ++ Id.taskIdToString taskId ++ ": " ++ errMsg) NoOp
-                                    ]
-                            }
+                                    Err errMsg ->
+                                        "Agent exited with error: " ++ errMsg
+                        in
+                        { model = updatedModel
+                        , command =
+                            Cmd.batch
+                                [ Api.requestCompleteHandoff ctx taskId { output = rawOutput }
+                                    (\apiResult -> GotInternalApiResult apiResult)
+                                , Logging.logInfo model.logger ("Agent completed for task " ++ taskIdStr ++ " (completion report received)") NoOp
+                                ]
+                        }
+            else
+                -- No completion report - fall back to raw output
+                when result is
+                    Ok outputText ->
+                        when model.registry is
+                            Nothing ->
+                                { model = updatedModel
+                                , command = Logging.logError model.logger "Agent completed but registry not available" NoOp
+                                }
+
+                            Just registry ->
+                                let
+                                    ctx =
+                                        { registry = registry
+                                        , fsPermission = model.fsPermission
+                                        , secureContext = model.secureContext
+                                        , registryRoot = Path.fromPosixString model.config.registryRoot
+                                        }
+                                in
+                                { model = updatedModel
+                                , command =
+                                    Cmd.batch
+                                        [ Api.requestCompleteHandoff ctx taskId { output = outputText }
+                                            (\apiResult -> GotInternalApiResult apiResult)
+                                        , Logging.logInfo model.logger ("Agent completed for task " ++ taskIdStr ++ " without completion report (output length: " ++ String.fromInt (String.unitLength outputText) ++ ")") NoOp
+                                        ]
+                                }
+
+                    Err errMsg ->
+                        when model.registry is
+                            Nothing ->
+                                { model = updatedModel
+                                , command = Logging.logError model.logger ("Agent failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                                }
+
+                            Just registry ->
+                                let
+                                    ctx =
+                                        { registry = registry
+                                        , fsPermission = model.fsPermission
+                                        , secureContext = model.secureContext
+                                        , registryRoot = Path.fromPosixString model.config.registryRoot
+                                        }
+                                in
+                                { model = updatedModel
+                                , command =
+                                    Cmd.batch
+                                        [ Api.requestCompleteHandoff ctx taskId { output = "Agent failed: " ++ errMsg }
+                                            (\apiResult -> GotInternalApiResult apiResult)
+                                        , Logging.logError model.logger ("Agent failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                                        ]
+                                }
 
         GotRequest { request, response } ->
             let
@@ -641,8 +691,27 @@ update msg model =
                                 }
                                 |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                 |> GrenTask.perform (\_ -> NoOp)
+
+                -- Track successful completion-report submissions
+                updatedModel =
+                    if toolName == "completion-report" && status == "success" then
+                        let
+                            taskIdStr =
+                                Id.taskIdToString taskId
+
+                            updatedExecutors =
+                                when Dict.get taskIdStr model.activeExecutors is
+                                    Just executor ->
+                                        Dict.set taskIdStr { executor | completionReportReceived = True } model.activeExecutors
+
+                                    Nothing ->
+                                        model.activeExecutors
+                        in
+                        { model | activeExecutors = updatedExecutors }
+                    else
+                        model
             in
-            { model = model
+            { model = updatedModel
             , command =
                 Cmd.batch
                     [ Api.sendApiResponse response result

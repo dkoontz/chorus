@@ -477,6 +477,7 @@ testHandoffRecordEncodeDecode =
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Just (Time.millisToPosix 1707048700000)
                 , output = "Implementation complete"
+                , completionReport = Nothing
                 }
 
             encoded =
@@ -510,6 +511,7 @@ testHandoffRecordWithNothingCompletedAtEncodeDecode =
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Nothing
                 , output = ""
+                , completionReport = Nothing
                 }
 
             encoded =
@@ -543,6 +545,7 @@ testTaskWithHandoffFieldsEncodeDecode =
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Just (Time.millisToPosix 1707048700000)
                 , output = "Done"
+                , completionReport = Nothing
                 }
 
             task =
@@ -603,6 +606,7 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Just (Time.millisToPosix 1707048700000)
                 , output = "Implemented"
+                , completionReport = Nothing
                 }
 
             task =
@@ -668,6 +672,7 @@ testPlanTaskCarriesHandoffFields =
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Nothing
                 , output = ""
+                , completionReport = Nothing
                 }
 
             descTask =
@@ -767,6 +772,7 @@ testTaskAgentChainAccessor =
                 , startedAt = Time.millisToPosix 100
                 , completedAt = Just (Time.millisToPosix 200)
                 , output = "first"
+                , completionReport = Nothing
                 }
 
             record2 =
@@ -774,6 +780,7 @@ testTaskAgentChainAccessor =
                 , startedAt = Time.millisToPosix 300
                 , completedAt = Nothing
                 , output = ""
+                , completionReport = Nothing
                 }
 
             task =
@@ -864,6 +871,7 @@ testSetAgentChainMutator =
                 , startedAt = Time.millisToPosix 100
                 , completedAt = Nothing
                 , output = ""
+                , completionReport = Nothing
                 }
 
             descTask =

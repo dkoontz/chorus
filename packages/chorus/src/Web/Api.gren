@@ -670,6 +670,7 @@ requestStartHandoff ctx taskId params toMsg =
                                                     , startedAt = now
                                                     , completedAt = Nothing
                                                     , output = ""
+                                                    , completionReport = Nothing
                                                     }
 
                                                 updateFn t =
@@ -774,11 +775,27 @@ requestCompleteHandoff ctx taskId params toMsg =
                                                         }
                                                         initial
 
+                                        -- If completion report already set status, preserve it
+                                        hasCompletionReport =
+                                            when Array.popLast chain is
+                                                Nothing ->
+                                                    False
+
+                                                Just { last } ->
+                                                    last.completionReport /= Nothing
+
                                         updateFn t =
-                                            t
-                                                |> Types.setCurrentAgent Nothing
-                                                |> Types.setTaskStatus Waiting
-                                                |> setAgentChain updatedChain
+                                            let
+                                                cleared =
+                                                    t
+                                                        |> Types.setCurrentAgent Nothing
+                                                        |> setAgentChain updatedChain
+                                            in
+                                            if hasCompletionReport then
+                                                cleared
+                                            else
+                                                cleared
+                                                    |> Types.setTaskStatus Waiting
                                     in
                                     Registry.updateTask ctx.registry taskId updateFn
                                         |> GrenTask.andThen

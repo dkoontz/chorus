@@ -16,8 +16,9 @@ handled via the registry. Handoff is rejected here (use the handoff endpoint).
 -}
 
 import ChildProcess
+import Dict
 import FileSystem
-import Id
+import Id exposing (TaskId)
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task as GrenTask
@@ -48,6 +49,7 @@ type alias ToolExecutionContext =
     , workspaceRoot : String
     , allowedTools : Array String
     , apiContext : Api.ApiContext
+    , taskId : TaskId
     }
 
 
@@ -92,19 +94,23 @@ requestExecuteTool ctx requestBody toMsg =
                 |> GrenTask.perform toMsg
 
         Ok toolName ->
-            when checkPermission ctx.allowedTools toolName is
-                Denied reason ->
-                    GrenTask.succeed
-                        (Api.ApiError
-                            { statusCode = 403
-                            , code = "FORBIDDEN"
-                            , message = reason
-                            }
-                        )
-                        |> GrenTask.perform toMsg
+            -- completion-report is always allowed (auto-granted)
+            if toolName == "completion-report" then
+                dispatchTool ctx toolName requestBody toMsg
+            else
+                when checkPermission ctx.allowedTools toolName is
+                    Denied reason ->
+                        GrenTask.succeed
+                            (Api.ApiError
+                                { statusCode = 403
+                                , code = "FORBIDDEN"
+                                , message = reason
+                                }
+                            )
+                            |> GrenTask.perform toMsg
 
-                Allowed ->
-                    dispatchTool ctx toolName requestBody toMsg
+                    Allowed ->
+                        dispatchTool ctx toolName requestBody toMsg
 
 
 {-| Dispatch a tool request to the appropriate handler based on tool name.
@@ -117,6 +123,9 @@ dispatchTool ctx toolName requestBody toMsg =
 
         "task.list" ->
             dispatchTaskList ctx requestBody toMsg
+
+        "completion-report" ->
+            dispatchCompletionReport ctx requestBody toMsg
 
         "handoff" ->
             GrenTask.succeed
@@ -261,6 +270,135 @@ dispatchTaskList ctx requestBody toMsg =
                 |> Result.toMaybe
     in
     Api.requestTasks ctx.apiContext statusFilter toMsg
+
+
+{-| Handle completion-report tool: store structured output on the task's handoff record.
+-}
+dispatchCompletionReport : ToolExecutionContext -> String -> (Api.ApiResult -> msg) -> Cmd msg
+dispatchCompletionReport ctx requestBody toMsg =
+    let
+        reportResult =
+            Decode.decodeString completionReportInputDecoder requestBody
+    in
+    when reportResult is
+        Err _ ->
+            GrenTask.succeed
+                (Api.ApiError
+                    { statusCode = 400
+                    , code = "BAD_REQUEST"
+                    , message = "Invalid completion-report: requires 'status' (complete|blocked|failed), 'summary', and 'output' fields"
+                    }
+                )
+                |> GrenTask.perform toMsg
+
+        Ok report ->
+            -- Update the task's last handoff record with the completion report
+            let
+                updateFn task =
+                    let
+                        chain =
+                            Types.taskAgentChain task
+
+                        updatedChain =
+                            when Array.popLast chain is
+                                Nothing ->
+                                    chain
+
+                                Just { last, initial } ->
+                                    Array.pushLast
+                                        { last | completionReport = Just report }
+                                        initial
+
+                        -- Map completion status to task status
+                        newStatus =
+                            when report.status is
+                                Types.ReportComplete ->
+                                    Types.Completed
+
+                                Types.ReportBlocked ->
+                                    Types.Waiting
+
+                                Types.ReportFailed ->
+                                    Types.Failed report.summary
+                    in
+                    task
+                        |> Types.setAgentChain updatedChain
+                        |> Types.setTaskStatus newStatus
+            in
+            Registry.updateTask ctx.apiContext.registry ctx.taskId updateFn
+                |> GrenTask.andThen
+                    (\_ ->
+                        -- Record history event
+                        Registry.recordEvent ctx.apiContext.registry ctx.taskId
+                            { eventType = "completion_report_submitted"
+                            , data =
+                                Dict.empty
+                                    |> Dict.set "status" (Types.completionStatusToString report.status)
+                                    |> Dict.set "summary" report.summary
+                            }
+                            |> GrenTask.map
+                                (\_ ->
+                                    Api.ApiSuccess
+                                        { statusCode = 200
+                                        , body =
+                                            Encode.encode 0
+                                                (Encode.object
+                                                    [ { key = "success", value = Encode.bool True }
+                                                    , { key = "status", value = Encode.string (Types.completionStatusToString report.status) }
+                                                    ]
+                                                )
+                                        }
+                                )
+                    )
+                |> GrenTask.onError
+                    (\err ->
+                        GrenTask.succeed
+                            (Api.ApiError
+                                { statusCode = 500
+                                , code = "REGISTRY_ERROR"
+                                , message = Registry.errorToString err
+                                }
+                            )
+                    )
+                |> GrenTask.perform toMsg
+
+
+{-| Decode a completion report from tool input JSON.
+-}
+completionReportInputDecoder : Decode.Decoder Types.CompletionReport
+completionReportInputDecoder =
+    Decode.map4
+        (\status summary output blockedReason ->
+            { status = status
+            , summary = summary
+            , output = output
+            , blockedReason = blockedReason
+            }
+        )
+        (Decode.field "status" completionStatusStringDecoder)
+        (Decode.field "summary" Decode.string)
+        (Decode.field "output" Decode.string)
+        (Decode.maybe (Decode.field "blockedReason" Decode.string))
+
+
+completionStatusStringDecoder : Decode.Decoder Types.CompletionStatus
+completionStatusStringDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\str ->
+                when str is
+                    "complete" ->
+                        Decode.succeed Types.ReportComplete
+
+                    "blocked" ->
+                        Decode.succeed Types.ReportBlocked
+
+                    "failed" ->
+                        Decode.succeed Types.ReportFailed
+
+                    _ ->
+                        Decode.fail ("Unknown completion status: " ++ str ++ ". Must be 'complete', 'blocked', or 'failed'.")
+            )
 
 
 {-| Execute a file tool task, encoding the result as an ApiResult.
