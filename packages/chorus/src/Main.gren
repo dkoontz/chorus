@@ -105,7 +105,7 @@ type alias Config =
     , staticRoot : String
     , uploadDir : String
     , agentsRoot : String
-    , fileToolsPath : String
+    , chorusToolsPath : String
     , logLevel : LogLevel
     }
 
@@ -125,7 +125,7 @@ defaultConfig =
     , staticRoot = "./static"
     , uploadDir = "./data/uploads"
     , agentsRoot = "./data/agents"
-    , fileToolsPath = "./tools/file-tools"
+    , chorusToolsPath = "./tools/chorus-tools"
     , logLevel = LogInfo
     }
 
@@ -176,7 +176,7 @@ configFromEnv envVars config =
     , staticRoot = staticRoot
     , uploadDir = uploadDir
     , agentsRoot = dataDir ++ "/agents"
-    , fileToolsPath = Dict.get "CHORUS_FILE_TOOLS_PATH" envVars |> Maybe.withDefault config.fileToolsPath
+    , chorusToolsPath = Dict.get "CHORUS_TOOLS_PATH" envVars |> Maybe.withDefault config.chorusToolsPath
     , logLevel = logLevel
     }
 
@@ -220,7 +220,8 @@ init env =
 
                             providerCfg =
                                 { childProcessPermission = cpPermission
-                                , fileToolsPath = config.fileToolsPath
+                                , chorusToolsPath = config.chorusToolsPath
+                                , baseUrl = "http://" ++ config.host ++ ":" ++ String.fromInt config.port_
                                 }
 
                             model =
@@ -429,9 +430,11 @@ update msg model =
                             { systemPrompt = systemPrompt
                             , resumeSessionId = Nothing
                             , workspaceRoot = workspaceRoot
-                            , fileToolsPath = model.config.fileToolsPath
+                            , chorusToolsPath = model.config.chorusToolsPath
                             , message = prompt
-                            , allowedTools = Just (String.join " " agentConfig.allowedTools)
+                            , allowedTools = Nothing
+                            , taskId = Just (Id.taskIdToString taskId)
+                            , baseUrl = Just model.providerConfig.baseUrl
                             }
 
                         shellCommand =

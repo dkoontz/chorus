@@ -37,7 +37,8 @@ import Task
 -}
 type alias Config =
     { childProcessPermission : ChildProcess.Permission
-    , fileToolsPath : String
+    , chorusToolsPath : String
+    , baseUrl : String
     }
 
 
@@ -89,7 +90,7 @@ validateEnvironment config toMsg =
             "claude --version </dev/null"
 
         fileToolsCmd =
-            config.fileToolsPath ++ " --help </dev/null"
+            config.chorusToolsPath ++ " --help </dev/null"
     in
     ChildProcess.run config.childProcessPermission "bash" [ "-c", claudeCmd ] options
         |> Task.andThen
@@ -145,9 +146,11 @@ createSession config agentSpec workspaceRoot toMsg =
             { systemPrompt = Just agentSpec.systemPrompt
             , resumeSessionId = Nothing
             , workspaceRoot = workspaceRoot
-            , fileToolsPath = config.fileToolsPath
+            , chorusToolsPath = config.chorusToolsPath
             , message = "Session initialized. Awaiting instructions."
             , allowedTools = Nothing
+            , taskId = Nothing
+            , baseUrl = Nothing
             }
 
         -- Build shell command with stdin redirected from /dev/null
@@ -202,9 +205,11 @@ sendMessage config session message toMsg =
             { systemPrompt = Nothing
             , resumeSessionId = Just (Id.sessionIdToString session.id)
             , workspaceRoot = ""  -- Not needed for resume
-            , fileToolsPath = config.fileToolsPath
+            , chorusToolsPath = config.chorusToolsPath
             , message = message
             , allowedTools = Nothing
+            , taskId = Nothing
+            , baseUrl = Nothing
             }
 
         -- Build shell command with stdin redirected from /dev/null
@@ -295,9 +300,11 @@ type alias CliArgs =
     { systemPrompt : Maybe String
     , resumeSessionId : Maybe String
     , workspaceRoot : String
-    , fileToolsPath : String
+    , chorusToolsPath : String
     , message : String
     , allowedTools : Maybe String
+    , taskId : Maybe String
+    , baseUrl : Maybe String
     }
 
 
@@ -329,7 +336,7 @@ buildCliArgs args =
 
         allowedToolsValue =
             args.allowedTools
-                |> Maybe.withDefault "Bash(tools/file-tools *)"
+                |> Maybe.withDefault ("Bash(" ++ args.chorusToolsPath ++ " *)")
 
         toolsFlag =
             toolCliFlagFromAllowedTools allowedToolsValue
@@ -396,7 +403,7 @@ buildShellCommand args =
 
         allowedToolsValue =
             args.allowedTools
-                |> Maybe.withDefault "Bash(tools/file-tools *)"
+                |> Maybe.withDefault ("Bash(" ++ args.chorusToolsPath ++ " *)")
 
         toolsFlag =
             toolCliFlagFromAllowedTools allowedToolsValue
@@ -416,8 +423,29 @@ buildShellCommand args =
         -- Redirect stdin from /dev/null to prevent hanging
         stdinRedirect =
             " </dev/null"
+
+        -- Prepend environment variables for chorus-tools
+        envVars =
+            let
+                taskIdVar =
+                    when args.taskId is
+                        Just tid ->
+                            "CHORUS_TASK_ID=" ++ escapeForShell tid ++ " "
+
+                        Nothing ->
+                            ""
+
+                baseUrlVar =
+                    when args.baseUrl is
+                        Just url ->
+                            "CHORUS_BASE_URL=" ++ escapeForShell url ++ " "
+
+                        Nothing ->
+                            ""
+            in
+            taskIdVar ++ baseUrlVar
     in
-    baseArgs ++ sessionArgs ++ promptArgs ++ toolArgs ++ dirArgs ++ messageArg ++ stdinRedirect
+    envVars ++ baseArgs ++ sessionArgs ++ promptArgs ++ toolArgs ++ dirArgs ++ messageArg ++ stdinRedirect
 
 
 {-| Derive the --tools flag value from an allowedTools string.
