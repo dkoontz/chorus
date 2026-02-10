@@ -212,7 +212,7 @@ type alias Queue =
 type alias AgentConfig =
     { name : String
     , instructions : String
-    , allowedTools : String
+    , allowedTools : Array String
     }
 
 
@@ -883,7 +883,7 @@ encodeAgentConfig config =
     Encode.object
         [ { key = "name", value = Encode.string config.name }
         , { key = "instructions", value = Encode.string config.instructions }
-        , { key = "allowedTools", value = Encode.string config.allowedTools }
+        , { key = "allowedTools", value = Encode.array Encode.string config.allowedTools }
         ]
 
 
@@ -898,7 +898,7 @@ agentConfigDecoder =
         )
         (Decode.field "name" Decode.string)
         (Decode.field "instructions" Decode.string)
-        (Decode.field "allowedTools" Decode.string)
+        (Decode.field "allowedTools" (Decode.array Decode.string))
 
 
 

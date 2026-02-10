@@ -109,27 +109,27 @@ seedDefaults fsPermission agentsPath =
         defaults =
             [ { name = "researcher"
               , instructions = researcherInstructions
-              , allowedTools = "WebSearch"
+              , allowedTools = [ "web.search" ]
               }
             , { name = "planner"
               , instructions = plannerInstructions
-              , allowedTools = "Bash(tools/file-tools *)"
+              , allowedTools = [ "file.read", "file.write", "file.create", "file.patch", "file.delete", "file.list", "file.search" ]
               }
             , { name = "writer-workflow"
               , instructions = writerWorkflowInstructions
-              , allowedTools = "Bash(tools/handoff-tool *)"
+              , allowedTools = [ "handoff", "file.read", "file.write" ]
               }
             , { name = "writer"
               , instructions = writerInstructions
-              , allowedTools = "Bash(tools/file-tools *)"
+              , allowedTools = [ "file.read", "file.write", "file.create", "file.patch", "file.list", "file.search" ]
               }
             , { name = "editor"
               , instructions = editorInstructions
-              , allowedTools = "Bash(tools/file-tools *)"
+              , allowedTools = [ "file.read", "file.list", "file.search" ]
               }
             , { name = "fact-checker"
               , instructions = factCheckerInstructions
-              , allowedTools = "Bash(tools/file-tools *) WebSearch"
+              , allowedTools = [ "file.read", "file.list", "file.search", "web.search" ]
               }
             ]
     in

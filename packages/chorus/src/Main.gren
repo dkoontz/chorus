@@ -393,7 +393,7 @@ update msg model =
                             , workspaceRoot = workspaceRoot
                             , fileToolsPath = model.config.fileToolsPath
                             , message = prompt
-                            , allowedTools = Just agentConfig.allowedTools
+                            , allowedTools = Just (String.join " " agentConfig.allowedTools)
                             }
 
                         shellCommand =

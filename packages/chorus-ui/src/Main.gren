@@ -759,7 +759,7 @@ update msg model =
                         Just
                             { name = agent.name
                             , instructions = agent.instructions
-                            , allowedTools = agent.allowedTools
+                            , allowedTools = String.join ", " agent.allowedTools
                             , isEditing = True
                             }
                 }
@@ -810,7 +810,11 @@ update msg model =
                             config =
                                 { name = form.name
                                 , instructions = form.instructions
-                                , allowedTools = form.allowedTools
+                                , allowedTools =
+                                    form.allowedTools
+                                        |> String.split ","
+                                        |> Array.map String.trim
+                                        |> Array.keepIf (\s -> not (String.isEmpty s))
                                 }
                         in
                         if form.isEditing then

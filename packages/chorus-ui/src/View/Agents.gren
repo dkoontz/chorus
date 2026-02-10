@@ -103,7 +103,7 @@ viewAgentCard props agent =
             ]
         , dl [ class "info-list" ]
             [ dt [] [ text "Allowed Tools" ]
-            , dd [ class "monospace" ] [ text agent.allowedTools ]
+            , dd [ class "monospace" ] [ text (String.join ", " agent.allowedTools) ]
             ]
         , div [ class "agent-card-instructions" ]
             [ h4 [] [ text "Instructions" ]
