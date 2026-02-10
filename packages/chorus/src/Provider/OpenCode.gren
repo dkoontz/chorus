@@ -1,0 +1,518 @@
+module Provider.OpenCode exposing
+    ( provider
+    , Config
+    )
+
+{-| OpenCode provider implementation.
+
+This provider spawns the opencode CLI to communicate with LLMs.
+It implements the Provider interface for LLM communication.
+
+OpenCode uses AGENTS.md files for system prompts (no --system-prompt flag),
+and supports JSON output via --format json.
+-}
+
+import Bytes
+import ChildProcess
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import Id exposing (SessionId)
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+import Provider
+    exposing
+        ( AgentSpec
+        , Provider
+        , ProviderError(..)
+        , ProviderKind(..)
+        , Response
+        , Session
+        , ToolCall
+        , ToolResult
+        )
+import Task
+
+
+-- CONFIGURATION
+
+
+{-| Configuration for the OpenCode provider.
+-}
+type alias Config =
+    { childProcessPermission : ChildProcess.Permission
+    , fsPermission : FileSystem.Permission
+    , chorusToolsPath : String
+    , baseUrl : String
+    }
+
+
+
+-- PROVIDER
+
+
+{-| The OpenCode provider.
+
+This implements the Provider interface by spawning the opencode CLI.
+-}
+provider : Config -> Provider msg
+provider config =
+    { kind = CliProvider
+    , validateEnvironment = validateEnvironment config
+    , createSession = createSession config
+    , sendMessage = sendMessage config
+    , submitToolResults = submitToolResults config
+    , resumeSession = resumeSession config
+    }
+
+
+
+-- ENVIRONMENT VALIDATION
+
+
+{-| Validate that the opencode CLI is installed.
+-}
+validateEnvironment :
+    Config
+    -> (Result ProviderError {} -> msg)
+    -> Cmd msg
+validateEnvironment config toMsg =
+    let
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.InheritWorkingDirectory
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 1024
+            , runDuration = ChildProcess.Milliseconds 5000
+            }
+    in
+    ChildProcess.run config.childProcessPermission "bash" [ "-c", "opencode --version </dev/null" ] options
+        |> Task.map (\_ -> {})
+        |> Task.mapError
+            (\runError ->
+                when runError is
+                    ChildProcess.InitError { errorCode } ->
+                        if String.contains "ENOENT" errorCode then
+                            EnvironmentError
+                                { message = "opencode CLI not found in PATH. Install from https://opencode.ai" }
+                        else
+                            EnvironmentError
+                                { message = "Failed to run opencode CLI: " ++ errorCode }
+
+                    ChildProcess.ProgramError { exitCode, stderr } ->
+                        let
+                            stderrStr =
+                                stderr |> Bytes.toString |> Maybe.withDefault ""
+                        in
+                        EnvironmentError
+                            { message = "opencode CLI check failed (exit " ++ String.fromInt exitCode ++ "): " ++ stderrStr }
+            )
+        |> Task.attempt toMsg
+
+
+
+-- SESSION OPERATIONS
+
+
+{-| Create a new session by invoking the opencode CLI.
+
+Writes the system prompt to AGENTS.md in the workspace, then
+sends an initial message to establish the session.
+-}
+createSession :
+    Config
+    -> AgentSpec
+    -> String
+    -> (Result ProviderError Session -> msg)
+    -> Cmd msg
+createSession config agentSpec workspaceRoot toMsg =
+    let
+        agentsPath =
+            Path.append (Path.fromPosixString "AGENTS.md") (Path.fromPosixString workspaceRoot)
+    in
+    -- Write system prompt to AGENTS.md in workspace
+    FileSystem.writeFile config.fsPermission (Bytes.fromString agentSpec.systemPrompt) agentsPath
+        |> Task.mapError
+            (\fsErr ->
+                EnvironmentError { message = "Failed to write AGENTS.md: " ++ FileSystem.errorToString fsErr }
+            )
+        |> Task.andThen
+            (\_ ->
+                let
+                    shellCommand =
+                        buildShellCommand
+                            { sessionId = Nothing
+                            , workspaceRoot = workspaceRoot
+                            , message = "Session initialized. Awaiting instructions."
+                            , chorusToolsPath = config.chorusToolsPath
+                            , taskId = Nothing
+                            , baseUrl = Nothing
+                            }
+
+                    options =
+                        { shell = ChildProcess.NoShell
+                        , workingDirectory = ChildProcess.InheritWorkingDirectory
+                        , environmentVariables = ChildProcess.InheritEnvironmentVariables
+                        , maximumBytesWrittenToStreams = 1024 * 1024
+                        , runDuration = ChildProcess.Milliseconds 120000
+                        }
+                in
+                ChildProcess.run config.childProcessPermission "bash" [ "-c", shellCommand ] options
+                    |> Task.mapError cliErrorToProviderError
+                    |> Task.andThen
+                        (\result ->
+                            let
+                                output =
+                                    result.stdout |> Bytes.toString |> Maybe.withDefault ""
+                            in
+                            when parseSessionId output is
+                                Just sessionId ->
+                                    Task.succeed
+                                        { id = sessionId
+                                        , agentSpec = agentSpec
+                                        }
+
+                                Nothing ->
+                                    Task.fail (InvalidResponseError { message = "Could not extract session ID from opencode output" })
+                        )
+            )
+        |> Task.attempt toMsg
+
+
+{-| Send a message in an existing session.
+-}
+sendMessage :
+    Config
+    -> Session
+    -> String
+    -> (Result ProviderError Response -> msg)
+    -> Cmd msg
+sendMessage config session message toMsg =
+    let
+        shellCommand =
+            buildShellCommand
+                { sessionId = Just (Id.sessionIdToString session.id)
+                , workspaceRoot = ""
+                , message = message
+                , chorusToolsPath = config.chorusToolsPath
+                , taskId = Nothing
+                , baseUrl = Nothing
+                }
+
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.InheritWorkingDirectory
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 10 * 1024 * 1024
+            , runDuration = ChildProcess.Milliseconds 600000
+            }
+    in
+    ChildProcess.run config.childProcessPermission "bash" [ "-c", shellCommand ] options
+        |> Task.mapError cliErrorToProviderError
+        |> Task.andThen
+            (\result ->
+                let
+                    output =
+                        result.stdout |> Bytes.toString |> Maybe.withDefault ""
+                in
+                when parseCliResponse output is
+                    Ok response ->
+                        Task.succeed response
+
+                    Err errMsg ->
+                        Task.fail (InvalidResponseError { message = errMsg })
+            )
+        |> Task.attempt toMsg
+
+
+{-| Submit tool results - OpenCode handles tools internally via CLI.
+-}
+submitToolResults :
+    Config
+    -> Session
+    -> Array ToolResult
+    -> (Result ProviderError Response -> msg)
+    -> Cmd msg
+submitToolResults _ _ _ toMsg =
+    Task.fail
+        (InvalidResponseError
+            { message = "Tool results are handled internally by the opencode CLI." }
+        )
+        |> Task.attempt toMsg
+
+
+{-| Resume an existing session.
+-}
+resumeSession :
+    Config
+    -> SessionId
+    -> (Result ProviderError (Maybe Session) -> msg)
+    -> Cmd msg
+resumeSession _ sessionId toMsg =
+    Task.succeed
+        (Just
+            { id = sessionId
+            , agentSpec =
+                { name = "Resumed"
+                , systemPrompt = ""
+                }
+            }
+        )
+        |> Task.attempt toMsg
+
+
+
+-- CLI COMMAND BUILDING
+
+
+type alias CliArgs =
+    { sessionId : Maybe String
+    , workspaceRoot : String
+    , message : String
+    , chorusToolsPath : String
+    , taskId : Maybe String
+    , baseUrl : Maybe String
+    }
+
+
+{-| Build a shell command for the opencode CLI.
+-}
+buildShellCommand : CliArgs -> String
+buildShellCommand args =
+    let
+        escapeForShell : String -> String
+        escapeForShell str =
+            "'" ++ String.replace "'" "'\\''" str ++ "'"
+
+        baseCmd =
+            "opencode -p --format json"
+
+        sessionArgs =
+            when args.sessionId is
+                Just sid ->
+                    " --session " ++ escapeForShell sid
+
+                Nothing ->
+                    ""
+
+        cwdArgs =
+            if String.isEmpty args.workspaceRoot then
+                ""
+            else
+                " --cwd " ++ escapeForShell args.workspaceRoot
+
+        messageArg =
+            " " ++ escapeForShell args.message
+
+        stdinRedirect =
+            " </dev/null"
+
+        envVars =
+            let
+                taskIdVar =
+                    when args.taskId is
+                        Just tid ->
+                            "CHORUS_TASK_ID=" ++ escapeForShell tid ++ " "
+
+                        Nothing ->
+                            ""
+
+                baseUrlVar =
+                    when args.baseUrl is
+                        Just url ->
+                            "CHORUS_BASE_URL=" ++ escapeForShell url ++ " "
+
+                        Nothing ->
+                            ""
+            in
+            taskIdVar ++ baseUrlVar
+    in
+    envVars ++ baseCmd ++ sessionArgs ++ cwdArgs ++ messageArg ++ stdinRedirect
+
+
+
+-- RESPONSE PARSING
+
+
+{-| Extract session ID from opencode JSON output.
+
+Looks for session_id in the NDJSON events.
+-}
+parseSessionId : String -> Maybe SessionId
+parseSessionId output =
+    let
+        decoder =
+            Decode.field "session_id" Decode.string
+    in
+    -- Try single JSON object first
+    when Decode.decodeString decoder output is
+        Ok rawId ->
+            Id.sessionIdFromString rawId
+
+        Err _ ->
+            -- Try NDJSON format
+            output
+                |> String.lines
+                |> Array.mapAndKeepJust
+                    (\line ->
+                        when Decode.decodeString decoder line is
+                            Ok rawId ->
+                                Id.sessionIdFromString rawId
+
+                            Err _ ->
+                                Nothing
+                    )
+                |> Array.first
+
+
+{-| Parse CLI response into Provider.Response.
+-}
+parseCliResponse : String -> Result String Response
+parseCliResponse output =
+    let
+        resultDecoder =
+            Decode.map2
+                (\isError result ->
+                    { isError = isError
+                    , result = result
+                    }
+                )
+                (Decode.field "is_error" Decode.bool)
+                (Decode.field "result" Decode.string)
+    in
+    -- Try single JSON result
+    when Decode.decodeString resultDecoder output is
+        Ok parsed ->
+            if parsed.isError then
+                Err ("OpenCode returned error: " ++ parsed.result)
+            else
+                Ok
+                    { text = parsed.result
+                    , toolCalls = []
+                    , isComplete = True
+                    }
+
+        Err _ ->
+            -- Try NDJSON format - look for last result message
+            let
+                lines =
+                    String.lines output
+
+                lastResult =
+                    lines
+                        |> Array.reverse
+                        |> Array.mapAndKeepJust
+                            (\line ->
+                                when Decode.decodeString resultDecoder line is
+                                    Ok parsed ->
+                                        Just parsed
+
+                                    Err _ ->
+                                        Nothing
+                            )
+                        |> Array.first
+            in
+            when lastResult is
+                Just parsed ->
+                    if parsed.isError then
+                        Err ("OpenCode returned error: " ++ parsed.result)
+                    else
+                        Ok
+                            { text = parsed.result
+                            , toolCalls = []
+                            , isComplete = True
+                            }
+
+                Nothing ->
+                    -- Fall back to extracting text from assistant messages
+                    extractAssistantText lines
+
+
+{-| Extract text from assistant-type messages in NDJSON output.
+-}
+extractAssistantText : Array String -> Result String Response
+extractAssistantText lines =
+    let
+        textDecoder =
+            Decode.map2
+                (\contentType text ->
+                    { contentType = contentType, text = text }
+                )
+                (Decode.field "type" Decode.string)
+                (Decode.field "text" Decode.string)
+
+        contentDecoder =
+            Decode.field "message"
+                (Decode.field "content"
+                    (Decode.array textDecoder)
+                )
+
+        assistantDecoder =
+            Decode.field "type" Decode.string
+                |> Decode.andThen
+                    (\msgType ->
+                        if msgType == "assistant" then
+                            contentDecoder
+                        else
+                            Decode.fail "Not an assistant message"
+                    )
+
+        texts =
+            lines
+                |> Array.mapAndKeepJust
+                    (\line ->
+                        when Decode.decodeString assistantDecoder line is
+                            Ok contents ->
+                                contents
+                                    |> Array.mapAndKeepJust
+                                        (\c ->
+                                            if c.contentType == "text" then
+                                                Just c.text
+                                            else
+                                                Nothing
+                                        )
+                                    |> String.join "\n"
+                                    |> Just
+
+                            Err _ ->
+                                Nothing
+                    )
+    in
+    if Array.isEmpty texts then
+        Err "No response found in opencode output"
+    else
+        Ok
+            { text = String.join "\n" texts
+            , toolCalls = []
+            , isComplete = True
+            }
+
+
+
+-- ERROR HANDLING
+
+
+{-| Convert CLI execution errors to ProviderError.
+-}
+cliErrorToProviderError : ChildProcess.FailedRun -> ProviderError
+cliErrorToProviderError runError =
+    when runError is
+        ChildProcess.InitError { errorCode } ->
+            if String.contains "ENOENT" errorCode then
+                EnvironmentError
+                    { message = "opencode CLI not found. Install from https://opencode.ai" }
+            else
+                NetworkError
+                    { message = "Failed to start opencode CLI: " ++ errorCode }
+
+        ChildProcess.ProgramError { exitCode, stderr } ->
+            let
+                stderrStr =
+                    stderr |> Bytes.toString |> Maybe.withDefault ""
+            in
+            if String.contains "auth" (String.toLower stderrStr) || String.contains "unauthorized" (String.toLower stderrStr) then
+                AuthenticationError { message = stderrStr }
+            else if String.contains "rate limit" (String.toLower stderrStr) then
+                RateLimitError { message = stderrStr }
+            else
+                InvalidResponseError
+                    { message = "opencode exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr }

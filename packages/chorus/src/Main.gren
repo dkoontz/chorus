@@ -31,6 +31,7 @@ import Node
 import Provider exposing (ProviderKind(..))
 import Provider.ClaudeCode as ClaudeCode
 import Provider.OpenAiCompat as OpenAiCompat
+import Provider.OpenCode as OpenCode
 import Stream
 import Task as GrenTask
 import Task.Registry as Registry
@@ -302,6 +303,7 @@ init env =
 
 Dispatches based on the agent's `provider` field. Supports:
 - "claude-code": CLI-based provider that spawns the claude CLI
+- "opencode": CLI-based provider that spawns the opencode CLI
 - "openai-compat": OpenAI-compatible API provider (OpenRouter, Ollama, etc.)
 
 Returns Nothing if the provider name is not recognized.
@@ -311,6 +313,16 @@ makeProvider model agentConfig =
     when agentConfig.provider is
         "claude-code" ->
             Just (ClaudeCode.provider model.providerConfig)
+
+        "opencode" ->
+            Just
+                (OpenCode.provider
+                    { childProcessPermission = model.cpPermission
+                    , fsPermission = model.fsPermission
+                    , chorusToolsPath = model.config.chorusToolsPath
+                    , baseUrl = "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.port_
+                    }
+                )
 
         "openai-compat" ->
             Just
