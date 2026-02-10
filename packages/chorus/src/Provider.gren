@@ -10,6 +10,8 @@ module Provider exposing
       -- Error types
     , ProviderError(..)
     , providerErrorToString
+      -- Provider kinds
+    , ProviderKind(..)
       -- Provider interface
     , Provider
       -- Validation result
@@ -129,15 +131,31 @@ providerErrorToString error =
 
 
 
+-- PROVIDER KIND
+
+
+{-| How a provider executes agents.
+
+CLI providers spawn an external process that manages the tool loop internally.
+API providers communicate via HTTP, with Chorus managing the tool loop.
+-}
+type ProviderKind
+    = CliProvider
+    | ApiProvider
+
+
+
 -- PROVIDER INTERFACE
 
 
 {-| The provider interface that all LLM providers must implement.
 
-Each function returns a Task that can fail with a ProviderError.
+Each function returns a Cmd that delivers results via messages.
 -}
 type alias Provider msg =
-    { -- Validate that the environment has required prerequisites
+    { -- What kind of provider this is
+      kind : ProviderKind
+    , -- Validate that the environment has required prerequisites
       validateEnvironment :
             (Result ProviderError {} -> msg)
             -> Cmd msg

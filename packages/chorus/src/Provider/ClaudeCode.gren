@@ -22,6 +22,7 @@ import Provider
         ( AgentSpec
         , Provider
         , ProviderError(..)
+        , ProviderKind(..)
         , Response
         , Session
         , ToolCall
@@ -52,7 +53,8 @@ This implements the Provider interface by spawning the claude CLI.
 -}
 provider : Config -> Provider msg
 provider config =
-    { validateEnvironment = validateEnvironment config
+    { kind = CliProvider
+    , validateEnvironment = validateEnvironment config
     , createSession = createSession config
     , sendMessage = sendMessage config
     , submitToolResults = submitToolResults config

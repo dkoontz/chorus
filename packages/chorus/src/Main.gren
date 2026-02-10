@@ -19,6 +19,7 @@ import Debug
 import Dict exposing (Dict)
 import FileSystem
 import FileSystem.Path as Path exposing (Path)
+import HttpClient
 import HttpServer
 import HttpServer.Response as Response exposing (Response)
 import Id exposing (TaskId)
@@ -27,6 +28,7 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import Logging exposing (LogLevel(..))
 import Node
+import Provider exposing (ProviderKind(..))
 import Provider.ClaudeCode as ClaudeCode
 import Stream
 import Task as GrenTask
@@ -64,6 +66,7 @@ type alias Model =
     , providerConfig : ClaudeCode.Config
     , fsPermission : FileSystem.Permission
     , cpPermission : ChildProcess.Permission
+    , httpClientPermission : HttpClient.Permission
     , secureContext : SecureContext
     , config : Config
     , status : Status
@@ -214,66 +217,89 @@ init : Node.Environment -> Init.Task { model : Model, command : Cmd Msg }
 init env =
     Init.await FileSystem.initialize <| \fsPermission ->
         Init.await ChildProcess.initialize <| \cpPermission ->
-            Init.awaitTask getSecureContext <| \secureContext ->
-                Init.awaitTask Node.getEnvironmentVariables <| \envVars ->
-                    Init.await HttpServer.initialize <| \httpPermission ->
-                        let
-                            config =
-                                configFromEnv envVars defaultConfig
+            Init.await HttpClient.initialize <| \httpClientPermission ->
+                Init.awaitTask getSecureContext <| \secureContext ->
+                    Init.awaitTask Node.getEnvironmentVariables <| \envVars ->
+                        Init.await HttpServer.initialize <| \httpPermission ->
+                            let
+                                config =
+                                    configFromEnv envVars defaultConfig
 
-                            logger =
-                                Logging.makeLogger env.stdout config.logLevel
+                                logger =
+                                    Logging.makeLogger env.stdout config.logLevel
 
-                            providerCfg =
-                                { childProcessPermission = cpPermission
-                                , chorusToolsPath = config.chorusToolsPath
-                                , baseUrl = "http://" ++ config.host ++ ":" ++ String.fromInt config.port_
+                                providerCfg =
+                                    { childProcessPermission = cpPermission
+                                    , chorusToolsPath = config.chorusToolsPath
+                                    , baseUrl = "http://" ++ config.host ++ ":" ++ String.fromInt config.port_
+                                    }
+
+                                model =
+                                    { env = env
+                                    , server = Nothing
+                                    , registry = Nothing
+                                    , agentRegistry = Nothing
+                                    , activeExecutors = Dict.empty
+                                    , providerConfig = providerCfg
+                                    , fsPermission = fsPermission
+                                    , cpPermission = cpPermission
+                                    , httpClientPermission = httpClientPermission
+                                    , secureContext = secureContext
+                                    , config = config
+                                    , status = Initializing
+                                    , pendingResponses = []
+                                    , logger = logger
+                                    }
+                            in
+                            Node.startProgram
+                                { model = model
+                                , command =
+                                    Cmd.batch
+                                        [ -- Initialize the HTTP server
+                                          Server.createServer httpPermission
+                                            { host = config.host
+                                            , port_ = config.port_
+                                            }
+                                            |> GrenTask.attempt GotServer
+
+                                        , -- Initialize the task registry
+                                          Registry.init fsPermission secureContext
+                                            { registryRoot = config.registryRoot
+                                            , workspacesRoot = config.workspacesRoot
+                                            }
+                                            |> GrenTask.attempt GotRegistry
+
+                                        , -- Initialize the agent registry
+                                          AgentRegistry.init fsPermission
+                                            { agentsRoot = config.agentsRoot
+                                            }
+                                            |> GrenTask.attempt GotAgentRegistry
+
+                                        , -- Log startup
+                                          Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.port_) NoOp
+                                        ]
                                 }
 
-                            model =
-                                { env = env
-                                , server = Nothing
-                                , registry = Nothing
-                                , agentRegistry = Nothing
-                                , activeExecutors = Dict.empty
-                                , providerConfig = providerCfg
-                                , fsPermission = fsPermission
-                                , cpPermission = cpPermission
-                                , secureContext = secureContext
-                                , config = config
-                                , status = Initializing
-                                , pendingResponses = []
-                                , logger = logger
-                                }
-                        in
-                        Node.startProgram
-                            { model = model
-                            , command =
-                                Cmd.batch
-                                    [ -- Initialize the HTTP server
-                                      Server.createServer httpPermission
-                                        { host = config.host
-                                        , port_ = config.port_
-                                        }
-                                        |> GrenTask.attempt GotServer
 
-                                    , -- Initialize the task registry
-                                      Registry.init fsPermission secureContext
-                                        { registryRoot = config.registryRoot
-                                        , workspacesRoot = config.workspacesRoot
-                                        }
-                                        |> GrenTask.attempt GotRegistry
 
-                                    , -- Initialize the agent registry
-                                      AgentRegistry.init fsPermission
-                                        { agentsRoot = config.agentsRoot
-                                        }
-                                        |> GrenTask.attempt GotAgentRegistry
+-- PROVIDER FACTORY
 
-                                    , -- Log startup
-                                      Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.port_) NoOp
-                                    ]
-                            }
+
+{-| Create a provider for the given agent configuration.
+
+Dispatches based on the agent's `provider` field. Currently supports:
+- "claude-code": CLI-based provider that spawns the claude CLI
+
+Returns Nothing if the provider name is not recognized.
+-}
+makeProvider : Model -> Types.AgentConfig -> Maybe (Provider.Provider Msg)
+makeProvider model agentConfig =
+    when agentConfig.provider is
+        "claude-code" ->
+            Just (ClaudeCode.provider model.providerConfig)
+
+        _ ->
+            Nothing
 
 
 
