@@ -6,7 +6,7 @@
   "scripts": {
     "build:ui": "cd packages/chorus-ui && gren make Main --output=build/app.js",
     "build:tools": "cd packages/tools && gren make FileToolsMain --output=build/file-tools-tmp && tail -n +2 build/file-tools-tmp > build/file-tools.js && bun build --compile build/file-tools.js --outfile build/file-tools && rm build/file-tools-tmp build/file-tools.js && gren make HandoffMain --output=build/handoff-tool-tmp && tail -n +2 build/handoff-tool-tmp > build/handoff-tool.js && bun build --compile build/handoff-tool.js --outfile build/handoff-tool && rm build/handoff-tool-tmp build/handoff-tool.js && gren make TaskToolsMain --output=build/task-tools-tmp && tail -n +2 build/task-tools-tmp > build/task-tools.js && bun build --compile build/task-tools.js --outfile build/task-tools && rm build/task-tools-tmp build/task-tools.js",
-    "build:chorus": "cd packages/chorus && gren make Main --output=build/chorus-tmp && tail -n +2 build/chorus-tmp > build/chorus.js && echo 'this.Gren.Main.init({});' >> build/chorus.js && bun build --compile build/chorus.js --outfile build/chorus && rm build/chorus-tmp",
+    "build:chorus": "cd packages/chorus && gren make Main --output=build/chorus-tmp && tail -n +2 build/chorus-tmp > build/chorus.js && bun build --compile build/chorus.js --outfile build/chorus && rm build/chorus-tmp",
     "build:app": "npm run build:ui && npm run build:tools && npm run build:chorus",
     "build:dist": "npm run build:app && scripts/build-dist.sh",
     "build:all": "npm run build:dist",
