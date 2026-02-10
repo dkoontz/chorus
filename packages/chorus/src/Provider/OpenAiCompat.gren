@@ -1,0 +1,563 @@
+module Provider.OpenAiCompat exposing
+    ( provider
+    , Config
+    )
+
+{-| OpenAI-compatible API provider implementation.
+
+This provider communicates with any OpenAI-compatible API endpoint
+(OpenRouter, Ollama, etc.) using the Chat Completions format.
+It implements the Provider interface for LLM communication.
+
+Conversation history is stored in files under the configured
+conversations directory, one JSON file per session.
+-}
+
+import Bytes
+import Crypto exposing (SecureContext)
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import HttpClient
+import Id exposing (SessionId)
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+import Provider
+    exposing
+        ( AgentSpec
+        , Provider
+        , ProviderError(..)
+        , ProviderKind(..)
+        , Response
+        , Session
+        , ToolCall
+        , ToolResult
+        )
+import Task exposing (Task)
+
+
+-- CONFIGURATION
+
+
+{-| Configuration for the OpenAI-compatible provider.
+-}
+type alias Config =
+    { httpClientPermission : HttpClient.Permission
+    , fsPermission : FileSystem.Permission
+    , secureContext : SecureContext
+    , apiBaseUrl : String
+    , apiKey : String
+    , model : String
+    , conversationsDir : String
+    }
+
+
+
+-- INTERNAL TYPES
+
+
+{-| A message in the OpenAI chat format.
+-}
+type alias ChatMessage =
+    { role : String
+    , content : Maybe String
+    , toolCalls : Array ApiToolCall
+    , toolCallId : Maybe String
+    }
+
+
+{-| A tool call in OpenAI format.
+-}
+type alias ApiToolCall =
+    { id : String
+    , functionName : String
+    , arguments : String
+    }
+
+
+
+-- PROVIDER
+
+
+{-| The OpenAI-compatible API provider.
+-}
+provider : Config -> Provider msg
+provider config =
+    { kind = ApiProvider
+    , validateEnvironment = validateEnvironment config
+    , createSession = createSession config
+    , sendMessage = sendMessage config
+    , submitToolResults = submitToolResults config
+    , resumeSession = resumeSession config
+    }
+
+
+
+-- ENVIRONMENT VALIDATION
+
+
+{-| Validate that the API endpoint is reachable and API key is set.
+-}
+validateEnvironment :
+    Config
+    -> (Result ProviderError {} -> msg)
+    -> Cmd msg
+validateEnvironment config toMsg =
+    if String.isEmpty config.apiKey then
+        Task.fail (EnvironmentError { message = "API key not configured" })
+            |> Task.attempt toMsg
+    else
+        let
+            request =
+                HttpClient.get (config.apiBaseUrl ++ "/models")
+                    |> HttpClient.withHeader "Authorization" ("Bearer " ++ config.apiKey)
+                    |> HttpClient.withTimeout 10000
+                    |> HttpClient.expectAnything
+        in
+        HttpClient.send config.httpClientPermission request
+            |> Task.map (\_ -> {})
+            |> Task.mapError httpErrorToProviderError
+            |> Task.attempt toMsg
+
+
+
+-- SESSION OPERATIONS
+
+
+{-| Create a new session for an agent.
+
+Generates a session ID, initializes conversation history with the
+system prompt, and stores it to disk.
+-}
+createSession :
+    Config
+    -> AgentSpec
+    -> String
+    -> (Result ProviderError Session -> msg)
+    -> Cmd msg
+createSession config agentSpec _ toMsg =
+    Crypto.randomUuidV4 config.secureContext
+        |> Task.andThen
+            (\uuid ->
+                when Id.sessionIdFromString uuid is
+                    Just sessionId ->
+                        let
+                            initialHistory =
+                                [ { role = "system"
+                                  , content = Just agentSpec.systemPrompt
+                                  , toolCalls = []
+                                  , toolCallId = Nothing
+                                  }
+                                ]
+
+                            session =
+                                { id = sessionId
+                                , agentSpec = agentSpec
+                                }
+                        in
+                        writeConversationHistory config sessionId initialHistory
+                            |> Task.map (\_ -> session)
+
+                    Nothing ->
+                        Task.fail (InvalidResponseError { message = "Failed to generate session ID" })
+            )
+        |> Task.attempt toMsg
+
+
+{-| Send a message in an existing session.
+
+Reads conversation history, appends the user message, calls the API,
+appends the assistant response, writes back, and returns the response.
+-}
+sendMessage :
+    Config
+    -> Session
+    -> String
+    -> (Result ProviderError Response -> msg)
+    -> Cmd msg
+sendMessage config session message toMsg =
+    readConversationHistory config session.id
+        |> Task.andThen
+            (\history ->
+                let
+                    userMessage =
+                        { role = "user"
+                        , content = Just message
+                        , toolCalls = []
+                        , toolCallId = Nothing
+                        }
+
+                    updatedHistory =
+                        Array.pushLast userMessage history
+                in
+                callChatCompletions config updatedHistory
+                    |> Task.andThen
+                        (\{ assistantMessage, response } ->
+                            let
+                                finalHistory =
+                                    Array.pushLast assistantMessage updatedHistory
+                            in
+                            writeConversationHistory config session.id finalHistory
+                                |> Task.map (\_ -> response)
+                        )
+            )
+        |> Task.attempt toMsg
+
+
+{-| Submit tool results and get the next response.
+
+Reads conversation history, appends tool result messages, calls the API,
+appends the assistant response, writes back, and returns the response.
+-}
+submitToolResults :
+    Config
+    -> Session
+    -> Array ToolResult
+    -> (Result ProviderError Response -> msg)
+    -> Cmd msg
+submitToolResults config session results toMsg =
+    readConversationHistory config session.id
+        |> Task.andThen
+            (\history ->
+                let
+                    toolMessages =
+                        Array.map
+                            (\result ->
+                                { role = "tool"
+                                , content = Just result.output
+                                , toolCalls = []
+                                , toolCallId = Just result.toolCallId
+                                }
+                            )
+                            results
+
+                    updatedHistory =
+                        Array.foldl
+                            (\msg hist -> Array.pushLast msg hist)
+                            history
+                            toolMessages
+                in
+                callChatCompletions config updatedHistory
+                    |> Task.andThen
+                        (\{ assistantMessage, response } ->
+                            let
+                                finalHistory =
+                                    Array.pushLast assistantMessage updatedHistory
+                            in
+                            writeConversationHistory config session.id finalHistory
+                                |> Task.map (\_ -> response)
+                        )
+            )
+        |> Task.attempt toMsg
+
+
+{-| Resume an existing session by checking if its conversation file exists.
+-}
+resumeSession :
+    Config
+    -> SessionId
+    -> (Result ProviderError (Maybe Session) -> msg)
+    -> Cmd msg
+resumeSession config sessionId toMsg =
+    readConversationHistory config sessionId
+        |> Task.map
+            (\_ ->
+                Just
+                    { id = sessionId
+                    , agentSpec =
+                        { name = "Resumed"
+                        , systemPrompt = ""
+                        }
+                    }
+            )
+        |> Task.onError
+            (\_ -> Task.succeed Nothing)
+        |> Task.attempt toMsg
+
+
+
+-- API CALLS
+
+
+{-| Call the chat completions endpoint.
+
+Returns both the raw assistant message (for history) and the parsed response.
+-}
+callChatCompletions :
+    Config
+    -> Array ChatMessage
+    -> Task ProviderError { assistantMessage : ChatMessage, response : Response }
+callChatCompletions config history =
+    let
+        requestBody =
+            Encode.object
+                [ { key = "model", value = Encode.string config.model }
+                , { key = "messages", value = Encode.array encodeChatMessage history }
+                ]
+
+        request =
+            HttpClient.post (config.apiBaseUrl ++ "/chat/completions")
+                |> HttpClient.withHeader "Authorization" ("Bearer " ++ config.apiKey)
+                |> HttpClient.withJsonBody requestBody
+                |> HttpClient.withTimeout 120000
+                |> HttpClient.expectJson chatCompletionDecoder
+    in
+    HttpClient.send config.httpClientPermission request
+        |> Task.mapError httpErrorToProviderError
+        |> Task.andThen
+            (\httpResponse ->
+                Task.succeed httpResponse.data
+            )
+
+
+
+-- CONVERSATION HISTORY PERSISTENCE
+
+
+{-| Path to a session's conversation file.
+-}
+conversationFilePath : Config -> SessionId -> Path
+conversationFilePath config sessionId =
+    Path.fromPosixString (config.conversationsDir ++ "/" ++ Id.sessionIdToString sessionId ++ ".json")
+
+
+{-| Read conversation history from disk.
+-}
+readConversationHistory : Config -> SessionId -> Task ProviderError (Array ChatMessage)
+readConversationHistory config sessionId =
+    let
+        path =
+            conversationFilePath config sessionId
+    in
+    FileSystem.readFile config.fsPermission path
+        |> Task.mapError
+            (\_ -> SessionNotFound { sessionId = Id.sessionIdToString sessionId })
+        |> Task.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        Task.fail (InvalidResponseError { message = "Could not decode conversation file" })
+
+                    Just jsonStr ->
+                        when Decode.decodeString (Decode.array chatMessageDecoder) jsonStr is
+                            Ok messages ->
+                                Task.succeed messages
+
+                            Err decodeErr ->
+                                Task.fail (InvalidResponseError { message = "Invalid conversation file: " ++ Decode.errorToString decodeErr })
+            )
+
+
+{-| Write conversation history to disk.
+-}
+writeConversationHistory : Config -> SessionId -> Array ChatMessage -> Task ProviderError {}
+writeConversationHistory config sessionId history =
+    let
+        path =
+            conversationFilePath config sessionId
+
+        json =
+            Encode.array encodeChatMessage history
+                |> Encode.encode 2
+
+        bytes =
+            Bytes.fromString json
+    in
+    FileSystem.writeFile config.fsPermission bytes path
+        |> Task.mapError
+            (\fsErr -> NetworkError { message = "Failed to write conversation: " ++ FileSystem.errorToString fsErr })
+        |> Task.map (\_ -> {})
+
+
+
+-- JSON ENCODING
+
+
+{-| Encode a chat message to JSON (OpenAI format).
+-}
+encodeChatMessage : ChatMessage -> Encode.Value
+encodeChatMessage msg =
+    let
+        baseFields =
+            [ { key = "role", value = Encode.string msg.role } ]
+
+        contentField =
+            when msg.content is
+                Just c ->
+                    [ { key = "content", value = Encode.string c } ]
+
+                Nothing ->
+                    [ { key = "content", value = Encode.null } ]
+
+        toolCallsField =
+            if Array.isEmpty msg.toolCalls then
+                []
+            else
+                [ { key = "tool_calls"
+                  , value = Encode.array encodeApiToolCall msg.toolCalls
+                  }
+                ]
+
+        toolCallIdField =
+            when msg.toolCallId is
+                Just id ->
+                    [ { key = "tool_call_id", value = Encode.string id } ]
+
+                Nothing ->
+                    []
+    in
+    Encode.object (Array.flatten [ baseFields, contentField, toolCallsField, toolCallIdField ])
+
+
+{-| Encode a tool call to JSON.
+-}
+encodeApiToolCall : ApiToolCall -> Encode.Value
+encodeApiToolCall tc =
+    Encode.object
+        [ { key = "id", value = Encode.string tc.id }
+        , { key = "type", value = Encode.string "function" }
+        , { key = "function"
+          , value = Encode.object
+                [ { key = "name", value = Encode.string tc.functionName }
+                , { key = "arguments", value = Encode.string tc.arguments }
+                ]
+          }
+        ]
+
+
+
+-- JSON DECODING
+
+
+{-| Decode a chat message from JSON.
+-}
+chatMessageDecoder : Decoder ChatMessage
+chatMessageDecoder =
+    Decode.map4
+        (\role content toolCalls toolCallId ->
+            { role = role
+            , content = content
+            , toolCalls = Maybe.withDefault [] toolCalls
+            , toolCallId = toolCallId
+            }
+        )
+        (Decode.field "role" Decode.string)
+        (Decode.maybe (Decode.field "content" Decode.string))
+        (Decode.maybe (Decode.field "tool_calls" (Decode.array apiToolCallDecoder)))
+        (Decode.maybe (Decode.field "tool_call_id" Decode.string))
+
+
+{-| Decode a tool call from JSON.
+-}
+apiToolCallDecoder : Decoder ApiToolCall
+apiToolCallDecoder =
+    Decode.map3
+        (\id functionName arguments ->
+            { id = id
+            , functionName = functionName
+            , arguments = arguments
+            }
+        )
+        (Decode.field "id" Decode.string)
+        (Decode.at [ "function", "name" ] Decode.string)
+        (Decode.at [ "function", "arguments" ] Decode.string)
+
+
+{-| Decode a chat completion response.
+
+Extracts the assistant message and converts to Provider.Response.
+-}
+chatCompletionDecoder : Decoder { assistantMessage : ChatMessage, response : Response }
+chatCompletionDecoder =
+    Decode.at [ "choices" ] (Decode.array choiceDecoder)
+        |> Decode.andThen
+            (\choices ->
+                when Array.first choices is
+                    Just choice ->
+                        Decode.succeed choice
+
+                    Nothing ->
+                        Decode.fail "No choices in response"
+            )
+
+
+{-| Decode a single choice from the response.
+-}
+choiceDecoder : Decoder { assistantMessage : ChatMessage, response : Response }
+choiceDecoder =
+    Decode.map2
+        (\message finishReason ->
+            let
+                toolCalls =
+                    message.toolCalls
+                        |> Array.map
+                            (\tc ->
+                                { id = tc.id
+                                , name = tc.functionName
+                                , input = parseToolArguments tc.arguments
+                                }
+                            )
+
+                isComplete =
+                    Array.isEmpty toolCalls && finishReason /= Just "tool_calls"
+            in
+            { assistantMessage = message
+            , response =
+                { text = Maybe.withDefault "" message.content
+                , toolCalls = toolCalls
+                , isComplete = isComplete
+                }
+            }
+        )
+        (Decode.field "message" chatMessageDecoder)
+        (Decode.maybe (Decode.field "finish_reason" Decode.string))
+
+
+{-| Parse tool call arguments JSON string into a Value.
+-}
+parseToolArguments : String -> Decode.Value
+parseToolArguments jsonStr =
+    when Decode.decodeString Decode.value jsonStr is
+        Ok value ->
+            value
+
+        Err _ ->
+            Encode.string jsonStr
+
+
+
+-- ERROR HANDLING
+
+
+{-| Convert HttpClient errors to ProviderErrors.
+-}
+httpErrorToProviderError : HttpClient.Error -> ProviderError
+httpErrorToProviderError error =
+    when error is
+        HttpClient.BadUrl url ->
+            NetworkError { message = "Bad URL: " ++ url }
+
+        HttpClient.BadHeaders ->
+            NetworkError { message = "Invalid request headers" }
+
+        HttpClient.BadStatus response ->
+            let
+                body =
+                    response.data
+                        |> Bytes.toString
+                        |> Maybe.withDefault ""
+            in
+            if response.statusCode == 401 || response.statusCode == 403 then
+                AuthenticationError { message = "HTTP " ++ String.fromInt response.statusCode ++ ": " ++ body }
+            else if response.statusCode == 429 then
+                RateLimitError { message = "HTTP 429: " ++ body }
+            else
+                InvalidResponseError { message = "HTTP " ++ String.fromInt response.statusCode ++ ": " ++ body }
+
+        HttpClient.UnexpectedResponseBody message ->
+            InvalidResponseError { message = "Unexpected response body: " ++ message }
+
+        HttpClient.Timeout ->
+            NetworkError { message = "Request timed out" }
+
+        HttpClient.UnknownError message ->
+            NetworkError { message = "Unknown error: " ++ message }

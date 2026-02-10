@@ -30,6 +30,7 @@ import Logging exposing (LogLevel(..))
 import Node
 import Provider exposing (ProviderKind(..))
 import Provider.ClaudeCode as ClaudeCode
+import Provider.OpenAiCompat as OpenAiCompat
 import Stream
 import Task as GrenTask
 import Task.Registry as Registry
@@ -111,6 +112,9 @@ type alias Config =
     , agentsRoot : String
     , chorusToolsPath : String
     , logLevel : LogLevel
+    , apiBaseUrl : String
+    , apiKey : String
+    , defaultModel : String
     }
 
 
@@ -131,6 +135,9 @@ defaultConfig =
     , agentsRoot = "./data/agents"
     , chorusToolsPath = "./tools/chorus-tools"
     , logLevel = LogInfo
+    , apiBaseUrl = ""
+    , apiKey = ""
+    , defaultModel = ""
     }
 
 
@@ -142,6 +149,9 @@ defaultConfig =
     - CHORUS_DATA_DIR: Base data directory (default: ./data)
     - CHORUS_STATIC_DIR: Static files directory (default: ./static)
     - CHORUS_LOG_LEVEL: Log level - error, warn, info, debug (default: info)
+    - CHORUS_API_BASE_URL: Base URL for OpenAI-compatible API
+    - CHORUS_API_KEY: API key for the LLM provider
+    - CHORUS_DEFAULT_MODEL: Default model name for API providers
 
 -}
 configFromEnv : Dict String String -> Config -> Config
@@ -182,6 +192,9 @@ configFromEnv envVars config =
     , agentsRoot = dataDir ++ "/agents"
     , chorusToolsPath = Dict.get "CHORUS_TOOLS_PATH" envVars |> Maybe.withDefault config.chorusToolsPath
     , logLevel = logLevel
+    , apiBaseUrl = Dict.get "CHORUS_API_BASE_URL" envVars |> Maybe.withDefault config.apiBaseUrl
+    , apiKey = Dict.get "CHORUS_API_KEY" envVars |> Maybe.withDefault config.apiKey
+    , defaultModel = Dict.get "CHORUS_DEFAULT_MODEL" envVars |> Maybe.withDefault config.defaultModel
     }
 
 
@@ -287,8 +300,9 @@ init env =
 
 {-| Create a provider for the given agent configuration.
 
-Dispatches based on the agent's `provider` field. Currently supports:
+Dispatches based on the agent's `provider` field. Supports:
 - "claude-code": CLI-based provider that spawns the claude CLI
+- "openai-compat": OpenAI-compatible API provider (OpenRouter, Ollama, etc.)
 
 Returns Nothing if the provider name is not recognized.
 -}
@@ -297,6 +311,19 @@ makeProvider model agentConfig =
     when agentConfig.provider is
         "claude-code" ->
             Just (ClaudeCode.provider model.providerConfig)
+
+        "openai-compat" ->
+            Just
+                (OpenAiCompat.provider
+                    { httpClientPermission = model.httpClientPermission
+                    , fsPermission = model.fsPermission
+                    , secureContext = model.secureContext
+                    , apiBaseUrl = model.config.apiBaseUrl
+                    , apiKey = model.config.apiKey
+                    , model = Maybe.withDefault model.config.defaultModel agentConfig.model
+                    , conversationsDir = model.config.workspacesRoot ++ "/conversations"
+                    }
+                )
 
         _ ->
             Nothing
