@@ -10,15 +10,19 @@ module Web.ToolExecution exposing
 Handles tool requests by checking permissions against the agent's
 allowed tools list, then dispatching to the appropriate tool implementation.
 
-Tool execution is scoped to a workspace directory per task.
+File tools are executed directly. Task tools (task.get, task.list) are
+handled via the registry. Handoff is rejected here (use the handoff endpoint).
 
 -}
 
 import ChildProcess
 import FileSystem
+import Id
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task as GrenTask
+import Task.Registry as Registry
+import Time
 import Tools.File as File
 import Tools.Json as ToolsJson
     exposing
@@ -32,6 +36,7 @@ import Tools.Json as ToolsJson
         , encodeAllToolsHelp
         )
 import Tools.Validation as Validation
+import Types
 import Web.Api as Api
 
 
@@ -42,6 +47,7 @@ type alias ToolExecutionContext =
     , cpPermission : ChildProcess.Permission
     , workspaceRoot : String
     , allowedTools : Array String
+    , apiContext : Api.ApiContext
     }
 
 
@@ -98,13 +104,47 @@ requestExecuteTool ctx requestBody toMsg =
                         |> GrenTask.perform toMsg
 
                 Allowed ->
-                    dispatchTool ctx requestBody toMsg
+                    dispatchTool ctx toolName requestBody toMsg
 
 
-{-| Dispatch a tool request to the appropriate handler.
+{-| Dispatch a tool request to the appropriate handler based on tool name.
 -}
-dispatchTool : ToolExecutionContext -> String -> (Api.ApiResult -> msg) -> Cmd msg
-dispatchTool ctx requestBody toMsg =
+dispatchTool : ToolExecutionContext -> String -> String -> (Api.ApiResult -> msg) -> Cmd msg
+dispatchTool ctx toolName requestBody toMsg =
+    when toolName is
+        "task.get" ->
+            dispatchTaskGet ctx requestBody toMsg
+
+        "task.list" ->
+            dispatchTaskList ctx requestBody toMsg
+
+        "handoff" ->
+            GrenTask.succeed
+                (Api.ApiError
+                    { statusCode = 400
+                    , code = "BAD_REQUEST"
+                    , message = "Use POST /api/tasks/:id/handoff for handoff operations"
+                    }
+                )
+                |> GrenTask.perform toMsg
+
+        "help" ->
+            GrenTask.succeed
+                (Api.ApiSuccess
+                    { statusCode = 200
+                    , body = Encode.encode 0 encodeAllToolsHelp
+                    }
+                )
+                |> GrenTask.perform toMsg
+
+        _ ->
+            dispatchFileTool ctx requestBody toMsg
+
+
+{-| Dispatch a file tool request using the shared Tools.Json decoder.
+-}
+dispatchFileTool : ToolExecutionContext -> String -> (Api.ApiResult -> msg) -> Cmd msg
+dispatchFileTool ctx requestBody toMsg =
     when ToolsJson.decodeRequest requestBody is
         Err errMsg ->
             GrenTask.succeed
@@ -158,24 +198,63 @@ dispatchTool ctx requestBody toMsg =
                         encodeSearchOutput
                         toMsg
 
-                HandoffRequest _ ->
+                -- HandoffRequest and HelpRequest are handled above by tool name
+                _ ->
                     GrenTask.succeed
                         (Api.ApiError
                             { statusCode = 400
                             , code = "BAD_REQUEST"
-                            , message = "Use POST /api/tasks/:id/handoff for handoff operations"
+                            , message = "Unexpected tool request"
                             }
                         )
                         |> GrenTask.perform toMsg
 
-                HelpRequest ->
+
+{-| Handle task.get by querying the registry directly.
+-}
+dispatchTaskGet : ToolExecutionContext -> String -> (Api.ApiResult -> msg) -> Cmd msg
+dispatchTaskGet ctx requestBody toMsg =
+    let
+        taskIdResult =
+            Decode.decodeString (Decode.field "taskId" Decode.string) requestBody
+    in
+    when taskIdResult is
+        Err _ ->
+            GrenTask.succeed
+                (Api.ApiError
+                    { statusCode = 400
+                    , code = "BAD_REQUEST"
+                    , message = "Missing 'taskId' field for task.get"
+                    }
+                )
+                |> GrenTask.perform toMsg
+
+        Ok taskIdStr ->
+            when Id.taskIdFromString taskIdStr is
+                Nothing ->
                     GrenTask.succeed
-                        (Api.ApiSuccess
-                            { statusCode = 200
-                            , body = Encode.encode 0 encodeAllToolsHelp
+                        (Api.ApiError
+                            { statusCode = 400
+                            , code = "BAD_REQUEST"
+                            , message = "Invalid task ID: " ++ taskIdStr
                             }
                         )
                         |> GrenTask.perform toMsg
+
+                Just taskId ->
+                    Api.requestTask ctx.apiContext taskId toMsg
+
+
+{-| Handle task.list by querying the registry directly.
+-}
+dispatchTaskList : ToolExecutionContext -> String -> (Api.ApiResult -> msg) -> Cmd msg
+dispatchTaskList ctx requestBody toMsg =
+    let
+        statusFilter =
+            Decode.decodeString (Decode.field "status" Decode.string) requestBody
+                |> Result.toMaybe
+    in
+    Api.requestTasks ctx.apiContext statusFilter toMsg
 
 
 {-| Execute a file tool task, encoding the result as an ApiResult.

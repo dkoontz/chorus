@@ -1,0 +1,325 @@
+module ChorusToolsMain exposing (main)
+
+{-| CLI entry point for the chorus-tools proxy binary.
+
+Forwards tool requests to the Chorus server's tool execution endpoint.
+Reads configuration from environment variables:
+    - CHORUS_BASE_URL: Server base URL (default: http://localhost:8080)
+    - CHORUS_TASK_ID: Current task ID (required)
+
+Usage:
+    chorus-tools <json_input>
+
+Example:
+    CHORUS_TASK_ID=abc123 chorus-tools '{"tool":"file.read","path":"src/main.gren"}'
+
+For handoff requests, starts the handoff via the API and polls until complete.
+-}
+
+import Bytes exposing (Bytes)
+import ChildProcess
+import Dict
+import Init
+import Json.Decode as Decode
+import Json.Encode as Encode
+import Node
+import Stream
+import Task
+import Tools.Handoff as Handoff
+import Tools.Json as Json
+
+
+main : Node.SimpleProgram a
+main =
+    Node.defineSimpleProgram init
+
+
+init : Node.Environment -> Init.Task (Cmd a)
+init env =
+    Init.await ChildProcess.initialize <|
+        \cpPermission ->
+            Init.awaitTask Node.getEnvironmentVariables <|
+                \envVars ->
+                    runTool env cpPermission envVars
+
+
+runTool : Node.Environment -> ChildProcess.Permission -> Dict.Dict String String -> Init.Task (Cmd a)
+runTool env cpPermission envVars =
+    let
+        baseUrl =
+            Dict.get "CHORUS_BASE_URL" envVars
+                |> Maybe.withDefault "http://localhost:8080"
+
+        maybeTaskId =
+            Dict.get "CHORUS_TASK_ID" envVars
+    in
+    when maybeTaskId is
+        Nothing ->
+            outputError env "CHORUS_TASK_ID environment variable is required"
+
+        Just taskId ->
+            when env.args is
+                [ _, _, jsonInput ] ->
+                    dispatchTool env cpPermission baseUrl taskId jsonInput
+
+                _ ->
+                    outputError env "Usage: chorus-tools <json_input>"
+
+
+{-| Dispatch based on tool name.
+-}
+dispatchTool :
+    Node.Environment
+    -> ChildProcess.Permission
+    -> String
+    -> String
+    -> String
+    -> Init.Task (Cmd a)
+dispatchTool env cpPermission baseUrl taskId jsonInput =
+    let
+        toolNameResult =
+            Decode.decodeString (Decode.field "tool" Decode.string) jsonInput
+    in
+    when toolNameResult is
+        Err _ ->
+            outputError env "Missing or invalid 'tool' field in JSON input"
+
+        Ok toolName ->
+            when toolName is
+                "handoff" ->
+                    -- Special case: handoff uses start + poll pattern
+                    dispatchHandoff env cpPermission baseUrl taskId jsonInput
+
+                _ ->
+                    -- Forward to server's tool execution endpoint
+                    forwardToServer env cpPermission baseUrl taskId jsonInput
+
+
+{-| Forward a tool request to the server's POST /api/tasks/:id/tools endpoint.
+-}
+forwardToServer :
+    Node.Environment
+    -> ChildProcess.Permission
+    -> String
+    -> String
+    -> String
+    -> Init.Task (Cmd a)
+forwardToServer env cpPermission baseUrl taskId jsonInput =
+    let
+        url =
+            baseUrl ++ "/api/tasks/" ++ taskId ++ "/tools"
+
+        args =
+            [ "-s"
+            , "-X", "POST"
+            , "-H", "Content-Type: application/json"
+            , "-d", jsonInput
+            , "-w", "\n%{http_code}"
+            , url
+            ]
+    in
+    ChildProcess.run cpPermission "curl" args defaultCurlOptions
+        |> Task.mapError curlFailedToString
+        |> Task.andThen
+            (\result ->
+                when parseHttpResponse result.stdout is
+                    Err errMsg ->
+                        Task.fail errMsg
+
+                    Ok { statusCode, body } ->
+                        if statusCode >= 400 then
+                            -- Server returned an error - pass through the error body
+                            Task.fail body
+                        else
+                            Task.succeed (Encode.string body)
+            )
+        |> Task.andThen
+            (\value ->
+                -- The body is already JSON from the server, write it directly
+                let
+                    bodyStr =
+                        when value is
+                            _ ->
+                                -- Extract the string from Encode.string
+                                Encode.encode 0 value
+                in
+                -- Remove the quotes added by Encode.string
+                let
+                    rawBody =
+                        when Decode.decodeString Decode.string bodyStr is
+                            Ok s ->
+                                s
+
+                            Err _ ->
+                                bodyStr
+                in
+                Stream.writeLineAsBytes rawBody env.stdout
+                    |> Task.mapError (\_ -> "Failed to write output")
+            )
+        |> Task.onError
+            (\errorMsg ->
+                let
+                    errorJson =
+                        Json.encodeError errorMsg
+                in
+                Stream.writeLineAsBytes errorJson env.stderr
+                    |> Task.map (\_ -> env.stderr)
+                    |> Task.onError (\_ -> Task.succeed env.stderr)
+                    |> Task.map (\_ -> errorMsg)
+                    |> Task.andThen (\_ -> Task.fail errorMsg)
+            )
+        |> Task.map (\_ -> env.stdout)
+        |> Task.onError (\_ -> Task.succeed env.stdout)
+        |> Node.endSimpleProgram
+
+
+{-| Handle handoff by decoding params, calling Handoff.run, and encoding output.
+-}
+dispatchHandoff :
+    Node.Environment
+    -> ChildProcess.Permission
+    -> String
+    -> String
+    -> String
+    -> Init.Task (Cmd a)
+dispatchHandoff env cpPermission baseUrl taskId jsonInput =
+    let
+        inputResult =
+            Decode.decodeString
+                (Decode.map2
+                    (\agentName prompt ->
+                        { taskId = taskId
+                        , agentName = agentName
+                        , prompt = prompt
+                        , baseUrl = baseUrl
+                        , pollIntervalMs = 5000
+                        , maxWaitMs = 600000
+                        }
+                    )
+                    (Decode.field "agentName" Decode.string)
+                    (Decode.field "prompt" Decode.string)
+                )
+                jsonInput
+    in
+    when inputResult is
+        Err _ ->
+            outputError env "Invalid handoff request: requires 'agentName' and 'prompt' fields"
+
+        Ok handoffInput ->
+            Handoff.run cpPermission handoffInput
+                |> Task.map Json.encodeHandoffOutput
+                |> Task.mapError Handoff.handoffErrorToString
+                |> handleResult env
+
+
+{-| Handle a tool result task.
+-}
+handleResult : Node.Environment -> Task.Task String Encode.Value -> Init.Task (Cmd a)
+handleResult env task =
+    task
+        |> Task.andThen
+            (\value ->
+                let
+                    json =
+                        Encode.encode 0 value
+                in
+                Stream.writeLineAsBytes json env.stdout
+                    |> Task.mapError (\_ -> "Failed to write output")
+            )
+        |> Task.onError
+            (\errorMsg ->
+                let
+                    errorJson =
+                        Json.encodeError errorMsg
+                in
+                Stream.writeLineAsBytes errorJson env.stderr
+                    |> Task.map (\_ -> env.stderr)
+                    |> Task.onError (\_ -> Task.succeed env.stderr)
+                    |> Task.map (\_ -> errorMsg)
+                    |> Task.andThen (\_ -> Task.fail errorMsg)
+            )
+        |> Task.map (\_ -> env.stdout)
+        |> Task.onError (\_ -> Task.succeed env.stdout)
+        |> Node.endSimpleProgram
+
+
+{-| Output an error message as JSON to stderr and end the program.
+-}
+outputError : Node.Environment -> String -> Init.Task (Cmd a)
+outputError env errorMsg =
+    let
+        errorJson =
+            Json.encodeError errorMsg
+    in
+    Stream.writeLineAsBytes errorJson env.stderr
+        |> Task.onError (\_ -> Task.succeed env.stderr)
+        |> Node.endSimpleProgram
+
+
+
+-- HELPERS
+
+
+{-| Default options for curl.
+-}
+defaultCurlOptions : ChildProcess.RunOptions
+defaultCurlOptions =
+    { shell = ChildProcess.NoShell
+    , workingDirectory = ChildProcess.InheritWorkingDirectory
+    , environmentVariables = ChildProcess.InheritEnvironmentVariables
+    , maximumBytesWrittenToStreams = 10 * 1024 * 1024
+    , runDuration = ChildProcess.Milliseconds 600000
+    }
+
+
+{-| Parse HTTP response from curl -w "\n%{http_code}" format.
+-}
+parseHttpResponse : Bytes -> Result String { statusCode : Int, body : String }
+parseHttpResponse bytes =
+    when Bytes.toString bytes is
+        Nothing ->
+            Err "Response was not valid UTF-8"
+
+        Just raw ->
+            let
+                lines =
+                    String.split "\n" raw
+
+                maybeStatusCode =
+                    lines
+                        |> Array.last
+                        |> Maybe.andThen String.toInt
+
+                body =
+                    lines
+                        |> Array.dropLast 1
+                        |> String.join "\n"
+            in
+            when maybeStatusCode is
+                Nothing ->
+                    Err "Could not parse HTTP status code"
+
+                Just statusCode ->
+                    Ok { statusCode = statusCode, body = body }
+
+
+{-| Convert a curl ChildProcess failure to a string.
+-}
+curlFailedToString : ChildProcess.FailedRun -> String
+curlFailedToString failedRun =
+    when failedRun is
+        ChildProcess.ProgramError { exitCode, stderr } ->
+            let
+                stderrStr =
+                    stderr
+                        |> Bytes.toString
+                        |> Maybe.withDefault ""
+                        |> String.trim
+            in
+            if String.isEmpty stderrStr then
+                "curl exited with code " ++ String.fromInt exitCode
+            else
+                stderrStr
+
+        ChildProcess.InitError { errorCode } ->
+            "curl not available: " ++ errorCode

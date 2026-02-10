@@ -324,20 +324,33 @@ update msg model =
                     }
 
                 Ok { agentConfig } ->
-                    let
-                        toolCtx =
-                            { fsPermission = model.fsPermission
-                            , cpPermission = model.cpPermission
-                            , workspaceRoot = model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
-                            , allowedTools = agentConfig.allowedTools
+                    when model.registry is
+                        Nothing ->
+                            { model = model
+                            , command = Cmd.none
                             }
 
-                        toMsg =
-                            \apiResult -> GotApiResult { response = response, result = apiResult }
-                    in
-                    { model = model
-                    , command = ToolExecution.requestExecuteTool toolCtx requestBody toMsg
-                    }
+                        Just reg ->
+                            let
+                                toolCtx =
+                                    { fsPermission = model.fsPermission
+                                    , cpPermission = model.cpPermission
+                                    , workspaceRoot = model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
+                                    , allowedTools = agentConfig.allowedTools
+                                    , apiContext =
+                                        { registry = reg
+                                        , fsPermission = model.fsPermission
+                                        , secureContext = model.secureContext
+                                        , registryRoot = Path.fromPosixString model.config.registryRoot
+                                        }
+                                    }
+
+                                toMsg =
+                                    \apiResult -> GotApiResult { response = response, result = apiResult }
+                            in
+                            { model = model
+                            , command = ToolExecution.requestExecuteTool toolCtx requestBody toMsg
+                            }
 
         GotAgentLookup { taskId, prompt, response, result } ->
             when result is
