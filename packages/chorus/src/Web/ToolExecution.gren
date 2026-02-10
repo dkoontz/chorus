@@ -1,0 +1,207 @@
+module Web.ToolExecution exposing
+    ( ToolExecutionContext
+    , ToolPermission(..)
+    , checkPermission
+    , requestExecuteTool
+    )
+
+{-| Server-side tool execution.
+
+Handles tool requests by checking permissions against the agent's
+allowed tools list, then dispatching to the appropriate tool implementation.
+
+Tool execution is scoped to a workspace directory per task.
+
+-}
+
+import ChildProcess
+import FileSystem
+import Json.Decode as Decode
+import Json.Encode as Encode
+import Task as GrenTask
+import Tools.File as File
+import Tools.Json as ToolsJson
+    exposing
+        ( ToolRequest(..)
+        , encodeReadOutput
+        , encodeWriteOutput
+        , encodePatchOutput
+        , encodeDeleteOutput
+        , encodeListOutput
+        , encodeSearchOutput
+        , encodeAllToolsHelp
+        )
+import Tools.Validation as Validation
+import Web.Api as Api
+
+
+{-| Context needed for tool execution.
+-}
+type alias ToolExecutionContext =
+    { fsPermission : FileSystem.Permission
+    , cpPermission : ChildProcess.Permission
+    , workspaceRoot : String
+    , allowedTools : Array String
+    }
+
+
+{-| Result of a permission check.
+-}
+type ToolPermission
+    = Allowed
+    | Denied String
+
+
+{-| Check if a tool is allowed for this agent.
+-}
+checkPermission : Array String -> String -> ToolPermission
+checkPermission allowedTools toolName =
+    if Array.any (\t -> t == toolName) allowedTools then
+        Allowed
+    else
+        Denied ("Tool '" ++ toolName ++ "' is not allowed for this agent")
+
+
+{-| Execute a tool request.
+
+Parses the JSON request body, checks permissions, and dispatches
+to the appropriate tool handler. Returns an ApiResult.
+
+-}
+requestExecuteTool : ToolExecutionContext -> String -> (Api.ApiResult -> msg) -> Cmd msg
+requestExecuteTool ctx requestBody toMsg =
+    let
+        toolNameResult =
+            Decode.decodeString (Decode.field "tool" Decode.string) requestBody
+    in
+    when toolNameResult is
+        Err _ ->
+            GrenTask.succeed
+                (Api.ApiError
+                    { statusCode = 400
+                    , code = "BAD_REQUEST"
+                    , message = "Missing or invalid 'tool' field in request"
+                    }
+                )
+                |> GrenTask.perform toMsg
+
+        Ok toolName ->
+            when checkPermission ctx.allowedTools toolName is
+                Denied reason ->
+                    GrenTask.succeed
+                        (Api.ApiError
+                            { statusCode = 403
+                            , code = "FORBIDDEN"
+                            , message = reason
+                            }
+                        )
+                        |> GrenTask.perform toMsg
+
+                Allowed ->
+                    dispatchTool ctx requestBody toMsg
+
+
+{-| Dispatch a tool request to the appropriate handler.
+-}
+dispatchTool : ToolExecutionContext -> String -> (Api.ApiResult -> msg) -> Cmd msg
+dispatchTool ctx requestBody toMsg =
+    when ToolsJson.decodeRequest requestBody is
+        Err errMsg ->
+            GrenTask.succeed
+                (Api.ApiError
+                    { statusCode = 400
+                    , code = "BAD_REQUEST"
+                    , message = errMsg
+                    }
+                )
+                |> GrenTask.perform toMsg
+
+        Ok toolRequest ->
+            let
+                wsRoot =
+                    Validation.makeWorkspaceRoot ctx.workspaceRoot
+            in
+            when toolRequest is
+                ReadRequest input ->
+                    executeFileTask
+                        (File.read ctx.fsPermission wsRoot input)
+                        encodeReadOutput
+                        toMsg
+
+                WriteRequest input ->
+                    executeFileTask
+                        (File.write ctx.fsPermission wsRoot input)
+                        encodeWriteOutput
+                        toMsg
+
+                PatchRequest input ->
+                    executeFileTask
+                        (File.patch ctx.fsPermission wsRoot input)
+                        encodePatchOutput
+                        toMsg
+
+                DeleteRequest input ->
+                    executeFileTask
+                        (File.delete ctx.fsPermission wsRoot input)
+                        encodeDeleteOutput
+                        toMsg
+
+                ListRequest input ->
+                    executeFileTask
+                        (File.list ctx.fsPermission ctx.cpPermission wsRoot input)
+                        encodeListOutput
+                        toMsg
+
+                SearchRequest input ->
+                    executeFileTask
+                        (File.search ctx.cpPermission wsRoot input)
+                        encodeSearchOutput
+                        toMsg
+
+                HandoffRequest _ ->
+                    GrenTask.succeed
+                        (Api.ApiError
+                            { statusCode = 400
+                            , code = "BAD_REQUEST"
+                            , message = "Use POST /api/tasks/:id/handoff for handoff operations"
+                            }
+                        )
+                        |> GrenTask.perform toMsg
+
+                HelpRequest ->
+                    GrenTask.succeed
+                        (Api.ApiSuccess
+                            { statusCode = 200
+                            , body = Encode.encode 0 encodeAllToolsHelp
+                            }
+                        )
+                        |> GrenTask.perform toMsg
+
+
+{-| Execute a file tool task, encoding the result as an ApiResult.
+-}
+executeFileTask :
+    GrenTask.Task File.FileError a
+    -> (a -> Encode.Value)
+    -> (Api.ApiResult -> msg)
+    -> Cmd msg
+executeFileTask task encoder toMsg =
+    task
+        |> GrenTask.map
+            (\output ->
+                Api.ApiSuccess
+                    { statusCode = 200
+                    , body = Encode.encode 0 (encoder output)
+                    }
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed
+                    (Api.ApiError
+                        { statusCode = 500
+                        , code = "TOOL_ERROR"
+                        , message = File.fileErrorToString err
+                        }
+                    )
+            )
+        |> GrenTask.perform toMsg

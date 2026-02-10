@@ -1,4 +1,4 @@
-module Main exposing (main)
+module CombinedMain exposing (main)
 
 {-| CLI entry point for file tools.
 
@@ -122,4 +122,3 @@ executeRequest env fsPermission cpPermission workspaceRoot request =
         HelpRequest ->
             Task.succeed encodeAllToolsHelp
                 |> handleResult env
-

@@ -36,6 +36,7 @@ import Web.Api as Api
 import Web.Router as Router
 import Web.Server as Server
 import Web.Static as Static
+import Web.ToolExecution as ToolExecution
 
 
 -- MAIN
@@ -191,6 +192,7 @@ type Msg
     | GotStaticFile { id : Int, response : Response, result : Static.StaticFileResult }
     | GotApiResult { response : Response, result : Api.ApiResult }
     | GotBinaryResult { response : Response, result : Api.BinaryResult }
+    | GotToolAgentLookup { taskId : TaskId, requestBody : String, response : Response, result : Result String { agentConfig : Types.AgentConfig } }
     | GotAgentLookup { taskId : TaskId, prompt : String, response : Response, result : Result AgentRegistry.Error Types.AgentConfig }
     | GotHandoffRecorded { taskId : TaskId, prompt : String, response : Response, agentConfig : Types.AgentConfig, apiResult : Api.ApiResult }
     | GotAgentComplete { taskId : TaskId, result : Result String String }
@@ -312,6 +314,29 @@ update msg model =
                 Err err ->
                     { model = model
                     , command = Logging.logError model.logger ("Agent registry error: " ++ AgentRegistry.errorToString err) NoOp
+                    }
+
+        GotToolAgentLookup { taskId, requestBody, response, result } ->
+            when result is
+                Err errMsg ->
+                    { model = model
+                    , command = sendBadRequest response errMsg
+                    }
+
+                Ok { agentConfig } ->
+                    let
+                        toolCtx =
+                            { fsPermission = model.fsPermission
+                            , cpPermission = model.cpPermission
+                            , workspaceRoot = model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
+                            , allowedTools = agentConfig.allowedTools
+                            }
+
+                        toMsg =
+                            \apiResult -> GotApiResult { response = response, result = apiResult }
+                    in
+                    { model = model
+                    , command = ToolExecution.requestExecuteTool toolCtx requestBody toMsg
                     }
 
         GotAgentLookup { taskId, prompt, response, result } ->
@@ -675,6 +700,49 @@ handleRoute model route request response =
 
                         Router.DeleteAttachment { taskId, filename } ->
                             Api.requestDeleteAttachment ctx taskId filename model.config.uploadDir toMsg
+
+                        Router.ExecuteTool taskId ->
+                            when model.agentRegistry is
+                                Nothing ->
+                                    sendBadRequest response "Agent registry not initialized"
+
+                                Just agentReg ->
+                                    let
+                                        bodyStr =
+                                            Bytes.toString request.body
+                                                |> Maybe.withDefault ""
+
+                                        -- Look up task to find current agent, then look up agent config
+                                        lookupTask =
+                                            Registry.getTask registry taskId
+                                                |> GrenTask.mapError (\err -> Registry.errorToString err)
+                                                |> GrenTask.andThen
+                                                    (\maybeTask ->
+                                                        when maybeTask is
+                                                            Nothing ->
+                                                                GrenTask.fail ("Task not found: " ++ Id.taskIdToString taskId)
+
+                                                            Just task ->
+                                                                when Types.taskCurrentAgent task is
+                                                                    Nothing ->
+                                                                        GrenTask.fail "No agent currently active on this task"
+
+                                                                    Just agentName ->
+                                                                        AgentRegistry.getAgent agentReg agentName
+                                                                            |> GrenTask.mapError (\err -> "Agent not found: " ++ AgentRegistry.errorToString err)
+                                                                            |> GrenTask.map (\config -> { agentConfig = config })
+                                                    )
+                                    in
+                                    lookupTask
+                                        |> GrenTask.attempt
+                                            (\result ->
+                                                GotToolAgentLookup
+                                                    { taskId = taskId
+                                                    , requestBody = bodyStr
+                                                    , response = response
+                                                    , result = result
+                                                    }
+                                            )
 
                         Router.StartHandoff taskId ->
                             when parseStartHandoffBody request is
