@@ -21,6 +21,7 @@ encodeFileToolsHelp =
           , value =
                 Encode.array identity
                     [ fileReadHelp
+                    , fileCreateHelp
                     , fileWriteHelp
                     , filePatchHelp
                     , fileDeleteHelp
@@ -40,6 +41,7 @@ encodeAllToolsHelp =
           , value =
                 Encode.array identity
                     [ fileReadHelp
+                    , fileCreateHelp
                     , fileWriteHelp
                     , filePatchHelp
                     , fileDeleteHelp
@@ -75,11 +77,28 @@ fileReadHelp =
         }
 
 
+fileCreateHelp : Encode.Value
+fileCreateHelp =
+    encodeTool
+        { name = "file.create"
+        , description = "Create a new file. Fails if the file already exists."
+        , required =
+            [ { key = "path", value = "Relative path to the file to create" }
+            , { key = "content", value = "Content to write to the new file" }
+            ]
+        , optional = []
+        , output =
+            [ { key = "success", value = "Whether the create succeeded" }
+            , { key = "bytes_written", value = "Number of bytes written" }
+            ]
+        }
+
+
 fileWriteHelp : Encode.Value
 fileWriteHelp =
     encodeTool
         { name = "file.write"
-        , description = "Write content to a file, creating parent directories if needed"
+        , description = "Write content to an existing file. Fails if the file does not exist. Use file.create for new files."
         , required =
             [ { key = "path", value = "Relative path to the file to write" }
             , { key = "content", value = "Content to write to the file" }

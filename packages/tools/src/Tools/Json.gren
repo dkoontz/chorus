@@ -36,6 +36,7 @@ import Tools.Help as Help
 -}
 type ToolRequest
     = ReadRequest File.ReadInput
+    | CreateRequest File.WriteInput
     | WriteRequest File.WriteInput
     | PatchRequest File.PatchInput
     | DeleteRequest File.DeleteInput
@@ -64,6 +65,9 @@ toolDecoder toolName =
     when toolName is
         "file.read" ->
             Decode.map ReadRequest readInputDecoder
+
+        "file.create" ->
+            Decode.map CreateRequest writeInputDecoder
 
         "file.write" ->
             Decode.map WriteRequest writeInputDecoder

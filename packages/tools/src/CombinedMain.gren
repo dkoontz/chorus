@@ -83,6 +83,12 @@ executeRequest env fsPermission cpPermission workspaceRoot request =
                 |> Task.mapError File.fileErrorToString
                 |> handleResult env
 
+        CreateRequest input ->
+            File.create fsPermission workspaceRoot input
+                |> Task.map encodeWriteOutput
+                |> Task.mapError File.fileErrorToString
+                |> handleResult env
+
         WriteRequest input ->
             File.write fsPermission workspaceRoot input
                 |> Task.map encodeWriteOutput

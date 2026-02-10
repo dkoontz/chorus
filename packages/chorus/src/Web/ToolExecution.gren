@@ -168,6 +168,12 @@ dispatchFileTool ctx requestBody toMsg =
                         encodeReadOutput
                         toMsg
 
+                CreateRequest input ->
+                    executeFileTask
+                        (File.create ctx.fsPermission wsRoot input)
+                        encodeWriteOutput
+                        toMsg
+
                 WriteRequest input ->
                     executeFileTask
                         (File.write ctx.fsPermission wsRoot input)

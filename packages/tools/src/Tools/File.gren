@@ -7,6 +7,8 @@ module Tools.File exposing
     , WriteInput
     , WriteOutput
     , write
+      -- Create
+    , create
       -- Patch
     , PatchInput
     , PatchOperation
@@ -65,6 +67,7 @@ type FileError
     = ValidationFailed ValidationError
     | FileSystemError FileSystem.Error
     | FileNotFound { path : String }
+    | FileAlreadyExists { path : String }
     | IsDirectory { path : String }
     | NotAFile { path : String }
     | PatchFailed PatchError
@@ -90,6 +93,9 @@ fileErrorToString error =
 
         FileNotFound { path } ->
             "File not found: " ++ path
+
+        FileAlreadyExists { path } ->
+            "File already exists: " ++ path
 
         IsDirectory { path } ->
             "Cannot operate on directory: " ++ path
@@ -218,6 +224,64 @@ processReadContent input bytes =
 
 
 
+-- CREATE TOOL
+
+
+{-| Create a new file. Fails if the file already exists.
+-}
+create :
+    FileSystem.Permission
+    -> WorkspaceRoot
+    -> WriteInput
+    -> Task FileError WriteOutput
+create fsPermission workspaceRoot input =
+    when Validation.validatePath workspaceRoot input.path is
+        Err validationError ->
+            Task.fail (ValidationFailed validationError)
+
+        Ok validPath ->
+            let
+                path =
+                    Validation.toPath validPath
+
+                parentPath =
+                    Path.parentPath path
+
+                bytes =
+                    Bytes.fromString input.content
+
+                bytesLength =
+                    Bytes.length bytes
+            in
+            -- Check if file already exists
+            FileSystem.metadata fsPermission { resolveLink = True } path
+                |> Task.mapError FileSystemError
+                |> Task.andThen
+                    (\_ ->
+                        -- File exists - fail
+                        Task.fail (FileAlreadyExists { path = input.path })
+                    )
+                |> Task.onError
+                    (\err ->
+                        when err is
+                            FileAlreadyExists _ ->
+                                Task.fail err
+
+                            _ ->
+                                -- File doesn't exist (metadata failed) - create it
+                                ensureParentDirectory fsPermission parentPath
+                                    |> Task.andThen (\_ -> FileSystem.writeFile fsPermission bytes path)
+                                    |> Task.mapError FileSystemError
+                                    |> Task.map
+                                        (\_ ->
+                                            { success = True
+                                            , bytesWritten = bytesLength
+                                            }
+                                        )
+                    )
+
+
+
 -- WRITE TOOL
 
 
@@ -237,7 +301,9 @@ type alias WriteOutput =
     }
 
 
-{-| Write content to a file, creating parent directories if needed.
+{-| Write content to an existing file, creating parent directories if needed.
+
+Fails if the file does not exist. Use `create` for new files.
 -}
 write :
     FileSystem.Permission
@@ -254,23 +320,25 @@ write fsPermission workspaceRoot input =
                 path =
                     Validation.toPath validPath
 
-                parentPath =
-                    Path.parentPath path
-
                 bytes =
                     Bytes.fromString input.content
 
                 bytesLength =
                     Bytes.length bytes
             in
-            ensureParentDirectory fsPermission parentPath
-                |> Task.andThen (\_ -> FileSystem.writeFile fsPermission bytes path)
-                |> Task.mapError FileSystemError
-                |> Task.map
+            -- Verify file exists first
+            FileSystem.metadata fsPermission { resolveLink = True } path
+                |> Task.mapError (\_ -> FileNotFound { path = input.path })
+                |> Task.andThen
                     (\_ ->
-                        { success = True
-                        , bytesWritten = bytesLength
-                        }
+                        FileSystem.writeFile fsPermission bytes path
+                            |> Task.mapError FileSystemError
+                            |> Task.map
+                                (\_ ->
+                                    { success = True
+                                    , bytesWritten = bytesLength
+                                    }
+                                )
                     )
 
 

@@ -196,6 +196,7 @@ type Msg
     | GotAgentLookup { taskId : TaskId, prompt : String, response : Response, result : Result AgentRegistry.Error Types.AgentConfig }
     | GotHandoffRecorded { taskId : TaskId, prompt : String, response : Response, agentConfig : Types.AgentConfig, apiResult : Api.ApiResult }
     | GotAgentComplete { taskId : TaskId, result : Result String String }
+    | GotToolResult { taskId : TaskId, toolName : String, response : Response, result : Api.ApiResult }
     | GotInternalApiResult Api.ApiResult
     | NoOp
 
@@ -346,8 +347,12 @@ update msg model =
                                         }
                                     }
 
+                                toolName =
+                                    Decode.decodeString (Decode.field "tool" Decode.string) requestBody
+                                        |> Result.withDefault "unknown"
+
                                 toMsg =
-                                    \apiResult -> GotApiResult { response = response, result = apiResult }
+                                    \apiResult -> GotToolResult { taskId = taskId, toolName = toolName, response = response, result = apiResult }
                             in
                             { model = model
                             , command = ToolExecution.requestExecuteTool toolCtx requestBody toMsg
@@ -609,6 +614,40 @@ update msg model =
         GotApiResult { response, result } ->
             { model = model
             , command = Api.sendApiResponse response result
+            }
+
+        GotToolResult { taskId, toolName, response, result } ->
+            let
+                status =
+                    when result is
+                        Api.ApiSuccess _ ->
+                            "success"
+
+                        Api.ApiError _ ->
+                            "error"
+
+                logCmd =
+                    when model.registry is
+                        Nothing ->
+                            Cmd.none
+
+                        Just reg ->
+                            Registry.recordEvent reg taskId
+                                { eventType = "tool_executed"
+                                , data =
+                                    Dict.empty
+                                        |> Dict.set "tool" toolName
+                                        |> Dict.set "status" status
+                                }
+                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                |> GrenTask.perform (\_ -> NoOp)
+            in
+            { model = model
+            , command =
+                Cmd.batch
+                    [ Api.sendApiResponse response result
+                    , logCmd
+                    ]
             }
 
         GotBinaryResult { response, result } ->
