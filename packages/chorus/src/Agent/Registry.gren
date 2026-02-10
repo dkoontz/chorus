@@ -110,32 +110,26 @@ seedDefaults fsPermission agentsPath =
             [ { name = "researcher"
               , instructions = researcherInstructions
               , allowedTools = "WebSearch"
-              , permissionMode = "bypassPermissions"
               }
             , { name = "planner"
               , instructions = plannerInstructions
               , allowedTools = "Bash(tools/file-tools *)"
-              , permissionMode = "bypassPermissions"
               }
             , { name = "writer-workflow"
               , instructions = writerWorkflowInstructions
               , allowedTools = "Bash(tools/handoff-tool *)"
-              , permissionMode = "bypassPermissions"
               }
             , { name = "writer"
               , instructions = writerInstructions
               , allowedTools = "Bash(tools/file-tools *)"
-              , permissionMode = "bypassPermissions"
               }
             , { name = "editor"
               , instructions = editorInstructions
               , allowedTools = "Bash(tools/file-tools *)"
-              , permissionMode = "bypassPermissions"
               }
             , { name = "fact-checker"
               , instructions = factCheckerInstructions
               , allowedTools = "Bash(tools/file-tools *) WebSearch"
-              , permissionMode = "bypassPermissions"
               }
             ]
     in

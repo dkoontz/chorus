@@ -20,7 +20,6 @@ type alias AgentForm =
     { name : String
     , instructions : String
     , allowedTools : String
-    , permissionMode : String
     , isEditing : Bool  -- True when editing an existing agent
     }
 
@@ -32,7 +31,6 @@ emptyAgentForm =
     { name = ""
     , instructions = ""
     , allowedTools = "Read,Grep,Glob,Write,Edit,Bash"
-    , permissionMode = "default"
     , isEditing = False
     }
 
@@ -47,7 +45,6 @@ type alias Props msg =
     , onUpdateName : String -> msg
     , onUpdateInstructions : String -> msg
     , onUpdateAllowedTools : String -> msg
-    , onUpdatePermissionMode : String -> msg
     , onSaveAgent : msg
     , onDeleteAgent : String -> msg
     , onNoOp : msg
@@ -105,9 +102,7 @@ viewAgentCard props agent =
                 ]
             ]
         , dl [ class "info-list" ]
-            [ dt [] [ text "Permission Mode" ]
-            , dd [] [ text agent.permissionMode ]
-            , dt [] [ text "Allowed Tools" ]
+            [ dt [] [ text "Allowed Tools" ]
             , dd [ class "monospace" ] [ text agent.allowedTools ]
             ]
         , div [ class "agent-card-instructions" ]
@@ -187,17 +182,6 @@ viewAgentFormModal props =
                                 , value form.allowedTools
                                 , onInput props.onUpdateAllowedTools
                                 , placeholder "Comma-separated tool names"
-                                ]
-                                []
-                            ]
-                        , div [ class "form-group" ]
-                            [ label [ for "agent-permission" ] [ text "Permission Mode" ]
-                            , input
-                                [ id "agent-permission"
-                                , type_ "text"
-                                , value form.permissionMode
-                                , onInput props.onUpdatePermissionMode
-                                , placeholder "e.g. default"
                                 ]
                                 []
                             ]

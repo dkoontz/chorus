@@ -148,7 +148,6 @@ createSession config agentSpec workspaceRoot toMsg =
             , fileToolsPath = config.fileToolsPath
             , message = "Session initialized. Awaiting instructions."
             , allowedTools = Nothing
-            , permissionMode = Nothing
             }
 
         -- Build shell command with stdin redirected from /dev/null
@@ -206,7 +205,6 @@ sendMessage config session message toMsg =
             , fileToolsPath = config.fileToolsPath
             , message = message
             , allowedTools = Nothing
-            , permissionMode = Nothing
             }
 
         -- Build shell command with stdin redirected from /dev/null
@@ -300,7 +298,6 @@ type alias CliArgs =
     , fileToolsPath : String
     , message : String
     , allowedTools : Maybe String
-    , permissionMode : Maybe String
     }
 
 
@@ -337,14 +334,9 @@ buildCliArgs args =
         toolsFlag =
             toolCliFlagFromAllowedTools allowedToolsValue
 
-        permMode =
-            args.permissionMode
-                |> Maybe.withDefault "bypassPermissions"
-
         toolArgs =
             [ "--tools", toolsFlag
             , "--allowedTools", allowedToolsValue
-            , "--permission-mode", permMode
             ]
 
         dirArgs =
@@ -409,12 +401,8 @@ buildShellCommand args =
         toolsFlag =
             toolCliFlagFromAllowedTools allowedToolsValue
 
-        permMode =
-            args.permissionMode
-                |> Maybe.withDefault "bypassPermissions"
-
         toolArgs =
-            " --tools " ++ escapeForShell toolsFlag ++ " --allowedTools " ++ escapeForShell allowedToolsValue ++ " --permission-mode " ++ escapeForShell permMode
+            " --tools " ++ escapeForShell toolsFlag ++ " --allowedTools " ++ escapeForShell allowedToolsValue
 
         dirArgs =
             if String.isEmpty args.workspaceRoot then

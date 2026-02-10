@@ -140,7 +140,6 @@ type Msg
     | UpdateAgentName String
     | UpdateAgentInstructions String
     | UpdateAgentAllowedTools String
-    | UpdateAgentPermissionMode String
     | SaveAgent
     | DeleteAgent String
     | NoOp
@@ -761,7 +760,6 @@ update msg model =
                             { name = agent.name
                             , instructions = agent.instructions
                             , allowedTools = agent.allowedTools
-                            , permissionMode = agent.permissionMode
                             , isEditing = True
                             }
                 }
@@ -800,15 +798,6 @@ update msg model =
             , command = Cmd.none
             }
 
-        UpdateAgentPermissionMode mode ->
-            { model =
-                { model
-                    | agentForm =
-                        Maybe.map (\f -> { f | permissionMode = mode }) model.agentForm
-                }
-            , command = Cmd.none
-            }
-
         SaveAgent ->
             when model.agentForm is
                 Just form ->
@@ -822,7 +811,6 @@ update msg model =
                                 { name = form.name
                                 , instructions = form.instructions
                                 , allowedTools = form.allowedTools
-                                , permissionMode = form.permissionMode
                                 }
                         in
                         if form.isEditing then
@@ -961,7 +949,6 @@ viewMain model =
                     , onUpdateName = UpdateAgentName
                     , onUpdateInstructions = UpdateAgentInstructions
                     , onUpdateAllowedTools = UpdateAgentAllowedTools
-                    , onUpdatePermissionMode = UpdateAgentPermissionMode
                     , onSaveAgent = SaveAgent
                     , onDeleteAgent = DeleteAgent
                     , onNoOp = NoOp

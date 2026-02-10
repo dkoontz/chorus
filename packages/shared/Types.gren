@@ -210,7 +210,6 @@ type alias AgentConfig =
     { name : String
     , instructions : String
     , allowedTools : String
-    , permissionMode : String
     }
 
 
@@ -858,24 +857,21 @@ encodeAgentConfig config =
         [ { key = "name", value = Encode.string config.name }
         , { key = "instructions", value = Encode.string config.instructions }
         , { key = "allowedTools", value = Encode.string config.allowedTools }
-        , { key = "permissionMode", value = Encode.string config.permissionMode }
         ]
 
 
 agentConfigDecoder : Decoder AgentConfig
 agentConfigDecoder =
-    Decode.map4
-        (\name instructions allowedTools permissionMode ->
+    Decode.map3
+        (\name instructions allowedTools ->
             { name = name
             , instructions = instructions
             , allowedTools = allowedTools
-            , permissionMode = permissionMode
             }
         )
         (Decode.field "name" Decode.string)
         (Decode.field "instructions" Decode.string)
         (Decode.field "allowedTools" Decode.string)
-        (Decode.field "permissionMode" Decode.string)
 
 
 

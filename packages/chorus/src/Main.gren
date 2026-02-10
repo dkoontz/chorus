@@ -394,7 +394,6 @@ update msg model =
                             , fileToolsPath = model.config.fileToolsPath
                             , message = prompt
                             , allowedTools = Just agentConfig.allowedTools
-                            , permissionMode = Just agentConfig.permissionMode
                             }
 
                         shellCommand =
