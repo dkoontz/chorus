@@ -33,6 +33,7 @@ type Route
     | DownloadAttachment { taskId : TaskId, filename : String } -- GET /api/tasks/:id/attachments/:filename
     | DeleteAttachment { taskId : TaskId, filename : String }   -- DELETE /api/tasks/:id/attachments/:filename
     | ExecuteTool TaskId                        -- POST /api/tasks/:id/tools
+    | UpdateAgentTools TaskId                   -- PUT /api/tasks/:id/agent-tools
     | SubmitAnswers TaskId                      -- POST /api/tasks/:id/answers
     | StartHandoff TaskId                      -- POST /api/tasks/:id/handoff
     | CompleteHandoff TaskId                   -- PUT /api/tasks/:id/handoff/complete
@@ -129,6 +130,9 @@ parseRoute method path =
 
         { method = POST, segments = [ "api", "tasks", rawId, "tools" ] } ->
             withTaskId rawId ExecuteTool
+
+        { method = PUT, segments = [ "api", "tasks", rawId, "agent-tools" ] } ->
+            withTaskId rawId UpdateAgentTools
 
         { method = POST, segments = [ "api", "tasks", rawId, "answers" ] } ->
             withTaskId rawId SubmitAnswers
@@ -301,6 +305,9 @@ routeToString route =
 
         ExecuteTool tid ->
             "ExecuteTool(" ++ Id.taskIdToString tid ++ ")"
+
+        UpdateAgentTools tid ->
+            "UpdateAgentTools(" ++ Id.taskIdToString tid ++ ")"
 
         SubmitAnswers tid ->
             "SubmitAnswers(" ++ Id.taskIdToString tid ++ ")"

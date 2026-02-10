@@ -202,6 +202,7 @@ type Msg
     | GotTaskCreated { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
     | GotPlannerComplete { taskId : TaskId, result : Result String String }
     | GotAnswersSubmitted { response : Response, taskId : TaskId, enrichedPrompt : String, result : Api.ApiResult }
+    | GotToolGrant { taskId : TaskId, addTools : Array String, removeTools : Array String, response : Response }
     | NoOp
 
 
@@ -837,6 +838,70 @@ update msg model =
                 Api.ApiError _ ->
                     { model = model, command = sendResponseCmd }
 
+        GotToolGrant { taskId, addTools, removeTools, response } ->
+            let
+                taskIdStr =
+                    Id.taskIdToString taskId
+            in
+            when Dict.get taskIdStr model.activeExecutors is
+                Nothing ->
+                    { model = model
+                    , command = sendBadRequest response ("No active executor for task: " ++ taskIdStr)
+                    }
+
+                Just executor ->
+                    let
+                        currentTools =
+                            executor.agentConfig.allowedTools
+
+                        withAdded =
+                            Array.foldl
+                                (\tool tools ->
+                                    if Array.any (\t -> t == tool) tools then
+                                        tools
+                                    else
+                                        Array.pushLast tool tools
+                                )
+                                currentTools
+                                addTools
+
+                        withRemoved =
+                            Array.keepIf
+                                (\tool ->
+                                    not (Array.any (\r -> r == tool) removeTools)
+                                )
+                                withAdded
+
+                        updatedConfig =
+                            { agentConfig | allowedTools = withRemoved }
+
+                        updatedExecutor =
+                            { executor | agentConfig = updatedConfig }
+
+                        updatedExecutors =
+                            Dict.set taskIdStr updatedExecutor model.activeExecutors
+
+                        agentConfig =
+                            executor.agentConfig
+
+                        responseBody =
+                            Encode.object
+                                [ { key = "allowedTools", value = Encode.array Encode.string withRemoved }
+                                ]
+                                |> Encode.encode 0
+                    in
+                    { model = { model | activeExecutors = updatedExecutors }
+                    , command =
+                        Cmd.batch
+                            [ response
+                                |> Response.setStatus 200
+                                |> Response.setHeader "Content-Type" "application/json"
+                                |> Response.setBody responseBody
+                                |> Response.send
+                            , Logging.logInfo model.logger ("Updated tools for task " ++ taskIdStr ++ ": " ++ String.join ", " withRemoved) NoOp
+                            ]
+                    }
+
         NoOp ->
             { model = model
             , command = Cmd.none
@@ -997,6 +1062,23 @@ handleRoute model route request response =
                                                     , result = result
                                                     }
                                             )
+
+                        Router.UpdateAgentTools taskId ->
+                            when parseToolGrantBody request is
+                                Ok params ->
+                                    GrenTask.succeed {}
+                                        |> GrenTask.perform
+                                            (\_ ->
+                                                GotToolGrant
+                                                    { taskId = taskId
+                                                    , addTools = params.addTools
+                                                    , removeTools = params.removeTools
+                                                    , response = response
+                                                    }
+                                            )
+
+                                Err errMsg ->
+                                    sendBadRequest response errMsg
 
                         Router.SubmitAnswers taskId ->
                             when parseSubmitAnswersBody request is
@@ -1364,6 +1446,33 @@ parseSubmitAnswersBody request =
 
         Err _ ->
             Err "Invalid JSON body for answer submission"
+
+
+{-| Parse the body for PUT /api/tasks/:id/agent-tools.
+-}
+parseToolGrantBody : HttpServer.Request -> Result String { addTools : Array String, removeTools : Array String }
+parseToolGrantBody request =
+    let
+        decoder =
+            Decode.map2
+                (\addTools removeTools ->
+                    { addTools = addTools
+                    , removeTools = removeTools
+                    }
+                )
+                (Decode.maybe (Decode.field "addTools" (Decode.array Decode.string))
+                    |> Decode.map (Maybe.withDefault [])
+                )
+                (Decode.maybe (Decode.field "removeTools" (Decode.array Decode.string))
+                    |> Decode.map (Maybe.withDefault [])
+                )
+    in
+    when HttpServer.bodyFromJson decoder request is
+        Ok params ->
+            Ok params
+
+        Err _ ->
+            Err "Invalid JSON body for tool grant"
 
 
 {-| Parse the body for POST /api/agents or PUT /api/agents/:name.
