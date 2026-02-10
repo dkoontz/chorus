@@ -110,26 +110,38 @@ seedDefaults fsPermission agentsPath =
             [ { name = "researcher"
               , instructions = researcherInstructions
               , allowedTools = [ "web.search" ]
+              , provider = "claude-code"
+              , model = Nothing
               }
             , { name = "planner"
               , instructions = plannerInstructions
               , allowedTools = [ "file.read", "file.write", "file.create", "file.patch", "file.delete", "file.list", "file.search" ]
+              , provider = "claude-code"
+              , model = Nothing
               }
             , { name = "writer-workflow"
               , instructions = writerWorkflowInstructions
               , allowedTools = [ "handoff", "file.read", "file.write" ]
+              , provider = "claude-code"
+              , model = Nothing
               }
             , { name = "writer"
               , instructions = writerInstructions
               , allowedTools = [ "file.read", "file.write", "file.create", "file.patch", "file.list", "file.search" ]
+              , provider = "claude-code"
+              , model = Nothing
               }
             , { name = "editor"
               , instructions = editorInstructions
               , allowedTools = [ "file.read", "file.list", "file.search" ]
+              , provider = "claude-code"
+              , model = Nothing
               }
             , { name = "fact-checker"
               , instructions = factCheckerInstructions
               , allowedTools = [ "file.read", "file.list", "file.search", "web.search" ]
+              , provider = "claude-code"
+              , model = Nothing
               }
             ]
     in

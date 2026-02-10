@@ -237,6 +237,8 @@ type alias AgentConfig =
     { name : String
     , instructions : String
     , allowedTools : Array String
+    , provider : String
+    , model : Maybe String
     }
 
 
@@ -972,25 +974,41 @@ messageDecoder =
 -}
 encodeAgentConfig : AgentConfig -> Encode.Value
 encodeAgentConfig config =
-    Encode.object
-        [ { key = "name", value = Encode.string config.name }
-        , { key = "instructions", value = Encode.string config.instructions }
-        , { key = "allowedTools", value = Encode.array Encode.string config.allowedTools }
-        ]
+    let
+        requiredFields =
+            [ { key = "name", value = Encode.string config.name }
+            , { key = "instructions", value = Encode.string config.instructions }
+            , { key = "allowedTools", value = Encode.array Encode.string config.allowedTools }
+            , { key = "provider", value = Encode.string config.provider }
+            ]
+
+        modelField =
+            when config.model is
+                Just m ->
+                    [ { key = "model", value = Encode.string m } ]
+
+                Nothing ->
+                    []
+    in
+    Encode.object (Array.flatten [ requiredFields, modelField ])
 
 
 agentConfigDecoder : Decoder AgentConfig
 agentConfigDecoder =
-    Decode.map3
-        (\name instructions allowedTools ->
+    Decode.map5
+        (\name instructions allowedTools provider model ->
             { name = name
             , instructions = instructions
             , allowedTools = allowedTools
+            , provider = provider
+            , model = model
             }
         )
         (Decode.field "name" Decode.string)
         (Decode.field "instructions" Decode.string)
         (Decode.field "allowedTools" (Decode.array Decode.string))
+        (Decode.field "provider" Decode.string)
+        (Decode.maybe (Decode.field "model" Decode.string))
 
 
 

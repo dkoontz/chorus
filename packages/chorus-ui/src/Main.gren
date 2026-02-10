@@ -141,6 +141,8 @@ type Msg
     | UpdateAgentName String
     | UpdateAgentInstructions String
     | UpdateAgentAllowedTools String
+    | UpdateAgentProvider String
+    | UpdateAgentModel String
     | SaveAgent
     | DeleteAgent String
     | SelectStartAgent String
@@ -767,6 +769,8 @@ update msg model =
                             { name = agent.name
                             , instructions = agent.instructions
                             , allowedTools = String.join ", " agent.allowedTools
+                            , provider = agent.provider
+                            , model = Maybe.withDefault "" agent.model
                             , isEditing = True
                             }
                 }
@@ -805,6 +809,24 @@ update msg model =
             , command = Cmd.none
             }
 
+        UpdateAgentProvider provider ->
+            { model =
+                { model
+                    | agentForm =
+                        Maybe.map (\f -> { f | provider = provider }) model.agentForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateAgentModel modelStr ->
+            { model =
+                { model
+                    | agentForm =
+                        Maybe.map (\f -> { f | model = modelStr }) model.agentForm
+                }
+            , command = Cmd.none
+            }
+
         SaveAgent ->
             when model.agentForm is
                 Just form ->
@@ -822,6 +844,12 @@ update msg model =
                                         |> String.split ","
                                         |> Array.map String.trim
                                         |> Array.keepIf (\s -> not (String.isEmpty s))
+                                , provider = form.provider
+                                , model =
+                                    if String.isEmpty (String.trim form.model) then
+                                        Nothing
+                                    else
+                                        Just (String.trim form.model)
                                 }
                         in
                         if form.isEditing then
@@ -1013,6 +1041,8 @@ viewMain model =
                     , onUpdateName = UpdateAgentName
                     , onUpdateInstructions = UpdateAgentInstructions
                     , onUpdateAllowedTools = UpdateAgentAllowedTools
+                    , onUpdateProvider = UpdateAgentProvider
+                    , onUpdateModel = UpdateAgentModel
                     , onSaveAgent = SaveAgent
                     , onDeleteAgent = DeleteAgent
                     , onNoOp = NoOp
