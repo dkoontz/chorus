@@ -3,6 +3,7 @@ module Types exposing
     , DescriptionOnlyTask
     , PlannedTask
     , PlanningFields
+    , PlanningQuestion
     , HandoffRecord
     , CompletionReport
     , CompletionStatus(..)
@@ -27,6 +28,7 @@ module Types exposing
     , encodeHandoffRecord
     , encodeCompletionReport
     , encodeAgentConfig
+    , encodePlanningQuestion
     -- Decoders
     , taskDecoder
     , statusDecoder
@@ -39,6 +41,7 @@ module Types exposing
     , handoffRecordDecoder
     , completionReportDecoder
     , agentConfigDecoder
+    , planningQuestionDecoder
     -- Accessors
     , taskId
     , taskDescription
@@ -50,6 +53,8 @@ module Types exposing
     , taskAttachments
     , taskCurrentAgent
     , taskAgentChain
+    , taskQuestions
+    , taskAssignedAgent
     , isPlanned
     -- Mutators
     , planTask
@@ -137,6 +142,14 @@ type alias DescriptionOnlyTask =
     }
 
 
+{-| A question asked by the planning agent, with an optional user answer.
+-}
+type alias PlanningQuestion =
+    { question : String
+    , answer : Maybe String
+    }
+
+
 {-| A task that has been planned with summary, requirements, criteria, and steps.
 -}
 type alias PlannedTask =
@@ -154,6 +167,8 @@ type alias PlannedTask =
     , requirements : Array String
     , acceptanceCriteria : Array String
     , plan : Array String
+    , questions : Array PlanningQuestion
+    , assignedAgent : Maybe String
     }
 
 
@@ -164,6 +179,8 @@ type alias PlanningFields =
     , requirements : Array String
     , acceptanceCriteria : Array String
     , plan : Array String
+    , questions : Array PlanningQuestion
+    , assignedAgent : Maybe String
     }
 
 
@@ -378,6 +395,30 @@ isPlanned task =
             True
 
 
+{-| Get the planning questions for a task.
+-}
+taskQuestions : Task -> Array PlanningQuestion
+taskQuestions task =
+    when task is
+        DescriptionOnly _ ->
+            []
+
+        Planned t ->
+            t.questions
+
+
+{-| Get the assigned agent for a task.
+-}
+taskAssignedAgent : Task -> Maybe String
+taskAssignedAgent task =
+    when task is
+        DescriptionOnly _ ->
+            Nothing
+
+        Planned t ->
+            t.assignedAgent
+
+
 
 -- TASK MUTATORS
 
@@ -404,6 +445,8 @@ planTask task fields =
                 , requirements = fields.requirements
                 , acceptanceCriteria = fields.acceptanceCriteria
                 , plan = fields.plan
+                , questions = fields.questions
+                , assignedAgent = fields.assignedAgent
                 }
 
         Planned t ->
@@ -413,6 +456,8 @@ planTask task fields =
                     , requirements = fields.requirements
                     , acceptanceCriteria = fields.acceptanceCriteria
                     , plan = fields.plan
+                    , questions = fields.questions
+                    , assignedAgent = fields.assignedAgent
                 }
 
 
@@ -509,6 +554,8 @@ encodeTask task =
                 , { key = "requirements", value = Encode.array Encode.string t.requirements }
                 , { key = "acceptanceCriteria", value = Encode.array Encode.string t.acceptanceCriteria }
                 , { key = "plan", value = Encode.array Encode.string t.plan }
+                , { key = "questions", value = Encode.array encodePlanningQuestion t.questions }
+                , { key = "assignedAgent", value = encodeMaybe Encode.string t.assignedAgent }
                 ]
 
 
@@ -524,8 +571,16 @@ encodeAttachment attachment =
         ]
 
 
-{-| Encode a hand-off record to JSON.
+{-| Encode a planning question to JSON.
 -}
+encodePlanningQuestion : PlanningQuestion -> Encode.Value
+encodePlanningQuestion q =
+    Encode.object
+        [ { key = "question", value = Encode.string q.question }
+        , { key = "answer", value = encodeMaybe Encode.string q.answer }
+        ]
+
+
 encodeHandoffRecord : HandoffRecord -> Encode.Value
 encodeHandoffRecord record =
     Encode.object
@@ -748,6 +803,8 @@ plannedTaskDecoder =
             , requirements = []
             , acceptanceCriteria = []
             , plan = []
+            , questions = []
+            , assignedAgent = Nothing
             }
         )
         (Decode.field "id" Id.taskIdDecoder)
@@ -798,8 +855,32 @@ plannedTaskDecoder =
         |> Decode.andThen
             (\task ->
                 Decode.field "plan" (Decode.array Decode.string)
-                    |> Decode.map (\plan -> Planned { task | plan = plan })
+                    |> Decode.map (\plan -> { task | plan = plan })
             )
+        |> Decode.andThen
+            (\task ->
+                Decode.field "questions" (Decode.array planningQuestionDecoder)
+                    |> Decode.map (\questions -> { task | questions = questions })
+            )
+        |> Decode.andThen
+            (\task ->
+                Decode.field "assignedAgent" (Decode.maybe Decode.string)
+                    |> Decode.map (\assignedAgent -> Planned { task | assignedAgent = assignedAgent })
+            )
+
+
+{-| Decode a planning question from JSON.
+-}
+planningQuestionDecoder : Decoder PlanningQuestion
+planningQuestionDecoder =
+    Decode.map2
+        (\question answer ->
+            { question = question
+            , answer = answer
+            }
+        )
+        (Decode.field "question" Decode.string)
+        (Decode.field "answer" (Decode.maybe Decode.string))
 
 
 {-| Decode a hand-off record from JSON.

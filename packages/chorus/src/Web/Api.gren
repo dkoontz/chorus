@@ -20,6 +20,9 @@ module Web.Api exposing
     , requestCreateAgent
     , requestUpdateAgent
     , requestDeleteAgent
+    , requestApplyPlan
+    , requestSetQuestions
+    , requestSubmitAnswers
     , sendApiResponse
     , sendBinaryResponse
     , CreateTaskParams
@@ -49,7 +52,7 @@ import Task as GrenTask exposing (Task)
 import Task.Queue as Queue
 import Task.Registry as Registry
 import Time
-import Types exposing (Task(..), TaskStatus(..), SourceInfo, PlanningFields, HandoffRecord, AgentConfig, encodeAgentConfig, setAgentChain)
+import Types exposing (Task(..), TaskStatus(..), SourceInfo, PlanningFields, PlanningQuestion, HandoffRecord, AgentConfig, encodeAgentConfig, setAgentChain)
 import Web.Router exposing (Route(..))
 
 
@@ -207,21 +210,40 @@ requestCreateTask ctx params toMsg =
 
 
 {-| PUT /api/tasks/:id/status - Update task status.
+    Validates that the transition is allowed before updating.
 -}
 requestUpdateStatus : ApiContext -> TaskId -> TaskStatus -> (ApiResult -> msg) -> Cmd msg
 requestUpdateStatus ctx taskId status toMsg =
-    Registry.updateStatus ctx.registry taskId status
+    Registry.getTask ctx.registry taskId
         |> GrenTask.andThen
-            (\task ->
-                Time.now
-                    |> GrenTask.map
-                        (\now ->
-                            let
-                                body =
-                                    wrapResponse (Types.encodeTask task) now
-                            in
-                            ApiSuccess { statusCode = 200, body = body }
-                        )
+            (\maybeTask ->
+                when maybeTask is
+                    Nothing ->
+                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ Id.taskIdToString taskId })
+
+                    Just task ->
+                        let
+                            currentStatus =
+                                Types.taskStatus task
+                        in
+                        if isValidTransition currentStatus status then
+                            Registry.updateStatus ctx.registry taskId status
+                                |> GrenTask.andThen
+                                    (\updatedTask ->
+                                        Time.now
+                                            |> GrenTask.map
+                                                (\now ->
+                                                    ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
+                                                )
+                                    )
+                        else
+                            GrenTask.succeed
+                                (ApiError
+                                    { statusCode = 409
+                                    , code = "INVALID_TRANSITION"
+                                    , message = "Cannot transition from " ++ Types.statusToString currentStatus ++ " to " ++ Types.statusToString status
+                                    }
+                                )
             )
         |> GrenTask.onError
             (\err ->
@@ -255,6 +277,8 @@ requestUpdatePlanning ctx taskId params toMsg =
                             , requirements = []
                             , acceptanceCriteria = []
                             , plan = []
+                            , questions = []
+                            , assignedAgent = Nothing
                             }
 
                         Planned t ->
@@ -262,6 +286,8 @@ requestUpdatePlanning ctx taskId params toMsg =
                             , requirements = t.requirements
                             , acceptanceCriteria = t.acceptanceCriteria
                             , plan = t.plan
+                            , questions = t.questions
+                            , assignedAgent = t.assignedAgent
                             }
 
                 newFields =
@@ -269,6 +295,8 @@ requestUpdatePlanning ctx taskId params toMsg =
                     , requirements = Maybe.withDefault currentFields.requirements params.requirements
                     , acceptanceCriteria = Maybe.withDefault currentFields.acceptanceCriteria params.acceptanceCriteria
                     , plan = Maybe.withDefault currentFields.plan params.plan
+                    , questions = currentFields.questions
+                    , assignedAgent = currentFields.assignedAgent
                     }
             in
             Types.planTask task newFields
@@ -297,6 +325,162 @@ requestUpdatePlanning ctx taskId params toMsg =
                                 { statusCode = 500, message = Registry.errorToString err }
                 in
                 GrenTask.succeed (ApiError { statusCode = statusCode, code = "REGISTRY_ERROR", message = message })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| Apply a planner's plan result to a task.
+    Converts the task to Planned, sets status to ReadyToStart.
+-}
+requestApplyPlan : ApiContext -> TaskId -> Types.PlanningFields -> (ApiResult -> msg) -> Cmd msg
+requestApplyPlan ctx taskId fields toMsg =
+    Registry.updateTask ctx.registry taskId
+        (\task ->
+            Types.planTask task fields
+                |> Types.setTaskStatus Types.ReadyToStart
+        )
+        |> GrenTask.andThen
+            (\updatedTask ->
+                Time.now
+                    |> GrenTask.map
+                        (\now ->
+                            ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| Set planning questions on a task (from planner).
+    Converts the task to Planned with empty plan fields, sets status to AwaitingInput.
+-}
+requestSetQuestions : ApiContext -> TaskId -> Array String -> (ApiResult -> msg) -> Cmd msg
+requestSetQuestions ctx taskId questionStrings toMsg =
+    let
+        questions =
+            Array.map (\q -> { question = q, answer = Nothing }) questionStrings
+
+        emptyFields =
+            { summary = ""
+            , requirements = []
+            , acceptanceCriteria = []
+            , plan = []
+            , questions = questions
+            , assignedAgent = Nothing
+            }
+    in
+    Registry.updateTask ctx.registry taskId
+        (\task ->
+            Types.planTask task emptyFields
+                |> Types.setTaskStatus Types.AwaitingInput
+        )
+        |> GrenTask.andThen
+            (\updatedTask ->
+                Time.now
+                    |> GrenTask.map
+                        (\now ->
+                            ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| POST /api/tasks/:id/answers - Submit answers to planning questions.
+    Updates the task's questions with answers, sets status to Planning,
+    and returns the enriched prompt for re-dispatching the planner.
+-}
+requestSubmitAnswers : ApiContext -> TaskId -> Array String -> ({ apiResult : ApiResult, enrichedPrompt : String } -> msg) -> Cmd msg
+requestSubmitAnswers ctx taskId answers toMsg =
+    Registry.getTask ctx.registry taskId
+        |> GrenTask.andThen
+            (\maybeTask ->
+                when maybeTask is
+                    Nothing ->
+                        GrenTask.succeed
+                            { apiResult = ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ Id.taskIdToString taskId }
+                            , enrichedPrompt = ""
+                            }
+
+                    Just task ->
+                        let
+                            description =
+                                Types.taskDescription task
+
+                            currentQuestions =
+                                Types.taskQuestions task
+
+                            updatedQuestions =
+                                Array.indexedMap
+                                    (\i q ->
+                                        when Array.get i answers is
+                                            Just a ->
+                                                { q | answer = Just a }
+
+                                            Nothing ->
+                                                q
+                                    )
+                                    currentQuestions
+
+                            qaSection =
+                                updatedQuestions
+                                    |> Array.map
+                                        (\q ->
+                                            "Q: " ++ q.question ++ "\nA: " ++ Maybe.withDefault "(no answer)" q.answer
+                                        )
+                                    |> String.join "\n\n"
+
+                            enrichedPrompt =
+                                description ++ "\n\n## Clarifying Q&A\n\n" ++ qaSection
+
+                            currentFields =
+                                when task is
+                                    Planned t ->
+                                        { summary = t.summary
+                                        , requirements = t.requirements
+                                        , acceptanceCriteria = t.acceptanceCriteria
+                                        , plan = t.plan
+                                        , questions = updatedQuestions
+                                        , assignedAgent = t.assignedAgent
+                                        }
+
+                                    DescriptionOnly _ ->
+                                        { summary = ""
+                                        , requirements = []
+                                        , acceptanceCriteria = []
+                                        , plan = []
+                                        , questions = updatedQuestions
+                                        , assignedAgent = Nothing
+                                        }
+                        in
+                        Registry.updateTask ctx.registry taskId
+                            (\t ->
+                                Types.planTask t currentFields
+                                    |> Types.setTaskStatus Planning
+                            )
+                            |> GrenTask.andThen
+                                (\updatedTask ->
+                                    Time.now
+                                        |> GrenTask.map
+                                            (\now ->
+                                                { apiResult = ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
+                                                , enrichedPrompt = enrichedPrompt
+                                                }
+                                            )
+                                )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed
+                    { apiResult = ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err }
+                    , enrichedPrompt = ""
+                    }
             )
         |> GrenTask.perform toMsg
 
@@ -1069,6 +1253,71 @@ wrapResponse data timestamp =
         ]
         |> Encode.encode 0
 
+
+
+{-| Check if a status transition is valid.
+-}
+isValidTransition : TaskStatus -> TaskStatus -> Bool
+isValidTransition from to =
+    when { from = from, to = to } is
+        -- From Pending
+        { from = Pending, to = Planning } ->
+            True
+
+        { from = Pending, to = Failed _ } ->
+            True
+
+        -- From Planning
+        { from = Planning, to = AwaitingInput } ->
+            True
+
+        { from = Planning, to = ReadyToStart } ->
+            True
+
+        { from = Planning, to = Failed _ } ->
+            True
+
+        -- From AwaitingInput
+        { from = AwaitingInput, to = Planning } ->
+            True
+
+        { from = AwaitingInput, to = Failed _ } ->
+            True
+
+        -- From ReadyToStart (Planned)
+        { from = ReadyToStart, to = Active } ->
+            True
+
+        { from = ReadyToStart, to = Failed _ } ->
+            True
+
+        -- From Active
+        { from = Active, to = Waiting } ->
+            True
+
+        { from = Active, to = Completed } ->
+            True
+
+        { from = Active, to = Failed _ } ->
+            True
+
+        -- From Waiting
+        { from = Waiting, to = Active } ->
+            True
+
+        { from = Waiting, to = Completed } ->
+            True
+
+        { from = Waiting, to = Failed _ } ->
+            True
+
+        -- From Failed (allow retry)
+        { from = Failed _, to = Pending } ->
+            True
+
+        -- All other transitions are invalid
+        _ ->
+            False
 
 
 {-| Convert queue error to string.

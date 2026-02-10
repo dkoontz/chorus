@@ -199,6 +199,9 @@ type Msg
     | GotAgentComplete { taskId : TaskId, result : Result String String }
     | GotToolResult { taskId : TaskId, toolName : String, response : Response, result : Api.ApiResult }
     | GotInternalApiResult Api.ApiResult
+    | GotTaskCreated { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
+    | GotPlannerComplete { taskId : TaskId, result : Result String String }
+    | GotAnswersSubmitted { response : Response, taskId : TaskId, enrichedPrompt : String, result : Api.ApiResult }
     | NoOp
 
 
@@ -730,6 +733,110 @@ update msg model =
             , command = Cmd.none
             }
 
+        GotTaskCreated { response, taskId, description, result } ->
+            let
+                sendResponseCmd =
+                    Api.sendApiResponse response result
+            in
+            when result is
+                Api.ApiSuccess _ ->
+                    -- Task created. Dispatch the _planner agent.
+                    when model.agentRegistry is
+                        Just agentReg ->
+                            { model = model
+                            , command =
+                                Cmd.batch
+                                    [ sendResponseCmd
+                                    , dispatchPlanner model agentReg taskId description
+                                    ]
+                            }
+
+                        Nothing ->
+                            { model = model, command = sendResponseCmd }
+
+                Api.ApiError _ ->
+                    { model = model, command = sendResponseCmd }
+
+        GotPlannerComplete { taskId, result } ->
+            let
+                taskIdStr =
+                    Id.taskIdToString taskId
+            in
+            when model.registry is
+                Nothing ->
+                    { model = model, command = Cmd.none }
+
+                Just registry ->
+                    let
+                        ctx =
+                            { registry = registry
+                            , fsPermission = model.fsPermission
+                            , secureContext = model.secureContext
+                            , registryRoot = Path.fromPosixString model.config.registryRoot
+                            }
+                    in
+                    when result is
+                        Ok output ->
+                            when parsePlannerOutput output is
+                                PlanResult fields ->
+                                    { model = model
+                                    , command =
+                                        Cmd.batch
+                                            [ Api.requestApplyPlan ctx taskId fields (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                                            , Logging.logInfo model.logger ("Planner produced plan for task " ++ taskIdStr) NoOp
+                                            ]
+                                    }
+
+                                QuestionsResult questions ->
+                                    { model = model
+                                    , command =
+                                        Cmd.batch
+                                            [ Api.requestSetQuestions ctx taskId questions (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                                            , Logging.logInfo model.logger ("Planner asked " ++ String.fromInt (Array.length questions) ++ " questions for task " ++ taskIdStr) NoOp
+                                            ]
+                                    }
+
+                                PlannerParseError errMsg ->
+                                    { model = model
+                                    , command =
+                                        Cmd.batch
+                                            [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner output parse error: " ++ errMsg)) (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                                            , Logging.logError model.logger ("Planner parse error for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                                            ]
+                                    }
+
+                        Err errMsg ->
+                            { model = model
+                            , command =
+                                Cmd.batch
+                                    [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner failed: " ++ errMsg)) (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                                    , Logging.logError model.logger ("Planner failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                                    ]
+                            }
+
+        GotAnswersSubmitted { response, taskId, enrichedPrompt, result } ->
+            let
+                sendResponseCmd =
+                    Api.sendApiResponse response result
+            in
+            when result is
+                Api.ApiSuccess _ ->
+                    when model.agentRegistry is
+                        Just agentReg ->
+                            { model = model
+                            , command =
+                                Cmd.batch
+                                    [ sendResponseCmd
+                                    , dispatchPlanner model agentReg taskId enrichedPrompt
+                                    ]
+                            }
+
+                        Nothing ->
+                            { model = model, command = sendResponseCmd }
+
+                Api.ApiError _ ->
+                    { model = model, command = sendResponseCmd }
+
         NoOp ->
             { model = model
             , command = Cmd.none
@@ -777,7 +884,30 @@ handleRoute model route request response =
                         Router.CreateTask ->
                             when parseCreateTaskBody request is
                                 Ok params ->
-                                    Api.requestCreateTask ctx params toMsg
+                                    Api.requestCreateTask ctx params
+                                        (\apiResult ->
+                                            let
+                                                taskIdResult =
+                                                    when apiResult is
+                                                        Api.ApiSuccess { body } ->
+                                                            Decode.decodeString (Decode.at [ "data", "id" ] Decode.string) body
+                                                                |> Result.mapError Decode.errorToString
+                                                                |> Result.andThen (\idStr ->
+                                                                    when Id.taskIdFromString idStr is
+                                                                        Just tid -> Ok tid
+                                                                        Nothing -> Err "Invalid task ID"
+                                                                )
+
+                                                        _ ->
+                                                            Err "Create failed"
+                                            in
+                                            when taskIdResult is
+                                                Ok taskId ->
+                                                    GotTaskCreated { response = response, taskId = taskId, description = params.description, result = apiResult }
+
+                                                Err _ ->
+                                                    GotApiResult { response = response, result = apiResult }
+                                        )
 
                                 Err errMsg ->
                                     sendBadRequest response errMsg
@@ -867,6 +997,17 @@ handleRoute model route request response =
                                                     , result = result
                                                     }
                                             )
+
+                        Router.SubmitAnswers taskId ->
+                            when parseSubmitAnswersBody request is
+                                Ok answers ->
+                                    Api.requestSubmitAnswers ctx taskId answers
+                                        (\{ apiResult, enrichedPrompt } ->
+                                            GotAnswersSubmitted { response = response, taskId = taskId, enrichedPrompt = enrichedPrompt, result = apiResult }
+                                        )
+
+                                Err errMsg ->
+                                    sendBadRequest response errMsg
 
                         Router.StartHandoff taskId ->
                             when parseStartHandoffBody request is
@@ -1209,6 +1350,22 @@ parseCompleteHandoffBody request =
             Err "Invalid JSON body for handoff completion"
 
 
+{-| Parse the body for POST /api/tasks/:id/answers.
+-}
+parseSubmitAnswersBody : HttpServer.Request -> Result String (Array String)
+parseSubmitAnswersBody request =
+    let
+        decoder =
+            Decode.field "answers" (Decode.array Decode.string)
+    in
+    when HttpServer.bodyFromJson decoder request is
+        Ok answers ->
+            Ok answers
+
+        Err _ ->
+            Err "Invalid JSON body for answer submission"
+
+
 {-| Parse the body for POST /api/agents or PUT /api/agents/:name.
 -}
 parseAgentBody : HttpServer.Request -> Result String Types.AgentConfig
@@ -1232,6 +1389,216 @@ subscriptions model =
 
         Nothing ->
             Sub.none
+
+
+
+-- PLANNER
+
+
+{-| Parsed output from the system planner agent.
+-}
+type PlannerOutput
+    = PlanResult Types.PlanningFields
+    | QuestionsResult (Array String)
+    | PlannerParseError String
+
+
+{-| Spawn the _planner agent for a newly created task.
+-}
+dispatchPlanner : Model -> AgentRegistry.AgentRegistry -> TaskId -> String -> Cmd Msg
+dispatchPlanner model agentReg taskId description =
+    AgentRegistry.getAgent agentReg "_planner"
+        |> GrenTask.andThen
+            (\agentConfig ->
+                -- Set task status to Planning
+                when model.registry is
+                    Nothing ->
+                        GrenTask.succeed agentConfig
+
+                    Just registry ->
+                        Registry.updateStatus registry taskId Types.Planning
+                            |> GrenTask.map (\_ -> agentConfig)
+                            |> GrenTask.onError (\_ -> GrenTask.succeed agentConfig)
+            )
+        |> GrenTask.andThen
+            (\agentConfig ->
+                let
+                    systemPrompt =
+                        if String.isEmpty agentConfig.instructions then
+                            Nothing
+                        else
+                            Just agentConfig.instructions
+
+                    workspaceRoot =
+                        model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
+
+                    cliArgs =
+                        { systemPrompt = systemPrompt
+                        , resumeSessionId = Nothing
+                        , workspaceRoot = workspaceRoot
+                        , chorusToolsPath = model.config.chorusToolsPath
+                        , message = description
+                        , allowedTools = Nothing
+                        , taskId = Just (Id.taskIdToString taskId)
+                        , baseUrl = Just model.providerConfig.baseUrl
+                        }
+
+                    shellCommand =
+                        ClaudeCode.buildShellCommand cliArgs
+
+                    options =
+                        { shell = ChildProcess.NoShell
+                        , workingDirectory = ChildProcess.InheritWorkingDirectory
+                        , environmentVariables = ChildProcess.InheritEnvironmentVariables
+                        , maximumBytesWrittenToStreams = 10 * 1024 * 1024
+                        , runDuration = ChildProcess.Milliseconds 300000
+                        }
+                in
+                ChildProcess.run model.cpPermission "bash" [ "-c", shellCommand ] options
+                    |> GrenTask.map
+                        (\cliResult ->
+                            let
+                                output =
+                                    cliResult.stdout
+                                        |> Bytes.toString
+                                        |> Maybe.withDefault ""
+
+                                resultText =
+                                    when Decode.decodeString (Decode.field "result" Decode.string) output is
+                                        Ok text ->
+                                            text
+
+                                        Err _ ->
+                                            output
+                            in
+                            Ok resultText
+                        )
+                    |> GrenTask.onError
+                        (\runError ->
+                            let
+                                errMsg =
+                                    when runError is
+                                        ChildProcess.InitError { errorCode } ->
+                                            "Failed to start planner CLI: " ++ errorCode
+
+                                        ChildProcess.ProgramError { exitCode, stderr } ->
+                                            let
+                                                stderrStr =
+                                                    stderr
+                                                        |> Bytes.toString
+                                                        |> Maybe.withDefault ""
+                                            in
+                                            "Planner CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                            in
+                            GrenTask.succeed (Err errMsg)
+                        )
+            )
+        |> GrenTask.onError
+            (\_ ->
+                GrenTask.succeed (Err "_planner agent not found")
+            )
+        |> GrenTask.perform (\r -> GotPlannerComplete { taskId = taskId, result = r })
+
+
+{-| Parse planner output. Extracts JSON from a code fence in the output.
+-}
+parsePlannerOutput : String -> PlannerOutput
+parsePlannerOutput output =
+    let
+        -- Extract JSON from ```json ... ``` code fence
+        jsonStr =
+            extractJsonCodeFence output
+    in
+    when jsonStr is
+        Nothing ->
+            PlannerParseError "No JSON code fence found in planner output"
+
+        Just json ->
+            when Decode.decodeString (Decode.field "type" Decode.string) json is
+                Err _ ->
+                    PlannerParseError "Missing 'type' field in planner JSON"
+
+                Ok planType ->
+                    when planType is
+                        "plan" ->
+                            when Decode.decodeString planResultDecoder json is
+                                Ok fields ->
+                                    PlanResult fields
+
+                                Err err ->
+                                    PlannerParseError ("Invalid plan JSON: " ++ Decode.errorToString err)
+
+                        "questions" ->
+                            when Decode.decodeString questionsResultDecoder json is
+                                Ok questions ->
+                                    QuestionsResult questions
+
+                                Err err ->
+                                    PlannerParseError ("Invalid questions JSON: " ++ Decode.errorToString err)
+
+                        _ ->
+                            PlannerParseError ("Unknown planner output type: " ++ planType)
+
+
+{-| Extract the first JSON code fence from text.
+-}
+extractJsonCodeFence : String -> Maybe String
+extractJsonCodeFence text =
+    let
+        lines =
+            String.split "\n" text
+
+        findStart remainingLines =
+            when Array.first remainingLines is
+                Nothing ->
+                    Nothing
+
+                Just line ->
+                    let
+                        trimmed =
+                            String.trim line
+                    in
+                    if trimmed == "```json" || trimmed == "```" then
+                        findEnd (Array.dropFirst 1 remainingLines) []
+                    else
+                        findStart (Array.dropFirst 1 remainingLines)
+
+        findEnd remainingLines acc =
+            when Array.first remainingLines is
+                Nothing ->
+                    Nothing
+
+                Just line ->
+                    if String.trim line == "```" then
+                        Just (String.join "\n" acc)
+                    else
+                        findEnd (Array.dropFirst 1 remainingLines) (Array.pushLast line acc)
+    in
+    findStart lines
+
+
+planResultDecoder : Decode.Decoder Types.PlanningFields
+planResultDecoder =
+    Decode.map5
+        (\summary requirements acceptanceCriteria plan assignedAgent ->
+            { summary = summary
+            , requirements = requirements
+            , acceptanceCriteria = acceptanceCriteria
+            , plan = plan
+            , questions = []
+            , assignedAgent = assignedAgent
+            }
+        )
+        (Decode.field "summary" Decode.string)
+        (Decode.field "requirements" (Decode.array Decode.string))
+        (Decode.field "acceptanceCriteria" (Decode.array Decode.string))
+        (Decode.field "plan" (Decode.array Decode.string))
+        (Decode.maybe (Decode.field "assignedAgent" Decode.string))
+
+
+questionsResultDecoder : Decode.Decoder (Array String)
+questionsResultDecoder =
+    Decode.field "questions" (Decode.array Decode.string)
 
 
 

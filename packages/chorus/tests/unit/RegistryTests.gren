@@ -405,6 +405,8 @@ testTaskEncodeDecodeWithPlanningFields =
                     , requirements = [ "Support CRUD operations", "Use JSON format" ]
                     , acceptanceCriteria = [ "All endpoints return valid JSON", "Error responses include error codes" ]
                     , plan = [ "Define data types", "Implement handlers", "Add tests" ]
+                    , questions = []
+                    , assignedAgent = Nothing
                     }
 
             encoded =
@@ -630,6 +632,8 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
                     , requirements = [ "Req 1" ]
                     , acceptanceCriteria = [ "Criteria 1" ]
                     , plan = [ "Step 1" ]
+                    , questions = []
+                    , assignedAgent = Nothing
                     }
 
             encoded =
@@ -699,6 +703,8 @@ testPlanTaskCarriesHandoffFields =
                 , requirements = [ "Req 1" ]
                 , acceptanceCriteria = [ "Criteria 1" ]
                 , plan = [ "Step 1" ]
+                , questions = []
+                , assignedAgent = Nothing
                 }
 
             plannedTask =
@@ -755,6 +761,8 @@ testTaskCurrentAgentAccessor =
                     , requirements = []
                     , acceptanceCriteria = []
                     , plan = []
+                    , questions = []
+                    , assignedAgent = Nothing
                     }
         in
         expectEqual (Just "writer") (Types.taskCurrentAgent descTask)
@@ -906,6 +914,8 @@ testSetAgentChainMutator =
                     , requirements = []
                     , acceptanceCriteria = []
                     , plan = []
+                    , questions = []
+                    , assignedAgent = Nothing
                     }
 
             updatedDesc =
