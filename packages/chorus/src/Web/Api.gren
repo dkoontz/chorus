@@ -679,10 +679,13 @@ requestStartHandoff ctx taskId params toMsg =
                                                         newChain =
                                                             Array.pushLast newRecord chain
 
-                                                        -- Set status to Active if Pending or Waiting
+                                                        -- Set status to Active if Pending, Planned, or Waiting
                                                         newStatus =
                                                             when Types.taskStatus t is
                                                                 Pending ->
+                                                                    Active
+
+                                                                ReadyToStart ->
                                                                     Active
 
                                                                 Waiting ->

@@ -14,6 +14,9 @@
     --color-border: #e5e7eb;
 
     --status-pending: #f59e0b;
+    --status-planning: #6366f1;
+    --status-awaiting_input: #ec4899;
+    --status-planned: #0ea5e9;
     --status-active: #3b82f6;
     --status-waiting: #8b5cf6;
     --status-completed: #10b981;
@@ -192,6 +195,21 @@ body {
     color: #92400e;
 }
 
+.status-planning {
+    background: #e0e7ff;
+    color: #3730a3;
+}
+
+.status-awaiting_input {
+    background: #fce7f3;
+    color: #9d174d;
+}
+
+.status-planned {
+    background: #e0f2fe;
+    color: #075985;
+}
+
 .status-active {
     background: #dbeafe;
     color: #1e40af;
@@ -241,6 +259,9 @@ body {
 }
 
 .kanban-column-header-pending { border-bottom-color: var(--status-pending); }
+.kanban-column-header-planning { border-bottom-color: var(--status-planning); }
+.kanban-column-header-awaiting_input { border-bottom-color: var(--status-awaiting_input); }
+.kanban-column-header-planned { border-bottom-color: var(--status-planned); }
 .kanban-column-header-active { border-bottom-color: var(--status-active); }
 .kanban-column-header-waiting { border-bottom-color: var(--status-waiting); }
 .kanban-column-header-completed { border-bottom-color: var(--status-completed); }
@@ -403,6 +424,12 @@ body {
 .status-actions {
     display: flex;
     gap: 8px;
+}
+
+.status-indicator {
+    font-size: 14px;
+    color: var(--color-text-secondary);
+    font-style: italic;
 }
 
 .task-detail-grid {

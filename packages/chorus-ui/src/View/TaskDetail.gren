@@ -124,6 +124,22 @@ viewStatusActions props task =
                     [ text "Start Task" ]
                 ]
 
+            Planning ->
+                [ span [ class "status-indicator" ] [ text "Planning in progress..." ]
+                ]
+
+            AwaitingInput ->
+                [ span [ class "status-indicator" ] [ text "Awaiting your input" ]
+                ]
+
+            ReadyToStart ->
+                [ button
+                    [ class "btn btn-primary"
+                    , onClick (props.onStatusUpdate tid "active")
+                    ]
+                    [ text "Start Task" ]
+                ]
+
             Active ->
                 [ button
                     [ class "btn btn-secondary"

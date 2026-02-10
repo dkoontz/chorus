@@ -156,11 +156,14 @@ type alias Attachment =
 {-| Task lifecycle status.
 -}
 type TaskStatus
-    = Pending       -- created but session not started
-    | Active        -- session is currently processing
-    | Waiting       -- session idle, ready for more input
-    | Completed     -- finished successfully
-    | Failed String -- finished with error message
+    = Pending        -- created but session not started
+    | Planning       -- being analyzed by planning agent
+    | AwaitingInput  -- planning agent returned questions for user
+    | ReadyToStart   -- plan complete, ready to start
+    | Active         -- session is currently processing
+    | Waiting        -- session idle, ready for more input
+    | Completed      -- finished successfully
+    | Failed String  -- finished with error message
 
 
 {-| Information about where the task originated.
@@ -515,6 +518,21 @@ encodeStatus status =
                 [ { key = "type", value = Encode.string "pending" }
                 ]
 
+        Planning ->
+            Encode.object
+                [ { key = "type", value = Encode.string "planning" }
+                ]
+
+        AwaitingInput ->
+            Encode.object
+                [ { key = "type", value = Encode.string "awaiting_input" }
+                ]
+
+        ReadyToStart ->
+            Encode.object
+                [ { key = "type", value = Encode.string "planned" }
+                ]
+
         Active ->
             Encode.object
                 [ { key = "type", value = Encode.string "active" }
@@ -773,6 +791,15 @@ statusDecoder =
                     "pending" ->
                         Decode.succeed Pending
 
+                    "planning" ->
+                        Decode.succeed Planning
+
+                    "awaiting_input" ->
+                        Decode.succeed AwaitingInput
+
+                    "planned" ->
+                        Decode.succeed ReadyToStart
+
                     "active" ->
                         Decode.succeed Active
 
@@ -886,6 +913,15 @@ statusToString status =
         Pending ->
             "pending"
 
+        Planning ->
+            "planning"
+
+        AwaitingInput ->
+            "awaiting_input"
+
+        ReadyToStart ->
+            "planned"
+
         Active ->
             "active"
 
@@ -906,6 +942,15 @@ statusFromString str =
     when str is
         "pending" ->
             Just Pending
+
+        "planning" ->
+            Just Planning
+
+        "awaiting_input" ->
+            Just AwaitingInput
+
+        "planned" ->
+            Just ReadyToStart
 
         "active" ->
             Just Active
@@ -929,6 +974,15 @@ statusEquals : TaskStatus -> TaskStatus -> Bool
 statusEquals a b =
     when { a = a, b = b } is
         { a = Pending, b = Pending } ->
+            True
+
+        { a = Planning, b = Planning } ->
+            True
+
+        { a = AwaitingInput, b = AwaitingInput } ->
+            True
+
+        { a = ReadyToStart, b = ReadyToStart } ->
             True
 
         { a = Active, b = Active } ->

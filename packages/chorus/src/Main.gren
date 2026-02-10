@@ -858,6 +858,15 @@ parseStatusBody request =
                                 "pending" ->
                                     Decode.succeed Pending
 
+                                "planning" ->
+                                    Decode.succeed Planning
+
+                                "awaiting_input" ->
+                                    Decode.succeed AwaitingInput
+
+                                "planned" ->
+                                    Decode.succeed ReadyToStart
+
                                 "active" ->
                                     Decode.succeed Active
 
@@ -887,6 +896,15 @@ parseStatusBody request =
                         when statusStr is
                             "pending" ->
                                 Decode.succeed Pending
+
+                            "planning" ->
+                                Decode.succeed Planning
+
+                            "awaiting_input" ->
+                                Decode.succeed AwaitingInput
+
+                            "planned" ->
+                                Decode.succeed ReadyToStart
 
                             "active" ->
                                 Decode.succeed Active
