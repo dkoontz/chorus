@@ -218,7 +218,7 @@ type Msg
     | GotInternalApiResult Api.ApiResult
     | GotTaskCreated { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
     | GotPlannerComplete { taskId : TaskId, result : Result String String }
-    | GotAnswersSubmitted { response : Response, taskId : TaskId, enrichedPrompt : String, result : Api.ApiResult }
+    | GotAnswersSubmitted { response : Response, taskId : TaskId, enrichedPrompt : String, questions : Array String, answers : Array String, result : Api.ApiResult }
     | GotToolGrant { taskId : TaskId, addTools : Array String, removeTools : Array String, response : Response }
     | NoOp
 
@@ -867,10 +867,21 @@ update msg model =
                                         Cmd.batch
                                             [ Api.requestSetQuestions ctx taskId questions (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
                                             , Logging.logInfo model.logger ("Planner asked " ++ String.fromInt (Array.length questions) ++ " questions for task " ++ taskIdStr) NoOp
-                                            , Registry.recordEvent registry taskId
+                                            , let
+                                                questionsDict =
+                                                    questions
+                                                        |> Array.indexedMap
+                                                            (\i q ->
+                                                                { key = "question_" ++ String.fromInt (i + 1)
+                                                                , value = q
+                                                                }
+                                                            )
+                                                        |> Array.foldl (\entry d -> Dict.set entry.key entry.value d) Dict.empty
+                                              in
+                                              Registry.recordEvent registry taskId
                                                 { eventType = "planning_questions_returned"
                                                 , data =
-                                                    Dict.empty
+                                                    questionsDict
                                                         |> Dict.set "questionCount" (String.fromInt (Array.length questions))
                                                 }
                                                 |> GrenTask.onError (\_ -> GrenTask.succeed {})
@@ -912,7 +923,7 @@ update msg model =
                                     ]
                             }
 
-        GotAnswersSubmitted { response, taskId, enrichedPrompt, result } ->
+        GotAnswersSubmitted { response, taskId, enrichedPrompt, questions, answers, result } ->
             let
                 sendResponseCmd =
                     Api.sendApiResponse response result
@@ -922,18 +933,40 @@ update msg model =
                     when model.agentRegistry is
                         Just agentReg ->
                             let
-                                -- Count answers from the enriched prompt Q&A section
-                                answerCountCmd =
+                                answersEventCmd =
                                     when model.registry is
                                         Nothing ->
                                             Cmd.none
 
                                         Just reg ->
+                                            let
+                                                questionsDict =
+                                                    questions
+                                                        |> Array.indexedMap
+                                                            (\i q ->
+                                                                { key = "question_" ++ String.fromInt (i + 1)
+                                                                , value = q
+                                                                }
+                                                            )
+                                                        |> Array.foldl (\entry d -> Dict.set entry.key entry.value d) Dict.empty
+
+                                                answersDict =
+                                                    answers
+                                                        |> Array.indexedMap
+                                                            (\i a ->
+                                                                { key = "answer_" ++ String.fromInt (i + 1)
+                                                                , value = a
+                                                                }
+                                                            )
+                                                        |> Array.foldl (\entry d -> Dict.set entry.key entry.value d) Dict.empty
+
+                                                combinedDict =
+                                                    Dict.foldl Dict.set questionsDict answersDict
+                                                        |> Dict.set "answerCount" (String.fromInt (Array.length answers))
+                                            in
                                             Registry.recordEvent reg taskId
                                                 { eventType = "answers_submitted"
-                                                , data =
-                                                    Dict.empty
-                                                        |> Dict.set "answerCount" (String.fromInt (countAnswersInPrompt enrichedPrompt))
+                                                , data = combinedDict
                                                 }
                                                 |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                                 |> GrenTask.perform (\_ -> NoOp)
@@ -943,7 +976,7 @@ update msg model =
                                 Cmd.batch
                                     [ sendResponseCmd
                                     , dispatchPlanner model agentReg taskId enrichedPrompt
-                                    , answerCountCmd
+                                    , answersEventCmd
                                     ]
                             }
 
@@ -1199,8 +1232,8 @@ handleRoute model route request response =
                             when parseSubmitAnswersBody request is
                                 Ok answers ->
                                     Api.requestSubmitAnswers ctx taskId answers
-                                        (\{ apiResult, enrichedPrompt } ->
-                                            GotAnswersSubmitted { response = response, taskId = taskId, enrichedPrompt = enrichedPrompt, result = apiResult }
+                                        (\{ apiResult, enrichedPrompt, questions, answers = returnedAnswers } ->
+                                            GotAnswersSubmitted { response = response, taskId = taskId, enrichedPrompt = enrichedPrompt, questions = questions, answers = returnedAnswers, result = apiResult }
                                         )
 
                                 Err errMsg ->
@@ -1833,16 +1866,6 @@ questionsResultDecoder : Decode.Decoder (Array String)
 questionsResultDecoder =
     Decode.field "questions" (Decode.array Decode.string)
 
-
-
-{-| Count the number of answers in an enriched prompt by counting "Q: " lines.
--}
-countAnswersInPrompt : String -> Int
-countAnswersInPrompt prompt =
-    prompt
-        |> String.split "\n"
-        |> Array.keepIf (\line -> String.startsWith "Q: " line)
-        |> Array.length
 
 
 -- HELPERS

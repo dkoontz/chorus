@@ -429,7 +429,7 @@ requestSetQuestions ctx taskId questionStrings toMsg =
     Updates the task's questions with answers, sets status to Planning,
     and returns the enriched prompt for re-dispatching the planner.
 -}
-requestSubmitAnswers : ApiContext -> TaskId -> Array String -> ({ apiResult : ApiResult, enrichedPrompt : String } -> msg) -> Cmd msg
+requestSubmitAnswers : ApiContext -> TaskId -> Array String -> ({ apiResult : ApiResult, enrichedPrompt : String, questions : Array String, answers : Array String } -> msg) -> Cmd msg
 requestSubmitAnswers ctx taskId answers toMsg =
     Registry.getTask ctx.registry taskId
         |> GrenTask.andThen
@@ -439,6 +439,8 @@ requestSubmitAnswers ctx taskId answers toMsg =
                         GrenTask.succeed
                             { apiResult = ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ Id.taskIdToString taskId }
                             , enrichedPrompt = ""
+                            , questions = []
+                            , answers = []
                             }
 
                     Just task ->
@@ -448,6 +450,10 @@ requestSubmitAnswers ctx taskId answers toMsg =
 
                             currentQuestions =
                                 Types.taskQuestions task
+
+                            questionStrings =
+                                currentQuestions
+                                    |> Array.map .question
 
                             updatedQuestions =
                                 Array.indexedMap
@@ -514,6 +520,8 @@ requestSubmitAnswers ctx taskId answers toMsg =
                                                         (\now ->
                                                             { apiResult = ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
                                                             , enrichedPrompt = enrichedPrompt
+                                                            , questions = questionStrings
+                                                            , answers = answers
                                                             }
                                                         )
                                             )
@@ -524,6 +532,8 @@ requestSubmitAnswers ctx taskId answers toMsg =
                 GrenTask.succeed
                     { apiResult = ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err }
                     , enrichedPrompt = ""
+                    , questions = []
+                    , answers = []
                     }
             )
         |> GrenTask.perform toMsg
