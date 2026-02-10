@@ -117,6 +117,33 @@ eventTypeClass eventType =
         "error" ->
             "error"
 
+        "planning_started" ->
+            "planning"
+
+        "planning_completed" ->
+            "planning"
+
+        "planning_questions_returned" ->
+            "planning"
+
+        "planning_failed" ->
+            "error"
+
+        "answers_submitted" ->
+            "message"
+
+        "agent_handoff_started" ->
+            "handoff"
+
+        "agent_handoff_completed" ->
+            "handoff"
+
+        "tool_executed" ->
+            "tool"
+
+        "completion_report_submitted" ->
+            "completion"
+
         _ ->
             "default"
 

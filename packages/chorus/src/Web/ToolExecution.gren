@@ -292,8 +292,19 @@ dispatchCompletionReport ctx requestBody toMsg =
                 |> GrenTask.perform toMsg
 
         Ok report ->
-            -- Update the task's last handoff record with the completion report
+            -- Read the task first to get the current status for the status_changed event
             let
+                newStatus =
+                    when report.status is
+                        Types.ReportComplete ->
+                            Types.Completed
+
+                        Types.ReportBlocked ->
+                            Types.Waiting
+
+                        Types.ReportFailed ->
+                            Types.Failed report.summary
+
                 updateFn task =
                     let
                         chain =
@@ -308,46 +319,58 @@ dispatchCompletionReport ctx requestBody toMsg =
                                     Array.pushLast
                                         { last | completionReport = Just report }
                                         initial
-
-                        -- Map completion status to task status
-                        newStatus =
-                            when report.status is
-                                Types.ReportComplete ->
-                                    Types.Completed
-
-                                Types.ReportBlocked ->
-                                    Types.Waiting
-
-                                Types.ReportFailed ->
-                                    Types.Failed report.summary
                     in
                     task
                         |> Types.setAgentChain updatedChain
                         |> Types.setTaskStatus newStatus
             in
-            Registry.updateTask ctx.apiContext.registry ctx.taskId updateFn
+            Registry.getTask ctx.apiContext.registry ctx.taskId
                 |> GrenTask.andThen
-                    (\_ ->
-                        -- Record history event
-                        Registry.recordEvent ctx.apiContext.registry ctx.taskId
-                            { eventType = "completion_report_submitted"
-                            , data =
-                                Dict.empty
-                                    |> Dict.set "status" (Types.completionStatusToString report.status)
-                                    |> Dict.set "summary" report.summary
-                            }
-                            |> GrenTask.map
+                    (\maybeTask ->
+                        let
+                            previousStatus =
+                                when maybeTask is
+                                    Just task ->
+                                        Types.taskStatus task
+
+                                    Nothing ->
+                                        Types.Active
+                        in
+                        Registry.updateTask ctx.apiContext.registry ctx.taskId updateFn
+                            |> GrenTask.andThen
                                 (\_ ->
-                                    Api.ApiSuccess
-                                        { statusCode = 200
-                                        , body =
-                                            Encode.encode 0
-                                                (Encode.object
-                                                    [ { key = "success", value = Encode.bool True }
-                                                    , { key = "status", value = Encode.string (Types.completionStatusToString report.status) }
-                                                    ]
-                                                )
+                                    -- Record completion_report_submitted event
+                                    Registry.recordEvent ctx.apiContext.registry ctx.taskId
+                                        { eventType = "completion_report_submitted"
+                                        , data =
+                                            Dict.empty
+                                                |> Dict.set "status" (Types.completionStatusToString report.status)
+                                                |> Dict.set "summary" report.summary
                                         }
+                                        |> GrenTask.andThen
+                                            (\_ ->
+                                                -- Record status_changed event
+                                                Registry.recordEvent ctx.apiContext.registry ctx.taskId
+                                                    { eventType = "status_changed"
+                                                    , data =
+                                                        Dict.empty
+                                                            |> Dict.set "from" (Types.statusToString previousStatus)
+                                                            |> Dict.set "to" (Types.statusToString newStatus)
+                                                    }
+                                            )
+                                        |> GrenTask.map
+                                            (\_ ->
+                                                Api.ApiSuccess
+                                                    { statusCode = 200
+                                                    , body =
+                                                        Encode.encode 0
+                                                            (Encode.object
+                                                                [ { key = "success", value = Encode.bool True }
+                                                                , { key = "status", value = Encode.string (Types.completionStatusToString report.status) }
+                                                                ]
+                                                            )
+                                                    }
+                                            )
                                 )
                     )
                 |> GrenTask.onError

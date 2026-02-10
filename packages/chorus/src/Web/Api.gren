@@ -230,10 +230,21 @@ requestUpdateStatus ctx taskId status toMsg =
                             Registry.updateStatus ctx.registry taskId status
                                 |> GrenTask.andThen
                                     (\updatedTask ->
-                                        Time.now
-                                            |> GrenTask.map
-                                                (\now ->
-                                                    ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
+                                        Registry.recordEvent ctx.registry taskId
+                                            { eventType = "status_changed"
+                                            , data =
+                                                Dict.empty
+                                                    |> Dict.set "from" (Types.statusToString currentStatus)
+                                                    |> Dict.set "to" (Types.statusToString status)
+                                            }
+                                            |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                            |> GrenTask.andThen
+                                                (\_ ->
+                                                    Time.now
+                                                        |> GrenTask.map
+                                                            (\now ->
+                                                                ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
+                                                            )
                                                 )
                                     )
                         else
@@ -341,10 +352,21 @@ requestApplyPlan ctx taskId fields toMsg =
         )
         |> GrenTask.andThen
             (\updatedTask ->
-                Time.now
-                    |> GrenTask.map
-                        (\now ->
-                            ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
+                Registry.recordEvent ctx.registry taskId
+                    { eventType = "status_changed"
+                    , data =
+                        Dict.empty
+                            |> Dict.set "from" (Types.statusToString Types.Planning)
+                            |> Dict.set "to" (Types.statusToString Types.ReadyToStart)
+                    }
+                    |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                    |> GrenTask.andThen
+                        (\_ ->
+                            Time.now
+                                |> GrenTask.map
+                                    (\now ->
+                                        ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
+                                    )
                         )
             )
         |> GrenTask.onError
@@ -379,10 +401,21 @@ requestSetQuestions ctx taskId questionStrings toMsg =
         )
         |> GrenTask.andThen
             (\updatedTask ->
-                Time.now
-                    |> GrenTask.map
-                        (\now ->
-                            ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
+                Registry.recordEvent ctx.registry taskId
+                    { eventType = "status_changed"
+                    , data =
+                        Dict.empty
+                            |> Dict.set "from" (Types.statusToString Types.Planning)
+                            |> Dict.set "to" (Types.statusToString Types.AwaitingInput)
+                    }
+                    |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                    |> GrenTask.andThen
+                        (\_ ->
+                            Time.now
+                                |> GrenTask.map
+                                    (\now ->
+                                        ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
+                                    )
                         )
             )
         |> GrenTask.onError
@@ -466,12 +499,23 @@ requestSubmitAnswers ctx taskId answers toMsg =
                             )
                             |> GrenTask.andThen
                                 (\updatedTask ->
-                                    Time.now
-                                        |> GrenTask.map
-                                            (\now ->
-                                                { apiResult = ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
-                                                , enrichedPrompt = enrichedPrompt
-                                                }
+                                    Registry.recordEvent ctx.registry taskId
+                                        { eventType = "status_changed"
+                                        , data =
+                                            Dict.empty
+                                                |> Dict.set "from" (Types.statusToString AwaitingInput)
+                                                |> Dict.set "to" (Types.statusToString Planning)
+                                        }
+                                        |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                        |> GrenTask.andThen
+                                            (\_ ->
+                                                Time.now
+                                                    |> GrenTask.map
+                                                        (\now ->
+                                                            { apiResult = ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask updatedTask) now }
+                                                            , enrichedPrompt = enrichedPrompt
+                                                            }
+                                                        )
                                             )
                                 )
             )

@@ -850,6 +850,14 @@ update msg model =
                                         Cmd.batch
                                             [ Api.requestApplyPlan ctx taskId fields (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
                                             , Logging.logInfo model.logger ("Planner produced plan for task " ++ taskIdStr) NoOp
+                                            , Registry.recordEvent registry taskId
+                                                { eventType = "planning_completed"
+                                                , data =
+                                                    Dict.empty
+                                                        |> Dict.set "summary" fields.summary
+                                                }
+                                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                                |> GrenTask.perform (\_ -> NoOp)
                                             ]
                                     }
 
@@ -859,6 +867,14 @@ update msg model =
                                         Cmd.batch
                                             [ Api.requestSetQuestions ctx taskId questions (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
                                             , Logging.logInfo model.logger ("Planner asked " ++ String.fromInt (Array.length questions) ++ " questions for task " ++ taskIdStr) NoOp
+                                            , Registry.recordEvent registry taskId
+                                                { eventType = "planning_questions_returned"
+                                                , data =
+                                                    Dict.empty
+                                                        |> Dict.set "questionCount" (String.fromInt (Array.length questions))
+                                                }
+                                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                                |> GrenTask.perform (\_ -> NoOp)
                                             ]
                                     }
 
@@ -868,6 +884,14 @@ update msg model =
                                         Cmd.batch
                                             [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner output parse error: " ++ errMsg)) (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
                                             , Logging.logError model.logger ("Planner parse error for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                                            , Registry.recordEvent registry taskId
+                                                { eventType = "planning_failed"
+                                                , data =
+                                                    Dict.empty
+                                                        |> Dict.set "error" ("Planner output parse error: " ++ errMsg)
+                                                }
+                                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                                |> GrenTask.perform (\_ -> NoOp)
                                             ]
                                     }
 
@@ -877,6 +901,14 @@ update msg model =
                                 Cmd.batch
                                     [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner failed: " ++ errMsg)) (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
                                     , Logging.logError model.logger ("Planner failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                                    , Registry.recordEvent registry taskId
+                                        { eventType = "planning_failed"
+                                        , data =
+                                            Dict.empty
+                                                |> Dict.set "error" ("Planner failed: " ++ errMsg)
+                                        }
+                                        |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                        |> GrenTask.perform (\_ -> NoOp)
                                     ]
                             }
 
@@ -889,11 +921,29 @@ update msg model =
                 Api.ApiSuccess _ ->
                     when model.agentRegistry is
                         Just agentReg ->
+                            let
+                                -- Count answers from the enriched prompt Q&A section
+                                answerCountCmd =
+                                    when model.registry is
+                                        Nothing ->
+                                            Cmd.none
+
+                                        Just reg ->
+                                            Registry.recordEvent reg taskId
+                                                { eventType = "answers_submitted"
+                                                , data =
+                                                    Dict.empty
+                                                        |> Dict.set "answerCount" (String.fromInt (countAnswersInPrompt enrichedPrompt))
+                                                }
+                                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                                |> GrenTask.perform (\_ -> NoOp)
+                            in
                             { model = model
                             , command =
                                 Cmd.batch
                                     [ sendResponseCmd
                                     , dispatchPlanner model agentReg taskId enrichedPrompt
+                                    , answerCountCmd
                                     ]
                             }
 
@@ -1584,14 +1634,23 @@ dispatchPlanner model agentReg taskId description =
     AgentRegistry.getAgent agentReg "_planner"
         |> GrenTask.andThen
             (\agentConfig ->
-                -- Set task status to Planning
+                -- Set task status to Planning and record planning_started event
                 when model.registry is
                     Nothing ->
                         GrenTask.succeed agentConfig
 
                     Just registry ->
                         Registry.updateStatus registry taskId Types.Planning
-                            |> GrenTask.map (\_ -> agentConfig)
+                            |> GrenTask.andThen
+                                (\_ ->
+                                    Registry.recordEvent registry taskId
+                                        { eventType = "planning_started"
+                                        , data =
+                                            Dict.empty
+                                                |> Dict.set "description" description
+                                        }
+                                        |> GrenTask.map (\_ -> agentConfig)
+                                )
                             |> GrenTask.onError (\_ -> GrenTask.succeed agentConfig)
             )
         |> GrenTask.andThen
@@ -1774,6 +1833,16 @@ questionsResultDecoder : Decode.Decoder (Array String)
 questionsResultDecoder =
     Decode.field "questions" (Decode.array Decode.string)
 
+
+
+{-| Count the number of answers in an enriched prompt by counting "Q: " lines.
+-}
+countAnswersInPrompt : String -> Int
+countAnswersInPrompt prompt =
+    prompt
+        |> String.split "\n"
+        |> Array.keepIf (\line -> String.startsWith "Q: " line)
+        |> Array.length
 
 
 -- HELPERS
