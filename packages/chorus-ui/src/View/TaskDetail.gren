@@ -15,6 +15,7 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, on, onInput)
 import Id
 import Json.Decode
+import Set exposing (Set)
 import Time
 import Types exposing (Task(..), TaskStatus(..))
 
@@ -61,6 +62,8 @@ type alias Props msg =
     , draftAnswers : Array String
     , onUpdateAnswer : { index : Int, value : String } -> msg
     , onSubmitAnswers : String -> msg
+    , expandedEvents : Set Int
+    , onToggleEventExpanded : Int -> msg
     , zone : Time.Zone
     , now : Time.Posix
     }
@@ -89,7 +92,7 @@ viewTask props task =
             [ viewTaskInfo props.zone props.now task
             , viewPlanningSections props task
             , viewAttachments props task
-            , viewTaskHistory props.zone props.now props.history
+            , viewTaskHistory props task
             , viewTaskQueue props.zone props.now props.queue
             ]
         ]
@@ -555,11 +558,15 @@ sectionEquals a b =
     a == b
 
 
-viewTaskHistory : Time.Zone -> Time.Posix -> Maybe Types.History -> Html msg
-viewTaskHistory zone now maybeHistory =
+viewTaskHistory : Props msg -> Types.Task -> Html msg
+viewTaskHistory props task =
+    let
+        agentChain =
+            Types.taskAgentChain task
+    in
     div [ class "task-history card" ]
         [ h3 [] [ text "History" ]
-        , when maybeHistory is
+        , when props.history is
             Nothing ->
                 p [ class "loading-text" ] [ text "Loading history..." ]
 
@@ -567,34 +574,139 @@ viewTaskHistory zone now maybeHistory =
                 if Array.isEmpty history.events then
                     p [ class "empty-state" ] [ text "No events recorded" ]
                 else
+                    let
+                        reversedEvents =
+                            Array.reverse history.events
+
+                        totalEvents =
+                            Array.length history.events
+                    in
                     ul [ class "event-list" ]
-                        (Array.map (viewEvent zone now) (Array.reverse history.events))
-        ]
-
-
-viewEvent : Time.Zone -> Time.Posix -> Types.Event -> Html msg
-viewEvent zone now event =
-    li [ class "event-item" ]
-        [ div [ class "event-header" ]
-            [ span [ class "event-type" ] [ text event.eventType ]
-            , span [ class "event-time" ] [ text (FormatTime.format zone now event.timestamp) ]
-            ]
-        , if Dict.isEmpty event.data then
-            text ""
-          else
-            div [ class "event-data" ]
-                (Dict.foldl
-                    (\key value acc ->
-                        Array.pushLast
-                            (span [ class "event-data-item" ]
-                                [ text (key ++ ": " ++ value) ]
+                        (Array.indexedMap
+                            (\displayIndex event ->
+                                let
+                                    -- Map display index back to original index for stable expand tracking
+                                    originalIndex =
+                                        totalEvents - 1 - displayIndex
+                                in
+                                viewEvent props.zone props.now agentChain props.expandedEvents props.onToggleEventExpanded originalIndex event
                             )
-                            acc
-                    )
-                    []
-                    event.data
-                )
+                            reversedEvents
+                        )
         ]
+
+
+viewEvent : Time.Zone -> Time.Posix -> Array Types.HandoffRecord -> Set Int -> (Int -> msg) -> Int -> Types.Event -> Html msg
+viewEvent zone now agentChain expandedEvents onToggle eventIndex event =
+    let
+        isHandoffEvent =
+            event.eventType == "agent_handoff_started" || event.eventType == "agent_handoff_completed"
+
+        isExpanded =
+            Set.member eventIndex expandedEvents
+
+        handoffClasses =
+            if isHandoffEvent then
+                "event-item event-item-handoff"
+            else
+                "event-item"
+
+        clickHandler =
+            if isHandoffEvent then
+                [ onClick (onToggle eventIndex) ]
+            else
+                []
+
+        -- Look up the HandoffRecord using handoffIndex from event data
+        maybeHandoffRecord =
+            Dict.get "handoffIndex" event.data
+                |> Maybe.andThen String.toInt
+                |> Maybe.andThen (\idx -> Array.get idx agentChain)
+
+        -- Filter out handoffIndex from visible event data (only relevant for handoff events)
+        visibleData =
+            if isHandoffEvent then
+                Dict.remove "handoffIndex" event.data
+            else
+                event.data
+    in
+    li [ class handoffClasses ]
+        (Array.flatten
+            [ [ div ([ class "event-header" ] ++ clickHandler)
+                    [ span [ class "event-type" ]
+                        [ if isHandoffEvent then
+                            span [ class "event-expand-indicator" ]
+                                [ text
+                                    (if isExpanded then
+                                        "\u{25BC} "
+                                     else
+                                        "\u{25B6} "
+                                    )
+                                ]
+                          else
+                            text ""
+                        , text event.eventType
+                        ]
+                    , span [ class "event-time" ] [ text (FormatTime.format zone now event.timestamp) ]
+                    ]
+              ]
+            , [ if Dict.isEmpty visibleData then
+                    text ""
+                else
+                    div [ class "event-data" ]
+                        (Dict.foldl
+                            (\key value acc ->
+                                Array.pushLast
+                                    (span [ class "event-data-item" ]
+                                        [ text (key ++ ": " ++ value) ]
+                                    )
+                                    acc
+                            )
+                            []
+                            visibleData
+                        )
+              ]
+            , if isExpanded then
+                [ viewExpandedHandoffDetail event.eventType maybeHandoffRecord ]
+              else
+                []
+            ]
+        )
+
+
+viewExpandedHandoffDetail : String -> Maybe Types.HandoffRecord -> Html msg
+viewExpandedHandoffDetail eventType maybeRecord =
+    when maybeRecord is
+        Nothing ->
+            div [ class "event-detail" ]
+                [ p [ class "empty-state-text" ] [ text "Handoff record not found" ] ]
+
+        Just record ->
+            if eventType == "agent_handoff_started" then
+                div [ class "event-detail" ]
+                    [ h4 [] [ text "Input / Prompt" ]
+                    , pre [ class "event-detail-content" ] [ text record.input ]
+                    ]
+            else
+                -- agent_handoff_completed
+                div [ class "event-detail" ]
+                    (Array.flatten
+                        [ [ h4 [] [ text "Output" ]
+                          , pre [ class "event-detail-content" ] [ text record.output ]
+                          ]
+                        , when record.completionReport is
+                            Just report ->
+                                [ h4 [] [ text "Completion Report" ]
+                                , div [ class "event-detail-report" ]
+                                    [ span [ class "event-data-item" ] [ text ("status: " ++ Types.completionStatusToString report.status) ]
+                                    , p [] [ text report.summary ]
+                                    ]
+                                ]
+
+                            Nothing ->
+                                []
+                        ]
+                    )
 
 
 viewTaskQueue : Time.Zone -> Time.Posix -> Maybe Types.Queue -> Html msg

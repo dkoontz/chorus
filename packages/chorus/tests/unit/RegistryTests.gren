@@ -478,6 +478,7 @@ testHandoffRecordEncodeDecode =
                 { agentName = "writer"
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Just (Time.millisToPosix 1707048700000)
+                , input = "Write the implementation"
                 , output = "Implementation complete"
                 , completionReport = Nothing
                 }
@@ -496,6 +497,7 @@ testHandoffRecordEncodeDecode =
                 expectEqual record.agentName decodedRecord.agentName
                     |> Task.andThen (\_ -> expectEqual record.startedAt decodedRecord.startedAt)
                     |> Task.andThen (\_ -> expectEqual record.completedAt decodedRecord.completedAt)
+                    |> Task.andThen (\_ -> expectEqual record.input decodedRecord.input)
                     |> Task.andThen (\_ -> expectEqual record.output decodedRecord.output)
 
             Err err ->
@@ -512,6 +514,7 @@ testHandoffRecordWithNothingCompletedAtEncodeDecode =
                 { agentName = "editor"
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Nothing
+                , input = ""
                 , output = ""
                 , completionReport = Nothing
                 }
@@ -546,6 +549,7 @@ testTaskWithHandoffFieldsEncodeDecode =
                 { agentName = "writer"
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Just (Time.millisToPosix 1707048700000)
+                , input = "Do something"
                 , output = "Done"
                 , completionReport = Nothing
                 }
@@ -607,6 +611,7 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
                 { agentName = "writer"
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Just (Time.millisToPosix 1707048700000)
+                , input = "Implement the feature"
                 , output = "Implemented"
                 , completionReport = Nothing
                 }
@@ -675,6 +680,7 @@ testPlanTaskCarriesHandoffFields =
                 { agentName = "researcher"
                 , startedAt = Time.millisToPosix 1707048600000
                 , completedAt = Nothing
+                , input = "Research the topic"
                 , output = ""
                 , completionReport = Nothing
                 }
@@ -779,6 +785,7 @@ testTaskAgentChainAccessor =
                 { agentName = "writer"
                 , startedAt = Time.millisToPosix 100
                 , completedAt = Just (Time.millisToPosix 200)
+                , input = "write it"
                 , output = "first"
                 , completionReport = Nothing
                 }
@@ -787,6 +794,7 @@ testTaskAgentChainAccessor =
                 { agentName = "editor"
                 , startedAt = Time.millisToPosix 300
                 , completedAt = Nothing
+                , input = "edit it"
                 , output = ""
                 , completionReport = Nothing
                 }
@@ -878,6 +886,7 @@ testSetAgentChainMutator =
                 { agentName = "writer"
                 , startedAt = Time.millisToPosix 100
                 , completedAt = Nothing
+                , input = ""
                 , output = ""
                 , completionReport = Nothing
                 }

@@ -24,6 +24,7 @@ import Html.Events exposing (onClick, onInput, onSubmit)
 import Http
 import Id
 import Json.Decode
+import Set exposing (Set)
 import Task
 import Time
 import Types exposing (AgentConfig, Task(..), TaskStatus(..))
@@ -70,6 +71,7 @@ type alias Model =
     , agentForm : Maybe AgentForm
     , startingAgent : Maybe String
     , draftAnswers : Array String
+    , expandedEvents : Set Int
     }
 
 
@@ -152,6 +154,7 @@ type Msg
     | UpdateAnswer { index : Int, value : String }
     | SubmitAnswers String
     | AnswersSubmitted (Result Http.Error Types.Task)
+    | ToggleEventExpanded Int
     | NoOp
 
 
@@ -182,6 +185,7 @@ init _ url key =
             , agentForm = Nothing
             , startingAgent = Nothing
             , draftAnswers = []
+            , expandedEvents = Set.empty
             }
     in
     { model = model
@@ -275,6 +279,7 @@ update msg model =
                     , agentForm = Nothing
                     , startingAgent = Nothing
                     , draftAnswers = []
+                    , expandedEvents = Set.empty
                 }
             , command = loadPageData page
             }
@@ -969,6 +974,11 @@ update msg model =
                     , command = Cmd.none
                     }
 
+        ToggleEventExpanded index ->
+            { model = { model | expandedEvents = Set.toggle index model.expandedEvents }
+            , command = Cmd.none
+            }
+
         NoOp ->
             { model = model
             , command = Cmd.none
@@ -1078,6 +1088,8 @@ viewMain model =
                     , draftAnswers = model.draftAnswers
                     , onUpdateAnswer = \args -> UpdateAnswer args
                     , onSubmitAnswers = SubmitAnswers
+                    , expandedEvents = model.expandedEvents
+                    , onToggleEventExpanded = ToggleEventExpanded
                     , zone = model.timeZone
                     , now = model.lastPoll
                     }

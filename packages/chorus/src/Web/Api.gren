@@ -853,6 +853,7 @@ requestStartHandoff ctx taskId params toMsg =
                                                     { agentName = params.agentName
                                                     , startedAt = now
                                                     , completedAt = Nothing
+                                                    , input = params.prompt
                                                     , output = ""
                                                     , completionReport = Nothing
                                                     }
@@ -890,10 +891,17 @@ requestStartHandoff ctx taskId params toMsg =
                                             Registry.updateTask ctx.registry taskId updateFn
                                                 |> GrenTask.andThen
                                                     (\updatedTask ->
+                                                        let
+                                                            handoffIndex =
+                                                                String.fromInt (Array.length (Types.taskAgentChain updatedTask) - 1)
+                                                        in
                                                         -- Record history event
                                                         Registry.recordEvent ctx.registry taskId
                                                             { eventType = "agent_handoff_started"
-                                                            , data = Dict.singleton "agentName" params.agentName
+                                                            , data =
+                                                                Dict.empty
+                                                                    |> Dict.set "agentName" params.agentName
+                                                                    |> Dict.set "handoffIndex" handoffIndex
                                                             }
                                                             |> GrenTask.map (\_ -> updatedTask)
                                                     )
@@ -984,6 +992,10 @@ requestCompleteHandoff ctx taskId params toMsg =
                                     Registry.updateTask ctx.registry taskId updateFn
                                         |> GrenTask.andThen
                                             (\updatedTask ->
+                                                let
+                                                    handoffIndex =
+                                                        String.fromInt (Array.length (Types.taskAgentChain updatedTask) - 1)
+                                                in
                                                 -- Record history event
                                                 Registry.recordEvent ctx.registry taskId
                                                     { eventType = "agent_handoff_completed"
@@ -991,6 +1003,7 @@ requestCompleteHandoff ctx taskId params toMsg =
                                                         Dict.empty
                                                             |> Dict.set "agentName" agentName
                                                             |> Dict.set "outputLength" (String.fromInt (String.unitLength params.output))
+                                                            |> Dict.set "handoffIndex" handoffIndex
                                                     }
                                                     |> GrenTask.map (\_ -> updatedTask)
                                             )
