@@ -4,6 +4,7 @@ module Api exposing
     , createTask
     , updateTaskStatus
     , updateTaskPlanning
+    , submitAnswers
     , startHandoff
     , getTaskHistory
     , getTaskQueue
@@ -158,6 +159,26 @@ updateTaskPlanning tid params toMsg =
         , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
         , tracker = Nothing
+        }
+
+
+{-| Submit answers to planning questions.
+-}
+submitAnswers :
+    String
+    -> Array String
+    -> (Result Http.Error Task -> msg)
+    -> Cmd msg
+submitAnswers tid answers toMsg =
+    Http.post
+        { url = "/api/tasks/" ++ tid ++ "/answers"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ { key = "answers", value = Encode.array Encode.string answers }
+                    ]
+                )
+        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         }
 
 

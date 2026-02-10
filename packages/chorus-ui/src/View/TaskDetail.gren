@@ -58,6 +58,9 @@ type alias Props msg =
     , onRemovePlanningItem : Int -> msg
     , onSavePlanning : msg
     , onCancelPlanningEdit : msg
+    , draftAnswers : Array String
+    , onUpdateAnswer : { index : Int, value : String } -> msg
+    , onSubmitAnswers : String -> msg
     , zone : Time.Zone
     , now : Time.Posix
     }
@@ -333,11 +336,22 @@ viewPlanningSections props task =
                 ]
 
         Planned t ->
+            let
+                questions =
+                    Types.taskQuestions task
+
+                questionsView =
+                    if Array.isEmpty questions then
+                        text ""
+                    else
+                        viewQuestionsSection props task questions
+            in
             div [ class "planning-sections" ]
                 [ viewSummarySection props task t.summary
                 , viewListSection props task "Requirements" PlanningRequirements t.requirements "No requirements"
                 , viewListSection props task "Acceptance Criteria" PlanningAcceptanceCriteria t.acceptanceCriteria "No acceptance criteria"
                 , viewListSection props task "Plan" PlanningPlan t.plan "No plan"
+                , questionsView
                 ]
 
 
@@ -476,6 +490,63 @@ viewListSection props task title section items placeholder =
           else
             ol [ class "planning-numbered-list" ]
                 (Array.map (\item -> li [] [ text item ]) items)
+        ]
+
+
+viewQuestionsSection : Props msg -> Types.Task -> Array Types.PlanningQuestion -> Html msg
+viewQuestionsSection props task questions =
+    let
+        tid =
+            Id.taskIdToString (Types.taskId task)
+
+        isAwaitingInput =
+            Types.taskStatus task == AwaitingInput
+    in
+    div [ class "planning-section card" ]
+        [ div [ class "planning-section-header" ]
+            [ h3 [] [ text "Planning Questions" ]
+            ]
+        , div [ class "questions-list" ]
+            (Array.indexedMap
+                (\index q ->
+                    div [ class "question-item" ]
+                        [ div [ class "question-text" ]
+                            [ strong [] [ text ("Q" ++ String.fromInt (index + 1) ++ ": ") ]
+                            , text q.question
+                            ]
+                        , if isAwaitingInput then
+                            textarea
+                                [ class "question-answer-input"
+                                , value (Array.get index props.draftAnswers |> Maybe.withDefault "")
+                                , onInput (\v -> props.onUpdateAnswer { index = index, value = v })
+                                , placeholder "Type your answer..."
+                                , Html.Attributes.rows 2
+                                ]
+                                []
+                          else
+                            when q.answer is
+                                Just answer ->
+                                    div [ class "question-answer" ]
+                                        [ strong [] [ text "A: " ]
+                                        , text answer
+                                        ]
+
+                                Nothing ->
+                                    text ""
+                        ]
+                )
+                questions
+            )
+        , if isAwaitingInput then
+            div [ class "questions-actions" ]
+                [ button
+                    [ class "btn btn-primary"
+                    , onClick (props.onSubmitAnswers tid)
+                    ]
+                    [ text "Submit Answers" ]
+                ]
+          else
+            text ""
         ]
 
 

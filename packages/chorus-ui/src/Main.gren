@@ -69,6 +69,7 @@ type alias Model =
     , agents : Array AgentConfig
     , agentForm : Maybe AgentForm
     , startingAgent : Maybe String
+    , draftAnswers : Array String
     }
 
 
@@ -148,6 +149,9 @@ type Msg
     | SelectStartAgent String
     | StartTask String
     | HandoffStarted (Result Http.Error Types.Task)
+    | UpdateAnswer { index : Int, value : String }
+    | SubmitAnswers String
+    | AnswersSubmitted (Result Http.Error Types.Task)
     | NoOp
 
 
@@ -177,6 +181,7 @@ init _ url key =
             , agents = []
             , agentForm = Nothing
             , startingAgent = Nothing
+            , draftAnswers = []
             }
     in
     { model = model
@@ -269,6 +274,7 @@ update msg model =
                     , editingPlanning = Nothing
                     , agentForm = Nothing
                     , startingAgent = Nothing
+                    , draftAnswers = []
                 }
             , command = loadPageData page
             }
@@ -288,7 +294,12 @@ update msg model =
         GotTask result ->
             when result is
                 Ok task ->
-                    { model = { model | selectedTask = Just task, loading = False, error = Nothing }
+                    let
+                        answers =
+                            Types.taskQuestions task
+                                |> Array.map (\q -> Maybe.withDefault "" q.answer)
+                    in
+                    { model = { model | selectedTask = Just task, loading = False, error = Nothing, draftAnswers = answers }
                     , command = Cmd.none
                     }
 
@@ -920,6 +931,44 @@ update msg model =
                     , command = Cmd.none
                     }
 
+        UpdateAnswer { index, value } ->
+            { model = { model | draftAnswers = Array.set index value model.draftAnswers }
+            , command = Cmd.none
+            }
+
+        SubmitAnswers taskId ->
+            { model = model
+            , command = Api.submitAnswers taskId model.draftAnswers AnswersSubmitted
+            }
+
+        AnswersSubmitted result ->
+            when result is
+                Ok updatedTask ->
+                    let
+                        updateTask t =
+                            if Types.taskId t == Types.taskId updatedTask then
+                                updatedTask
+                            else
+                                t
+
+                        newTasks =
+                            Array.map updateTask model.tasks
+                    in
+                    { model =
+                        { model
+                            | tasks = newTasks
+                            , selectedTask = Just updatedTask
+                            , draftAnswers = []
+                            , error = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
         NoOp ->
             { model = model
             , command = Cmd.none
@@ -1026,6 +1075,9 @@ viewMain model =
                     , onRemovePlanningItem = RemovePlanningItem
                     , onSavePlanning = SavePlanning
                     , onCancelPlanningEdit = CancelPlanningEdit
+                    , draftAnswers = model.draftAnswers
+                    , onUpdateAnswer = \args -> UpdateAnswer args
+                    , onSubmitAnswers = SubmitAnswers
                     , zone = model.timeZone
                     , now = model.lastPoll
                     }
