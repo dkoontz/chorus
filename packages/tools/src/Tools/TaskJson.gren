@@ -1,0 +1,267 @@
+module Tools.TaskJson exposing
+    ( -- Request decoding
+      TaskToolRequest(..)
+    , decodeTaskToolRequest
+      -- Response encoding
+    , encodeTaskGetOutput
+    , encodeTaskListOutput
+    , encodeTaskToolsHelp
+      -- Error encoding
+    , encodeError
+    )
+
+{-| JSON encoding and decoding for task tool requests and responses.
+-}
+
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+import Tools.TaskStatus as TaskStatus
+
+
+-- REQUEST TYPES
+
+
+{-| A task tool request parsed from JSON input.
+-}
+type TaskToolRequest
+    = TaskGetRequest TaskStatus.TaskGetInput
+    | TaskListRequest TaskStatus.TaskListInput
+    | TaskHelpRequest
+
+
+{-| Decode a JSON request into a TaskToolRequest.
+-}
+decodeTaskToolRequest : String -> Result String TaskToolRequest
+decodeTaskToolRequest jsonStr =
+    Decode.decodeString requestDecoder jsonStr
+        |> Result.mapError Decode.errorToString
+
+
+requestDecoder : Decoder TaskToolRequest
+requestDecoder =
+    Decode.field "tool" Decode.string
+        |> Decode.andThen toolDecoder
+
+
+toolDecoder : String -> Decoder TaskToolRequest
+toolDecoder toolName =
+    when toolName is
+        "task.get" ->
+            Decode.map TaskGetRequest taskGetInputDecoder
+
+        "task.list" ->
+            Decode.map TaskListRequest taskListInputDecoder
+
+        "help" ->
+            Decode.succeed TaskHelpRequest
+
+        _ ->
+            Decode.fail ("Unknown tool: " ++ toolName ++ ". Use {\"tool\":\"help\"} for available commands.")
+
+
+
+-- INPUT DECODERS
+
+
+taskGetInputDecoder : Decoder TaskStatus.TaskGetInput
+taskGetInputDecoder =
+    Decode.map2
+        (\taskId baseUrl ->
+            { taskId = taskId
+            , baseUrl = Maybe.withDefault "http://localhost:8080" baseUrl
+            }
+        )
+        (Decode.field "taskId" Decode.string)
+        (Decode.maybe (Decode.field "baseUrl" Decode.string))
+
+
+taskListInputDecoder : Decoder TaskStatus.TaskListInput
+taskListInputDecoder =
+    Decode.map2
+        (\status baseUrl ->
+            { status = status
+            , baseUrl = Maybe.withDefault "http://localhost:8080" baseUrl
+            }
+        )
+        (Decode.maybe (Decode.field "status" Decode.string))
+        (Decode.maybe (Decode.field "baseUrl" Decode.string))
+
+
+
+-- RESPONSE ENCODING
+
+
+{-| Encode a task.get output as JSON.
+-}
+encodeTaskGetOutput : TaskStatus.TaskGetOutput -> Encode.Value
+encodeTaskGetOutput output =
+    let
+        baseFields =
+            [ { key = "id", value = Encode.string output.id }
+            , { key = "description", value = Encode.string output.description }
+            , { key = "status", value = Encode.string output.status }
+            , { key = "statusMessage", value = encodeMaybe Encode.string output.statusMessage }
+            , { key = "taskType", value = Encode.string output.taskType }
+            , { key = "currentAgent", value = encodeMaybe Encode.string output.currentAgent }
+            , { key = "agentChain", value = Encode.array encodeAgentChainEntry output.agentChain }
+            , { key = "createdAt", value = Encode.int output.createdAt }
+            , { key = "updatedAt", value = Encode.int output.updatedAt }
+            , { key = "summary", value = encodeMaybe Encode.string output.summary }
+            , { key = "requirements", value = encodeMaybe (Encode.array Encode.string) output.requirements }
+            , { key = "acceptanceCriteria", value = encodeMaybe (Encode.array Encode.string) output.acceptanceCriteria }
+            , { key = "plan", value = encodeMaybe (Encode.array Encode.string) output.plan }
+            ]
+    in
+    Encode.object baseFields
+
+
+encodeAgentChainEntry : TaskStatus.AgentChainEntry -> Encode.Value
+encodeAgentChainEntry entry =
+    Encode.object
+        [ { key = "agentName", value = Encode.string entry.agentName }
+        , { key = "startedAt", value = Encode.int entry.startedAt }
+        , { key = "completedAt", value = encodeMaybe Encode.int entry.completedAt }
+        , { key = "output", value = Encode.string entry.output }
+        ]
+
+
+{-| Encode a task.list output as JSON.
+-}
+encodeTaskListOutput : TaskStatus.TaskListOutput -> Encode.Value
+encodeTaskListOutput output =
+    Encode.object
+        [ { key = "tasks", value = Encode.array encodeTaskSummary output.tasks }
+        ]
+
+
+encodeTaskSummary : TaskStatus.TaskSummary -> Encode.Value
+encodeTaskSummary summary =
+    Encode.object
+        [ { key = "id", value = Encode.string summary.id }
+        , { key = "description", value = Encode.string summary.description }
+        , { key = "status", value = Encode.string summary.status }
+        , { key = "statusMessage", value = encodeMaybe Encode.string summary.statusMessage }
+        , { key = "currentAgent", value = encodeMaybe Encode.string summary.currentAgent }
+        ]
+
+
+{-| Encode help output for task tools.
+-}
+encodeTaskToolsHelp : Encode.Value
+encodeTaskToolsHelp =
+    Encode.object
+        [ { key = "tools"
+          , value =
+                Encode.array identity
+                    [ taskGetHelp
+                    , taskListHelp
+                    ]
+          }
+        ]
+
+
+taskGetHelp : Encode.Value
+taskGetHelp =
+    encodeTool
+        { name = "task.get"
+        , description = "Get full task details from the Chorus API including status, current agent, agent chain history, and planning fields"
+        , required =
+            [ { key = "taskId", value = "ID of the task to retrieve" }
+            ]
+        , optional =
+            [ { key = "baseUrl", value = "Base URL of the Chorus API (defaults to http://localhost:8080)" }
+            ]
+        , output =
+            [ { key = "id", value = "Task ID" }
+            , { key = "description", value = "Task description" }
+            , { key = "status", value = "Task status (pending, active, waiting, completed, failed)" }
+            , { key = "statusMessage", value = "Error message if status is failed, null otherwise" }
+            , { key = "taskType", value = "Task type (descriptionOnly or planned)" }
+            , { key = "currentAgent", value = "Name of the agent currently working on the task, or null" }
+            , { key = "agentChain", value = "Array of agent hand-off records with agentName, startedAt, completedAt, output" }
+            , { key = "createdAt", value = "Task creation timestamp in milliseconds" }
+            , { key = "updatedAt", value = "Task last update timestamp in milliseconds" }
+            , { key = "summary", value = "Task summary (planned tasks only), null otherwise" }
+            , { key = "requirements", value = "Array of requirements (planned tasks only), null otherwise" }
+            , { key = "acceptanceCriteria", value = "Array of acceptance criteria (planned tasks only), null otherwise" }
+            , { key = "plan", value = "Array of plan steps (planned tasks only), null otherwise" }
+            ]
+        }
+
+
+taskListHelp : Encode.Value
+taskListHelp =
+    encodeTool
+        { name = "task.list"
+        , description = "List tasks from the Chorus API with optional status filtering"
+        , required = []
+        , optional =
+            [ { key = "status", value = "Filter by status (pending, active, waiting, completed, failed)" }
+            , { key = "baseUrl", value = "Base URL of the Chorus API (defaults to http://localhost:8080)" }
+            ]
+        , output =
+            [ { key = "tasks", value = "Array of task summaries, each with id, description, status, statusMessage, currentAgent" }
+            ]
+        }
+
+
+
+-- ENCODING HELPERS
+
+
+type alias ToolHelp =
+    { name : String
+    , description : String
+    , required : Array { key : String, value : String }
+    , optional : Array { key : String, value : String }
+    , output : Array { key : String, value : String }
+    }
+
+
+encodeTool : ToolHelp -> Encode.Value
+encodeTool tool =
+    Encode.object
+        [ { key = "name", value = Encode.string tool.name }
+        , { key = "description", value = Encode.string tool.description }
+        , { key = "parameters"
+          , value =
+                Encode.object
+                    [ { key = "required"
+                      , value = encodeStringMap tool.required
+                      }
+                    , { key = "optional"
+                      , value = encodeStringMap tool.optional
+                      }
+                    ]
+          }
+        , { key = "output"
+          , value = encodeStringMap tool.output
+          }
+        ]
+
+
+encodeStringMap : Array { key : String, value : String } -> Encode.Value
+encodeStringMap entries =
+    entries
+        |> Array.map (\entry -> { key = entry.key, value = Encode.string entry.value })
+        |> Encode.object
+
+
+encodeMaybe : (a -> Encode.Value) -> Maybe a -> Encode.Value
+encodeMaybe encoder maybeValue =
+    when maybeValue is
+        Just value ->
+            encoder value
+
+        Nothing ->
+            Encode.null
+
+
+{-| Encode an error response.
+-}
+encodeError : String -> String
+encodeError errorMessage =
+    Encode.object
+        [ { key = "error", value = Encode.string errorMessage }
+        ]
+        |> Encode.encode 0

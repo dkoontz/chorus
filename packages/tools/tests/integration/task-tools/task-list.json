@@ -1,0 +1,68 @@
+{
+  "name": "task.list",
+  "scenarios": [
+    {
+      "name": "task.list with no server running",
+      "input": {
+        "tool": "task.list",
+        "baseUrl": "http://localhost:19876"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "curl"
+      },
+      "note": "Uses a non-standard port to ensure curl error regardless of whether Chorus is running"
+    },
+    {
+      "name": "task.list with status filter and no server",
+      "input": {
+        "tool": "task.list",
+        "status": "active",
+        "baseUrl": "http://localhost:19876"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "curl"
+      },
+      "note": "Verifies status parameter is accepted even though server is not running"
+    },
+    {
+      "name": "task.list with custom baseUrl",
+      "input": {
+        "tool": "task.list",
+        "baseUrl": "http://localhost:9999"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "curl"
+      },
+      "note": "Expected to fail with curl error since no server is running at port 9999"
+    },
+    {
+      "name": "task.list with numeric status treated as absent",
+      "input": {
+        "tool": "task.list",
+        "status": 123,
+        "baseUrl": "http://localhost:19876"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "curl"
+      },
+      "note": "Decode.maybe swallows the type mismatch so numeric status is treated as no filter; curl error because no server running"
+    },
+    {
+      "name": "task.list ignores extra fields",
+      "input": {
+        "tool": "task.list",
+        "baseUrl": "http://localhost:19876",
+        "extra": "ignored"
+      },
+      "expect": {
+        "status": "error",
+        "error_contains": "curl"
+      },
+      "note": "Extra fields should be silently ignored; error is curl because no server running"
+    }
+  ]
+}
