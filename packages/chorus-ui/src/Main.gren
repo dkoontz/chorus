@@ -27,7 +27,7 @@ import Json.Decode
 import Set exposing (Set)
 import Task
 import Time
-import Types exposing (AgentConfig, Task(..), TaskStatus(..))
+import Types exposing (AgentConfig(..), Task(..), TaskStatus(..))
 import Url exposing (Url)
 import View.Agents as Agents exposing (AgentForm)
 import View.Board as Board
@@ -729,11 +729,14 @@ update msg model =
             when result is
                 Ok savedAgent ->
                     let
+                        savedName =
+                            Types.agentConfigName savedAgent
+
                         updatedAgents =
-                            if Array.any (\a -> a.name == savedAgent.name) model.agents then
+                            if Array.any (\a -> Types.agentConfigName a == savedName) model.agents then
                                 Array.map
                                     (\a ->
-                                        if a.name == savedAgent.name then
+                                        if Types.agentConfigName a == savedName then
                                             savedAgent
                                         else
                                             a
@@ -761,7 +764,7 @@ update msg model =
                 Ok _ ->
                     { model =
                         { model
-                            | agents = Array.keepIf (\a -> a.name /= name) model.agents
+                            | agents = Array.keepIf (\a -> Types.agentConfigName a /= name) model.agents
                             , error = Nothing
                         }
                     , command = Cmd.none
@@ -778,17 +781,30 @@ update msg model =
             }
 
         OpenAgentEditForm agent ->
-            { model =
-                { model
-                    | agentForm =
-                        Just
-                            { name = agent.name
-                            , instructions = agent.instructions
-                            , allowedTools = String.join ", " agent.allowedTools
-                            , provider = agent.provider
-                            , model = Maybe.withDefault "" agent.model
+            let
+                form =
+                    when agent is
+                        UserDefinedAgent r ->
+                            { name = r.name
+                            , instructions = r.instructions
+                            , allowedTools = String.join ", " r.allowedTools
+                            , provider = r.provider
+                            , model = Maybe.withDefault "" r.model
                             , isEditing = True
                             }
+
+                        InternalAgent r ->
+                            { name = r.name
+                            , instructions = r.instructions
+                            , allowedTools = ""
+                            , provider = ""
+                            , model = ""
+                            , isEditing = True
+                            }
+            in
+            { model =
+                { model
+                    | agentForm = Just form
                 }
             , command = Cmd.none
             }
@@ -853,20 +869,21 @@ update msg model =
                     else
                         let
                             config =
-                                { name = form.name
-                                , instructions = form.instructions
-                                , allowedTools =
-                                    form.allowedTools
-                                        |> String.split ","
-                                        |> Array.map String.trim
-                                        |> Array.keepIf (\s -> not (String.isEmpty s))
-                                , provider = form.provider
-                                , model =
-                                    if String.isEmpty (String.trim form.model) then
-                                        Nothing
-                                    else
-                                        Just (String.trim form.model)
-                                }
+                                UserDefinedAgent
+                                    { name = form.name
+                                    , instructions = form.instructions
+                                    , allowedTools =
+                                        form.allowedTools
+                                            |> String.split ","
+                                            |> Array.map String.trim
+                                            |> Array.keepIf (\s -> not (String.isEmpty s))
+                                    , provider = form.provider
+                                    , model =
+                                        if String.isEmpty (String.trim form.model) then
+                                            Nothing
+                                        else
+                                            Just (String.trim form.model)
+                                    }
                         in
                         if form.isEditing then
                             { model = model
@@ -1064,6 +1081,11 @@ viewMain model =
                     ]
 
             TaskDetailPage taskId ->
+                let
+                    externalAgents =
+                        model.agents
+                            |> Array.keepIf (\a -> not (Types.isInternalAgent a))
+                in
                 TaskDetail.view
                     { task = model.selectedTask
                     , history = model.taskHistory
@@ -1072,7 +1094,7 @@ viewMain model =
                     , onStatusUpdate = \statusTaskId status -> UpdateTaskStatus { taskId = statusTaskId, status = status }
                     , onStartTask = StartTask
                     , onSelectStartAgent = SelectStartAgent
-                    , agents = Array.map .name model.agents
+                    , agents = Array.map Types.agentConfigName externalAgents
                     , selectedStartAgent = model.startingAgent
                     , onRefresh = RefreshTask taskId
                     , onFileSelected = FileSelected
@@ -1096,7 +1118,7 @@ viewMain model =
 
             AgentsPage ->
                 Agents.view
-                    { agents = model.agents
+                    { agents = Array.keepIf (\a -> not (Types.isInternalAgent a)) model.agents
                     , loading = model.loading
                     , agentForm = model.agentForm
                     , onOpenCreateForm = OpenAgentCreateForm

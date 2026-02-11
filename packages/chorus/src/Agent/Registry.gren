@@ -12,8 +12,8 @@ module Agent.Registry exposing
 {-| File-based agent configuration registry.
 
 Agent configs are stored as individual JSON files in `data/agents/{name}.json`.
-On first run (empty directory), default configs are seeded for the six
-known agents: researcher, planner, writer-workflow, writer, editor, fact-checker.
+On first run (empty directory), default configs are seeded for all known agents:
+researcher, planner, writer-workflow, writer, editor, fact-checker, task-validator.
 
 -}
 
@@ -24,7 +24,7 @@ import FileSystem.Path as Path exposing (Path)
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import Task as GrenTask
-import Types exposing (AgentConfig, encodeAgentConfig, agentConfigDecoder)
+import Types exposing (AgentConfig(..), encodeAgentConfig, agentConfigDecoder)
 
 
 -- TYPES
@@ -81,7 +81,8 @@ ensureDirectoryExists filesystemPermission path =
         |> GrenTask.map (\_ -> {})
 
 
-{-| Seed default agent configs if the agents directory is empty.
+{-| Seed default agent configs if the agents directory is empty or contains
+files that cannot be decoded (e.g. from a previous format).
 -}
 seedDefaultsIfEmpty : FileSystem.Permission -> Path -> GrenTask.Task Error {}
 seedDefaultsIfEmpty filesystemPermission agentsPath =
@@ -90,65 +91,123 @@ seedDefaultsIfEmpty filesystemPermission agentsPath =
         |> GrenTask.andThen
             (\entries ->
                 let
-                    jsonFiles =
+                    jsonFilePaths =
                         entries
                             |> Array.keepIf (\entry -> String.endsWith ".json" (Path.toPosixString entry.path))
+                            |> Array.map (\entry -> Path.append entry.path agentsPath)
                 in
-                if Array.isEmpty jsonFiles then
+                if Array.isEmpty jsonFilePaths then
                     seedDefaults filesystemPermission agentsPath
                 else
-                    GrenTask.succeed {}
+                    validateExistingFiles filesystemPermission agentsPath jsonFilePaths
             )
 
 
-{-| Write default configs for the six known agents.
+{-| Try to decode each existing agent file. If any file fails to decode,
+delete all agent files and re-seed from defaults.
+-}
+validateExistingFiles : FileSystem.Permission -> Path -> Array Path -> GrenTask.Task Error {}
+validateExistingFiles filesystemPermission agentsPath filePaths =
+    filePaths
+        |> Array.foldl
+            (\filePath acc ->
+                acc
+                    |> GrenTask.andThen
+                        (\allValid ->
+                            readAgentConfigFile filesystemPermission filePath
+                                |> GrenTask.map (\_ -> allValid)
+                                |> GrenTask.onError
+                                    (\err ->
+                                        when err is
+                                            JsonDecodeError _ ->
+                                                GrenTask.succeed False
+
+                                            _ ->
+                                                GrenTask.fail err
+                                    )
+                        )
+            )
+            (GrenTask.succeed True)
+        |> GrenTask.andThen
+            (\allValid ->
+                if allValid then
+                    GrenTask.succeed {}
+                else
+                    deleteFiles filesystemPermission filePaths
+                        |> GrenTask.andThen (\_ -> seedDefaults filesystemPermission agentsPath)
+            )
+
+
+{-| Delete a list of files.
+-}
+deleteFiles : FileSystem.Permission -> Array Path -> GrenTask.Task Error {}
+deleteFiles filesystemPermission filePaths =
+    filePaths
+        |> Array.foldl
+            (\filePath acc ->
+                acc
+                    |> GrenTask.andThen
+                        (\_ ->
+                            FileSystem.remove filesystemPermission { recursive = False } filePath
+                                |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+                                |> GrenTask.map (\_ -> {})
+                        )
+            )
+            (GrenTask.succeed {})
+
+
+{-| Write default configs for all known agents.
 -}
 seedDefaults : FileSystem.Permission -> Path -> GrenTask.Task Error {}
 seedDefaults filesystemPermission agentsPath =
     let
         defaults =
-            [ { name = "researcher"
-              , instructions = researcherInstructions
-              , allowedTools = [ "web.search" ]
-              , provider = "claude-code"
-              , model = Nothing
-              }
-            , { name = "planner"
-              , instructions = plannerInstructions
-              , allowedTools = [ "file.read", "file.write", "file.create", "file.patch", "file.delete", "file.list", "file.search" ]
-              , provider = "claude-code"
-              , model = Nothing
-              }
-            , { name = "writer-workflow"
-              , instructions = writerWorkflowInstructions
-              , allowedTools = [ "handoff", "file.read", "file.write" ]
-              , provider = "claude-code"
-              , model = Nothing
-              }
-            , { name = "writer"
-              , instructions = writerInstructions
-              , allowedTools = [ "file.read", "file.write", "file.create", "file.patch", "file.list", "file.search" ]
-              , provider = "claude-code"
-              , model = Nothing
-              }
-            , { name = "editor"
-              , instructions = editorInstructions
-              , allowedTools = [ "file.read", "file.list", "file.search" ]
-              , provider = "claude-code"
-              , model = Nothing
-              }
-            , { name = "fact-checker"
-              , instructions = factCheckerInstructions
-              , allowedTools = [ "file.read", "file.list", "file.search", "web.search" ]
-              , provider = "claude-code"
-              , model = Nothing
-              }
-            , { name = "_planner"
-              , instructions = systemPlannerInstructions
-              , allowedTools = [ "file.read", "file.list", "file.search" ]
-              , provider = "claude-code"
-              , model = Nothing
-              }
+            [ Types.UserDefinedAgent
+                { name = "researcher"
+                , instructions = researcherInstructions
+                , allowedTools = [ "web.search" ]
+                , provider = "claude-code"
+                , model = Nothing
+                }
+            , Types.UserDefinedAgent
+                { name = "planner"
+                , instructions = plannerInstructions
+                , allowedTools = [ "file.read", "file.write", "file.create", "file.patch", "file.delete", "file.list", "file.search" ]
+                , provider = "claude-code"
+                , model = Nothing
+                }
+            , Types.UserDefinedAgent
+                { name = "writer-workflow"
+                , instructions = writerWorkflowInstructions
+                , allowedTools = [ "handoff", "file.read", "file.write" ]
+                , provider = "claude-code"
+                , model = Nothing
+                }
+            , Types.UserDefinedAgent
+                { name = "writer"
+                , instructions = writerInstructions
+                , allowedTools = [ "file.read", "file.write", "file.create", "file.patch", "file.list", "file.search" ]
+                , provider = "claude-code"
+                , model = Nothing
+                }
+            , Types.UserDefinedAgent
+                { name = "editor"
+                , instructions = editorInstructions
+                , allowedTools = [ "file.read", "file.list", "file.search" ]
+                , provider = "claude-code"
+                , model = Nothing
+                }
+            , Types.UserDefinedAgent
+                { name = "fact-checker"
+                , instructions = factCheckerInstructions
+                , allowedTools = [ "file.read", "file.list", "file.search", "web.search" ]
+                , provider = "claude-code"
+                , model = Nothing
+                }
+            , Types.InternalAgent
+                { name = "task-validator"
+                , instructions = taskValidatorInstructions
+                }
             ]
     in
     defaults
@@ -189,9 +248,9 @@ factCheckerInstructions : String
 factCheckerInstructions =
     "# Fact-Checker Agent\n\nYou are a fact-checker agent responsible for verifying the accuracy of claims and information in written content.\n\n## Parameters\n\nThe workflow orchestrator will provide these parameters when invoking you:\n- `TASK_FILE`: Path to the task specification\n- `WRITER_REPORT`: Path to the writer's report\n- `REPORT_FILE`: Path to write your fact-check report (e.g., `workspaces/quarterly-report/reports/fact-check-1.md`)\n\n## Your Workflow\n\n1. **Read the task specification** from `TASK_FILE` to understand the content's purpose\n2. **Read the writer report** from `WRITER_REPORT` to understand what was written\n3. **Read the draft** at the location specified in the writer report\n4. **Identify all verifiable claims** in the content\n5. **Verify each claim** against reliable sources\n6. **Check internal consistency** - do different parts of the content contradict each other?\n7. **Write your findings** to `REPORT_FILE`\n\n## What to Check\n\n### Factual Claims\n- Statistics, numbers, dates, and measurements\n- Attributed quotes or paraphrases\n- Historical events or scientific facts\n- Named entities (people, organizations, places)\n\n### Logical Consistency\n- Do conclusions follow from the presented evidence?\n- Are comparisons fair and like-for-like?\n- Are there logical fallacies or unsupported leaps?\n\n### Internal Consistency\n- Do different sections of the content contradict each other?\n- Are terms used consistently throughout?\n- Do numbers add up (e.g., percentages totaling 100%)?\n\n### Source Quality\n- If the content cites sources, are they reliable?\n- Are claims attributed to appropriate authorities?\n- Is there over-reliance on a single source?\n\n## What NOT to Check\n\n- Style, tone, or writing quality (that's the editor's job)\n- Whether the content fulfills the task requirements (also the editor's job)\n- Opinions clearly marked as opinions\n- Hypothetical scenarios or thought experiments\n- Creative or fictional content (unless it contains embedded factual claims)\n\n## Severity Levels\n\n- **HIGH**: Factual error, misleading claim, or unverifiable assertion presented as fact. The content would misinform the reader.\n- **MEDIUM**: Claim that is technically correct but presented in a misleading way, or a source that is questionable but not wrong.\n- **LOW**: Minor imprecision that does not materially affect the reader's understanding.\n\n## Report Format\n\nWrite your report to `REPORT_FILE` using this format:\n\n```\n# Fact-Check Report\n\n## Summary\n[1-2 sentence overview of fact-checking results]\n\n## Claims Checked\n\n### Claim 1: \"[The specific claim from the text]\"\n- **Location:** [Section or paragraph reference]\n- **Verdict:** ACCURATE | INACCURATE | MISLEADING | UNVERIFIABLE\n- **Severity:** HIGH | MEDIUM | LOW\n- **Evidence:** [What you found that supports or contradicts the claim]\n- **Recommendation:** [How to fix if inaccurate, or note if no change needed]\n\n[Repeat for each claim checked]\n\n## Internal Consistency\n- [Any contradictions found between sections]\n- [Any numerical inconsistencies]\n\n## Overall Assessment\n\n**Decision:** PASS | FAIL\n\n**Claims checked:** [number]\n**Accurate:** [number]\n**Inaccurate:** [number]\n**Misleading:** [number]\n**Unverifiable:** [number]\n\n[If FAIL, list the high-severity issues that must be resolved]\n[If PASS, note any medium/low issues worth considering]\n```\n\n## Important\n\n- Check claims against reliable sources, not just your own knowledge\n- Be precise about what is wrong - \"this is inaccurate\" is not enough, explain what the correct information is\n- Do not flag opinions as inaccurate - flag them only if they are presented as facts\n- A single HIGH severity issue means overall FAIL\n- If the content makes no factual claims (e.g., pure creative writing), write a report noting this and PASS\n- When a claim is unverifiable, recommend that the writer either find a source, add a qualifier, or remove it"
 
-systemPlannerInstructions : String
-systemPlannerInstructions =
-    "# System Planner\n\nYou are the system planning agent. Analyze task descriptions and produce a structured plan.\n\nYou MUST output your result as a JSON code block. Choose ONE of these two formats:\n\n## Format 1: Plan (when you have enough information)\n\n```json\n{\n  \"type\": \"plan\",\n  \"summary\": \"Brief summary of what the task involves\",\n  \"requirements\": [\"Requirement 1\", \"Requirement 2\"],\n  \"acceptanceCriteria\": [\"Criterion 1\", \"Criterion 2\"],\n  \"plan\": [\"Step 1\", \"Step 2\", \"Step 3\"],\n  \"assignedAgent\": \"writer\"\n}\n```\n\n## Format 2: Questions (when you need clarification)\n\n```json\n{\n  \"type\": \"questions\",\n  \"questions\": [\"Question 1?\", \"Question 2?\"]\n}\n```\n\n## Guidelines\n\n- Read the task description carefully\n- If the task is clear enough to plan, produce a plan\n- If key details are missing, ask questions\n- The `assignedAgent` must be a real agent name (not `_planner`)\n- Keep plans concise and actionable\n- Output ONLY the JSON code block, nothing else"
+taskValidatorInstructions : String
+taskValidatorInstructions =
+    "# Task Validator\n\nYou are the task validation agent. Analyze task descriptions and produce a structured plan.\n\nYou MUST output your result as a JSON code block. Choose ONE of these two formats:\n\n## Format 1: Plan (when you have enough information)\n\n```json\n{\n  \"type\": \"plan\",\n  \"summary\": \"Brief summary of what the task involves\",\n  \"requirements\": [\"Requirement 1\", \"Requirement 2\"],\n  \"acceptanceCriteria\": [\"Criterion 1\", \"Criterion 2\"],\n  \"plan\": [\"Step 1\", \"Step 2\", \"Step 3\"],\n  \"assignedAgent\": \"writer\"\n}\n```\n\n## Format 2: Questions (when you need clarification)\n\n```json\n{\n  \"type\": \"questions\",\n  \"questions\": [\"Question 1?\", \"Question 2?\"]\n}\n```\n\n## Guidelines\n\n- Read the task description carefully\n- If the task is clear enough to plan, produce a plan\n- If key details are missing, ask questions\n- The `assignedAgent` must be a real agent name (not `task-validator`)\n- Keep plans concise and actionable\n- Output ONLY the JSON code block, nothing else"
 
 
 -- OPERATIONS
@@ -308,8 +367,11 @@ errorToString err =
 writeAgentConfig : FileSystem.Permission -> Path -> AgentConfig -> GrenTask.Task Error {}
 writeAgentConfig filesystemPermission agentsPath agentConfig =
     let
+        name =
+            Types.agentConfigName agentConfig
+
         filePath =
-            Path.append (Path.fromPosixString (agentConfig.name ++ ".json")) agentsPath
+            Path.append (Path.fromPosixString (name ++ ".json")) agentsPath
 
         json =
             encodeAgentConfig agentConfig

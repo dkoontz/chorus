@@ -52,7 +52,7 @@ import Task as GrenTask exposing (Task)
 import Task.Queue as Queue
 import Task.Registry as Registry
 import Time
-import Types exposing (Task(..), TaskStatus(..), SourceInfo, PlanningFields, PlanningQuestion, HandoffRecord, AgentConfig, encodeAgentConfig, setAgentChain)
+import Types exposing (Task(..), TaskStatus(..), SourceInfo, PlanningFields, PlanningQuestion, HandoffRecord, AgentConfig(..), encodeAgentConfig, setAgentChain)
 import Web.Router exposing (Route(..))
 
 
@@ -1183,12 +1183,16 @@ Fails with 409 Conflict if an agent with the same name already exists.
 -}
 requestCreateAgent : AgentRegistry.AgentRegistry -> AgentConfig -> (ApiResult -> msg) -> Cmd msg
 requestCreateAgent agentRegistry agentConfig toMsg =
+    let
+        name =
+            Types.agentConfigName agentConfig
+    in
     -- First check if an agent with this name already exists
-    AgentRegistry.getAgent agentRegistry agentConfig.name
+    AgentRegistry.getAgent agentRegistry name
         |> GrenTask.andThen
             (\_ ->
                 -- Agent exists - return conflict
-                GrenTask.succeed (ApiError { statusCode = 409, code = "CONFLICT", message = "Agent already exists: " ++ agentConfig.name })
+                GrenTask.succeed (ApiError { statusCode = 409, code = "CONFLICT", message = "Agent already exists: " ++ name })
             )
         |> GrenTask.onError
             (\err ->
@@ -1223,7 +1227,12 @@ requestUpdateAgent : AgentRegistry.AgentRegistry -> String -> AgentConfig -> (Ap
 requestUpdateAgent agentRegistry name agentConfig toMsg =
     let
         configWithName =
-            { agentConfig | name = name }
+            when agentConfig is
+                InternalAgent r ->
+                    InternalAgent { r | name = name }
+
+                UserDefinedAgent r ->
+                    UserDefinedAgent { r | name = name }
     in
     AgentRegistry.updateAgent agentRegistry configWithName
         |> GrenTask.andThen

@@ -36,7 +36,7 @@ import Provider.OpenCode as OpenCode
 import Stream
 import Task as GrenTask
 import Task.Registry as Registry
-import Types exposing (TaskStatus(..), SourceInfo)
+import Types exposing (AgentConfig(..), TaskStatus(..), SourceInfo)
 import Web.Api as Api
 import Web.Router as Router
 import Web.Server as Server
@@ -223,39 +223,44 @@ Dispatches based on the agent's `provider` field. Supports:
 - "opencode": CLI-based provider that spawns the opencode CLI
 - "openai-compat": OpenAI-compatible API provider (OpenRouter, Ollama, etc.)
 
-Returns Nothing if the provider name is not recognized.
+Returns Nothing if the provider name is not recognized or the agent is internal.
 -}
 makeProvider : Model -> Types.AgentConfig -> Maybe (Provider.Provider Msg)
 makeProvider model agentConfig =
-    when agentConfig.provider is
-        "claude-code" ->
-            Just (ClaudeCode.provider model.providerConfig)
-
-        "opencode" ->
-            Just
-                (OpenCode.provider
-                    { childProcessPermission = model.childProcessPermission
-                    , filesystemPermission = model.filesystemPermission
-                    , chorusToolsPath = model.config.chorusToolsPath
-                    , baseUrl = "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
-                    }
-                )
-
-        "openai-compat" ->
-            Just
-                (OpenAiCompat.provider
-                    { httpClientPermission = model.httpClientPermission
-                    , filesystemPermission = model.filesystemPermission
-                    , secureContext = model.secureContext
-                    , apiBaseUrl = model.config.apiBaseUrl
-                    , apiKey = model.config.apiKey
-                    , model = Maybe.withDefault model.config.defaultModel agentConfig.model
-                    , conversationsDir = model.config.workspacesRoot ++ "/conversations"
-                    }
-                )
-
-        _ ->
+    when agentConfig is
+        InternalAgent _ ->
             Nothing
+
+        UserDefinedAgent r ->
+            when r.provider is
+                "claude-code" ->
+                    Just (ClaudeCode.provider model.providerConfig)
+
+                "opencode" ->
+                    Just
+                        (OpenCode.provider
+                            { childProcessPermission = model.childProcessPermission
+                            , filesystemPermission = model.filesystemPermission
+                            , chorusToolsPath = model.config.chorusToolsPath
+                            , baseUrl = "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
+                            }
+                        )
+
+                "openai-compat" ->
+                    Just
+                        (OpenAiCompat.provider
+                            { httpClientPermission = model.httpClientPermission
+                            , filesystemPermission = model.filesystemPermission
+                            , secureContext = model.secureContext
+                            , apiBaseUrl = model.config.apiBaseUrl
+                            , apiKey = model.config.apiKey
+                            , model = Maybe.withDefault model.config.defaultModel r.model
+                            , conversationsDir = model.config.workspacesRoot ++ "/conversations"
+                            }
+                        )
+
+                _ ->
+                    Nothing
 
 
 
@@ -330,11 +335,19 @@ update msg model =
 
                         Just reg ->
                             let
+                                allowedTools =
+                                    when agentConfig is
+                                        UserDefinedAgent r ->
+                                            r.allowedTools
+
+                                        InternalAgent _ ->
+                                            []
+
                                 toolCtx =
                                     { filesystemPermission = model.filesystemPermission
                                     , childProcessPermission = model.childProcessPermission
                                     , workspaceRoot = model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
-                                    , allowedTools = agentConfig.allowedTools
+                                    , allowedTools = allowedTools
                                     , apiContext =
                                         { registry = reg
                                         , filesystemPermission = model.filesystemPermission
@@ -363,6 +376,11 @@ update msg model =
                     }
 
                 Ok agentConfig ->
+                    if Types.isInternalAgent agentConfig then
+                        { model = model
+                        , command = sendBadRequest response ("Cannot hand off to internal agent: " ++ Types.agentConfigName agentConfig)
+                        }
+                    else
                     -- Agent found. Update the task first, then spawn the agent.
                     -- The HTTP response is sent via GotApiResult from requestStartHandoff.
                     -- The agent spawn happens via GotHandoffRecorded when the task update succeeds.
@@ -393,7 +411,7 @@ update msg model =
                             in
                             { model = model
                             , command =
-                                Api.requestStartHandoff ctx taskId { agentName = agentConfig.name, prompt = prompt } toMsg
+                                Api.requestStartHandoff ctx taskId { agentName = Types.agentConfigName agentConfig, prompt = prompt } toMsg
                             }
 
         GotHandoffRecorded { taskId, prompt, response, agentConfig, apiResult } ->
@@ -412,21 +430,32 @@ update msg model =
                 Api.ApiSuccess _ ->
                     -- Task updated successfully. Use inline instructions directly.
                     let
+                        agentName =
+                            Types.agentConfigName agentConfig
+
+                        agentInstructions =
+                            when agentConfig is
+                                InternalAgent r ->
+                                    r.instructions
+
+                                UserDefinedAgent r ->
+                                    r.instructions
+
                         completionReportInstruction =
                             "\n\nIMPORTANT: Before finishing your work, you MUST call the completion-report tool to submit your results. Use: {\"tool\": \"completion-report\", \"status\": \"complete\", \"summary\": \"Brief summary of what was done\", \"output\": \"Detailed output\"}\nFor blocked work, use status \"blocked\" with a \"blockedReason\". For failures, use status \"failed\"."
 
                         systemPrompt =
-                            if String.isEmpty agentConfig.instructions then
+                            if String.isEmpty agentInstructions then
                                 Just completionReportInstruction
                             else
-                                Just (agentConfig.instructions ++ completionReportInstruction)
+                                Just (agentInstructions ++ completionReportInstruction)
 
                         workspaceRoot =
                             model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
 
                         executorState =
                             { taskId = taskId
-                            , agentName = agentConfig.name
+                            , agentName = agentName
                             , agentConfig = agentConfig
                             , status = ExecRunning
                             , completionReportReceived = False
@@ -498,7 +527,7 @@ update msg model =
                                         GrenTask.succeed (Err errMsg)
                                     )
                                 |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
-                            , Logging.logInfo model.logger ("Spawned agent " ++ agentConfig.name ++ " for task " ++ Id.taskIdToString taskId) NoOp
+                            , Logging.logInfo model.logger ("Spawned agent " ++ agentName ++ " for task " ++ Id.taskIdToString taskId) NoOp
                             ]
                     }
 
@@ -732,7 +761,7 @@ update msg model =
             in
             when result is
                 Api.ApiSuccess _ ->
-                    -- Task created. Dispatch the _planner agent.
+                    -- Task created. Dispatch the task-validator agent.
                     when model.agentRegistry is
                         Just agentReg ->
                             { model = model
@@ -885,8 +914,16 @@ update msg model =
 
                 Just executor ->
                     let
+                        agentConfig =
+                            executor.agentConfig
+
                         currentTools =
-                            executor.agentConfig.allowedTools
+                            when agentConfig is
+                                UserDefinedAgent r ->
+                                    r.allowedTools
+
+                                InternalAgent _ ->
+                                    []
 
                         withAdded =
                             Array.foldl
@@ -907,16 +944,18 @@ update msg model =
                                 withAdded
 
                         updatedConfig =
-                            { agentConfig | allowedTools = withRemoved }
+                            when agentConfig is
+                                UserDefinedAgent r ->
+                                    UserDefinedAgent { r | allowedTools = withRemoved }
+
+                                InternalAgent _ ->
+                                    agentConfig
 
                         updatedExecutor =
                             { executor | agentConfig = updatedConfig }
 
                         updatedExecutors =
                             Dict.set taskIdStr updatedExecutor model.activeExecutors
-
-                        agentConfig =
-                            executor.agentConfig
 
                         responseBody =
                             Encode.object
@@ -1546,11 +1585,11 @@ type PlannerOutput
     | PlannerParseError String
 
 
-{-| Spawn the _planner agent for a newly created task.
+{-| Spawn the task-validator agent for a newly created task.
 -}
 dispatchPlanner : Model -> AgentRegistry.AgentRegistry -> TaskId -> String -> Cmd Msg
 dispatchPlanner model agentReg taskId description =
-    AgentRegistry.getAgent agentReg "_planner"
+    AgentRegistry.getAgent agentReg "task-validator"
         |> GrenTask.andThen
             (\agentConfig ->
                 -- Set task status to Planning and record planning_started event
@@ -1575,11 +1614,19 @@ dispatchPlanner model agentReg taskId description =
         |> GrenTask.andThen
             (\agentConfig ->
                 let
+                    agentInstructions =
+                        when agentConfig is
+                            InternalAgent r ->
+                                r.instructions
+
+                            UserDefinedAgent r ->
+                                r.instructions
+
                     systemPrompt =
-                        if String.isEmpty agentConfig.instructions then
+                        if String.isEmpty agentInstructions then
                             Nothing
                         else
-                            Just agentConfig.instructions
+                            Just agentInstructions
 
                     workspaceRoot =
                         model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
@@ -1647,7 +1694,7 @@ dispatchPlanner model agentReg taskId description =
             )
         |> GrenTask.onError
             (\_ ->
-                GrenTask.succeed (Err "_planner agent not found")
+                GrenTask.succeed (Err "task-validator agent not found")
             )
         |> GrenTask.perform (\r -> GotPlannerComplete { taskId = taskId, result = r })
 

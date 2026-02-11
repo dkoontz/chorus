@@ -14,7 +14,7 @@ module Types exposing
     , History
     , QueuedMessage
     , Queue
-    , AgentConfig
+    , AgentConfig(..)
     -- Encoders
     , encodeTask
     , encodeStatus
@@ -67,6 +67,8 @@ module Types exposing
     , statusFromString
     , statusEquals
     , completionStatusToString
+    , agentConfigName
+    , isInternalAgent
     )
 
 {-| Shared types, encoders, and decoders for the Chorus API contract.
@@ -250,14 +252,13 @@ type alias Queue =
 
 
 {-| An agent configuration.
+
+Internal agents are system-managed (e.g. task-validator) and only need name
+and instructions. User-defined agents have the full provider/model/tools config.
 -}
-type alias AgentConfig =
-    { name : String
-    , instructions : String
-    , allowedTools : Array String
-    , provider : String
-    , model : Maybe String
-    }
+type AgentConfig
+    = InternalAgent { name : String, instructions : String }
+    | UserDefinedAgent { name : String, instructions : String, allowedTools : Array String, provider : String, model : Maybe String }
 
 
 
@@ -1060,44 +1061,74 @@ messageDecoder =
 
 
 {-| Encode an agent config to JSON.
+
+Includes a "type" discriminator field: "internal" or "user_defined".
 -}
 encodeAgentConfig : AgentConfig -> Encode.Value
 encodeAgentConfig config =
-    let
-        requiredFields =
-            [ { key = "name", value = Encode.string config.name }
-            , { key = "instructions", value = Encode.string config.instructions }
-            , { key = "allowedTools", value = Encode.array Encode.string config.allowedTools }
-            , { key = "provider", value = Encode.string config.provider }
-            ]
+    when config is
+        InternalAgent r ->
+            Encode.object
+                [ { key = "type", value = Encode.string "internal" }
+                , { key = "name", value = Encode.string r.name }
+                , { key = "instructions", value = Encode.string r.instructions }
+                ]
 
-        modelField =
-            when config.model is
-                Just m ->
-                    [ { key = "model", value = Encode.string m } ]
+        UserDefinedAgent r ->
+            let
+                requiredFields =
+                    [ { key = "type", value = Encode.string "user_defined" }
+                    , { key = "name", value = Encode.string r.name }
+                    , { key = "instructions", value = Encode.string r.instructions }
+                    , { key = "allowedTools", value = Encode.array Encode.string r.allowedTools }
+                    , { key = "provider", value = Encode.string r.provider }
+                    ]
 
-                Nothing ->
-                    []
-    in
-    Encode.object (Array.flatten [ requiredFields, modelField ])
+                modelField =
+                    when r.model is
+                        Just m ->
+                            [ { key = "model", value = Encode.string m } ]
+
+                        Nothing ->
+                            []
+            in
+            Encode.object (Array.flatten [ requiredFields, modelField ])
 
 
 agentConfigDecoder : Decoder AgentConfig
 agentConfigDecoder =
-    Decode.map5
-        (\name instructions allowedTools provider model ->
-            { name = name
-            , instructions = instructions
-            , allowedTools = allowedTools
-            , provider = provider
-            , model = model
-            }
-        )
-        (Decode.field "name" Decode.string)
-        (Decode.field "instructions" Decode.string)
-        (Decode.field "allowedTools" (Decode.array Decode.string))
-        (Decode.field "provider" Decode.string)
-        (Decode.maybe (Decode.field "model" Decode.string))
+    Decode.field "type" Decode.string
+        |> Decode.andThen
+            (\agentType ->
+                when agentType is
+                    "internal" ->
+                        Decode.map2
+                            (\name instructions ->
+                                InternalAgent { name = name, instructions = instructions }
+                            )
+                            (Decode.field "name" Decode.string)
+                            (Decode.field "instructions" Decode.string)
+
+                    "user_defined" ->
+                        Decode.map5
+                            (\name instructions allowedTools provider model ->
+                                UserDefinedAgent
+                                    { name = name
+                                    , instructions = instructions
+                                    , allowedTools = allowedTools
+                                    , provider = provider
+                                    , model = model
+                                    }
+                            )
+                            (Decode.field "name" Decode.string)
+                            (Decode.field "instructions" Decode.string)
+                            (Decode.field "allowedTools" (Decode.array Decode.string))
+                            (Decode.field "provider" Decode.string)
+                            (Decode.maybe (Decode.field "model" Decode.string))
+
+                    _ ->
+                        Decode.fail ("Unknown agent config type: " ++ agentType)
+            )
 
 
 
@@ -1165,6 +1196,30 @@ statusFromString str =
 
         _ ->
             Nothing
+
+
+{-| Get the name of an agent config.
+-}
+agentConfigName : AgentConfig -> String
+agentConfigName config =
+    when config is
+        InternalAgent r ->
+            r.name
+
+        UserDefinedAgent r ->
+            r.name
+
+
+{-| Check if an agent config is an internal agent.
+-}
+isInternalAgent : AgentConfig -> Bool
+isInternalAgent config =
+    when config is
+        InternalAgent _ ->
+            True
+
+        UserDefinedAgent _ ->
+            False
 
 
 {-| Check if two statuses are equal (for filtering).

@@ -7,7 +7,7 @@ import Id
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task
-import Types exposing (Task(..), TaskStatus(..), SourceInfo, Attachment, HandoffRecord)
+import Types exposing (Task(..), TaskStatus(..), AgentConfig(..), SourceInfo, Attachment, HandoffRecord)
 import Provider.ClaudeCode as ClaudeCode
 import Time
 
@@ -38,6 +38,14 @@ tests =
     , testToolCliFlagMultipleTools
     , testToolCliFlagSpacesInsideParens
     , testToolCliFlagNoParens
+    , testInternalAgentEncodeDecode
+    , testUserDefinedAgentEncodeDecodeWithoutModel
+    , testUserDefinedAgentEncodeDecodeWithModel
+    , testUnknownAgentTypeFailsToDecode
+    , testAgentConfigNameInternal
+    , testAgentConfigNameUserDefined
+    , testIsInternalAgentTrue
+    , testIsInternalAgentFalse
     ]
 
 
@@ -988,4 +996,186 @@ testToolCliFlagNoParens =
     { name = "toolCliFlagFromAllowedTools handles plain tool names without parentheses"
     , run =
         expectEqual "Bash Edit" (ClaudeCode.toolCliFlagFromAllowedTools "Bash Edit")
+    }
+
+
+-- AGENTCONFIG TESTS
+
+
+testInternalAgentEncodeDecode : { name : String, run : Task.Task String {} }
+testInternalAgentEncodeDecode =
+    { name = "InternalAgent encodes and decodes correctly"
+    , run =
+        let
+            config =
+                InternalAgent
+                    { name = "task-validator"
+                    , instructions = "Validate tasks"
+                    }
+
+            encoded =
+                Types.encodeAgentConfig config
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Types.agentConfigDecoder json
+        in
+        when decoded is
+            Ok decodedConfig ->
+                expectEqual config decodedConfig
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testUserDefinedAgentEncodeDecodeWithoutModel : { name : String, run : Task.Task String {} }
+testUserDefinedAgentEncodeDecodeWithoutModel =
+    { name = "UserDefinedAgent without model encodes and decodes correctly"
+    , run =
+        let
+            config =
+                UserDefinedAgent
+                    { name = "researcher"
+                    , instructions = "Research topics"
+                    , allowedTools = [ "web.search", "file.read" ]
+                    , provider = "claude-code"
+                    , model = Nothing
+                    }
+
+            encoded =
+                Types.encodeAgentConfig config
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Types.agentConfigDecoder json
+        in
+        when decoded is
+            Ok decodedConfig ->
+                expectEqual config decodedConfig
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testUserDefinedAgentEncodeDecodeWithModel : { name : String, run : Task.Task String {} }
+testUserDefinedAgentEncodeDecodeWithModel =
+    { name = "UserDefinedAgent with model encodes and decodes correctly"
+    , run =
+        let
+            config =
+                UserDefinedAgent
+                    { name = "writer"
+                    , instructions = "Write content"
+                    , allowedTools = [ "file.read", "file.write" ]
+                    , provider = "openai-compat"
+                    , model = Just "gpt-4"
+                    }
+
+            encoded =
+                Types.encodeAgentConfig config
+
+            json =
+                Encode.encode 0 encoded
+
+            decoded =
+                Decode.decodeString Types.agentConfigDecoder json
+        in
+        when decoded is
+            Ok decodedConfig ->
+                expectEqual config decodedConfig
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testUnknownAgentTypeFailsToDecode : { name : String, run : Task.Task String {} }
+testUnknownAgentTypeFailsToDecode =
+    { name = "Unknown agent type discriminator fails to decode"
+    , run =
+        let
+            json =
+                "{\"type\":\"unknown\",\"name\":\"bad-agent\",\"instructions\":\"Bad\"}"
+
+            decoded =
+                Decode.decodeString Types.agentConfigDecoder json
+        in
+        when decoded is
+            Ok _ ->
+                Task.fail "Decode should have failed but succeeded"
+
+            Err _ ->
+                Task.succeed {}
+    }
+
+
+testAgentConfigNameInternal : { name : String, run : Task.Task String {} }
+testAgentConfigNameInternal =
+    { name = "agentConfigName returns correct name for InternalAgent"
+    , run =
+        let
+            config =
+                InternalAgent
+                    { name = "task-validator"
+                    , instructions = "Validate tasks"
+                    }
+        in
+        expectEqual "task-validator" (Types.agentConfigName config)
+    }
+
+
+testAgentConfigNameUserDefined : { name : String, run : Task.Task String {} }
+testAgentConfigNameUserDefined =
+    { name = "agentConfigName returns correct name for UserDefinedAgent"
+    , run =
+        let
+            config =
+                UserDefinedAgent
+                    { name = "researcher"
+                    , instructions = "Research topics"
+                    , allowedTools = []
+                    , provider = "claude-code"
+                    , model = Nothing
+                    }
+        in
+        expectEqual "researcher" (Types.agentConfigName config)
+    }
+
+
+testIsInternalAgentTrue : { name : String, run : Task.Task String {} }
+testIsInternalAgentTrue =
+    { name = "isInternalAgent returns True for InternalAgent"
+    , run =
+        let
+            config =
+                InternalAgent
+                    { name = "task-validator"
+                    , instructions = "Validate tasks"
+                    }
+        in
+        expectEqual True (Types.isInternalAgent config)
+    }
+
+
+testIsInternalAgentFalse : { name : String, run : Task.Task String {} }
+testIsInternalAgentFalse =
+    { name = "isInternalAgent returns False for UserDefinedAgent"
+    , run =
+        let
+            config =
+                UserDefinedAgent
+                    { name = "researcher"
+                    , instructions = "Research topics"
+                    , allowedTools = []
+                    , provider = "claude-code"
+                    , model = Nothing
+                    }
+        in
+        expectEqual False (Types.isInternalAgent config)
     }

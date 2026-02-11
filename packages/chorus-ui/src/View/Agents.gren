@@ -11,7 +11,7 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Json.Decode
-import Types exposing (AgentConfig)
+import Types exposing (AgentConfig(..))
 
 
 {-| Form state for creating or editing an agent.
@@ -91,9 +91,35 @@ viewAgentsList props =
 
 viewAgentCard : Props msg -> AgentConfig -> Html msg
 viewAgentCard props agent =
+    let
+        name =
+            Types.agentConfigName agent
+
+        { instructions, providerText, toolsText } =
+            when agent is
+                UserDefinedAgent r ->
+                    { instructions = r.instructions
+                    , providerText =
+                        r.provider
+                            ++ (when r.model is
+                                    Just m ->
+                                        " / " ++ m
+
+                                    Nothing ->
+                                        ""
+                               )
+                    , toolsText = String.join ", " r.allowedTools
+                    }
+
+                InternalAgent r ->
+                    { instructions = r.instructions
+                    , providerText = "internal"
+                    , toolsText = ""
+                    }
+    in
     div [ class "agent-card card" ]
         [ div [ class "agent-card-header" ]
-            [ h3 [ class "agent-card-name" ] [ text agent.name ]
+            [ h3 [ class "agent-card-name" ] [ text name ]
             , div [ class "agent-card-actions" ]
                 [ button
                     [ class "btn btn-small btn-secondary"
@@ -102,35 +128,24 @@ viewAgentCard props agent =
                     [ text "Edit" ]
                 , button
                     [ class "btn btn-small btn-danger"
-                    , onClick (props.onDeleteAgent agent.name)
+                    , onClick (props.onDeleteAgent name)
                     ]
                     [ text "Delete" ]
                 ]
             ]
         , dl [ class "info-list" ]
             [ dt [] [ text "Provider" ]
-            , dd [ class "monospace" ]
-                [ text
-                    (agent.provider
-                        ++ (when agent.model is
-                                Just m ->
-                                    " / " ++ m
-
-                                Nothing ->
-                                    ""
-                           )
-                    )
-                ]
+            , dd [ class "monospace" ] [ text providerText ]
             , dt [] [ text "Allowed Tools" ]
-            , dd [ class "monospace" ] [ text (String.join ", " agent.allowedTools) ]
+            , dd [ class "monospace" ] [ text toolsText ]
             ]
         , div [ class "agent-card-instructions" ]
             [ h4 [] [ text "Instructions" ]
-            , if String.isEmpty agent.instructions then
+            , if String.isEmpty instructions then
                 p [ class "empty-state-text" ] [ text "No instructions" ]
               else
                 pre [ class "agent-instructions-preview" ]
-                    [ text (truncateInstructions 300 agent.instructions) ]
+                    [ text (truncateInstructions 300 instructions) ]
             ]
         ]
 
