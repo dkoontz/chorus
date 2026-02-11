@@ -9,12 +9,13 @@ Replace the environment-variable-based configuration with a file-based workspace
 ### Config file (`chorus.json`)
 - New JSON config file format stored at a user-chosen filesystem path
 - File is named `chorus.json` and contains all workspace-level settings
-- Settings include: data directory, agents directory, allowed agent directories (array), initial agent directory
+- Settings include: data directory, agents directory, allowed agent directories (array), initial agent directory, system agent provider
 - Defaults are relative to the config file's parent directory:
   - Data directory: `<config_dir>/data`
   - Agents directory: `<config_dir>/agents`
   - Allowed agent directories: `[ "<config_dir>/agent_workspace" ]`
   - Initial agent directory: `<config_dir>/agent_workspace`
+  - System agent provider: not configured (no default — user must select one)
 - A single environment variable `CHORUS_CONFIG` can specify a config file path for headless/testing use; when set, the app loads that config at startup instead of requiring UI selection
 
 ### Backend API endpoints
@@ -25,7 +26,7 @@ Replace the environment-variable-based configuration with a file-based workspace
 
 ### Workspaces tab (UI)
 - New tab in the header navigation, alongside Board and Agents
-- On app startup (and whenever no config is loaded), the Workspaces tab is automatically selected and other tabs (Board, Agents) are disabled/non-clickable
+- On app startup (and whenever no config is loaded), the Workspaces tab is automatically selected and other tabs (Board, Agents, Providers, System Settings) are disabled/non-clickable
 - UI shows two actions: "Open Workspace" and "New Workspace"
 - "Open Workspace": text input for the user to enter the full path to a `chorus.json` file, plus an "Open" button. Calls `POST /api/config/select`
 - "New Workspace": text input for the user to enter a directory path where the workspace should be created, plus a "Create" button. Calls `POST /api/config/create`
@@ -39,6 +40,7 @@ Replace the environment-variable-based configuration with a file-based workspace
   - **Agents directory** (text input)
   - **Allowed agent directories** (list of text inputs with add/remove buttons)
   - **Initial agent directory** (text input)
+  - **System agent provider** (dropdown populated from provider registry, plus a "Not Configured" option) — the provider used by all built-in/internal agents (e.g., task planner). Uses the `AgentProvider` type (`NotConfigured | ProviderRef String`).
 - Has a "Save" button that calls `PUT /api/config` to persist changes
 - Validates that Initial agent directory is one of the allowed agent directories before saving
 
@@ -49,12 +51,29 @@ Replace the environment-variable-based configuration with a file-based workspace
 - The initial agent directory is used as the agent's starting working directory (replaces `workspaceRoot` in `--add-dir`)
 - `Tools.Validation` validates file paths against the allowed agent directories instead of a single workspace root
 
+### Internal/system agent provider
+- Built-in agents (e.g., task planner/validator) currently have a hardcoded execution path in Main.gren that directly spawns claude-code
+- This is replaced by the `systemAgentProvider` setting in `chorus.json`, which references a provider from the provider registry
+- The `makeProvider` function for internal agents should look up the system agent provider from the workspace config instead of hardcoding ClaudeCode
+- If the system agent provider is `NotConfigured`, internal agents cannot run — the system should return an appropriate error when an operation requires a system agent (e.g., task validation)
+
+### Registry initialization changes
+- All registries (task registry, agent registry, provider registry) must defer initialization until a workspace config is loaded
+- Registry root paths derive from the workspace config's data directory:
+  - Task registry: `<dataDirectory>/registry`
+  - Agent registry: `<agentsDirectory>` (from workspace config)
+  - Provider registry: `<dataDirectory>/providers`
+  - Upload directory: `<dataDirectory>/uploads`
+- The existing 503 pattern for uninitialized registries (`model.registry` is `Nothing`) already covers this case and should be extended to all registries
+
 ### Config module changes
 - The existing `Config.gren` type and `configFromEnv` must be reworked:
-  - Remove `workspacesRoot` from the `Config` type
-  - Remove env vars except: `CHORUS_HOST`, `CHORUS_PORT`, `CHORUS_STATIC_DIR`, `CHORUS_LOG_LEVEL`, `CHORUS_TOOLS_PATH`, `CHORUS_CONFIG`
+  - Remove `workspacesRoot`, `registryRoot`, `agentsRoot`, `providersRoot`, `uploadDir` from the `Config` type (these all derive from the workspace config's data directory now)
+  - Remove `CHORUS_DATA_DIR` env var (data directory now comes from `chorus.json`)
+  - Keep env vars: `CHORUS_HOST`, `CHORUS_PORT`, `CHORUS_STATIC_DIR`, `CHORUS_LOG_LEVEL`, `CHORUS_TOOLS_PATH`
+  - Add new env var: `CHORUS_CONFIG` - path to a `chorus.json` file for headless/testing startup
   - Add fields for workspace config state: loaded config file path, data directory, agents directory, allowed agent directories, initial agent directory
-  - `CHORUS_API_BASE_URL`, `CHORUS_API_KEY`, `CHORUS_DEFAULT_MODEL` remain as they are (provider config, not workspace config)
+  - Note: `CHORUS_API_BASE_URL`, `CHORUS_API_KEY`, `CHORUS_DEFAULT_MODEL` were already removed by the provider-configuration-ui task. Provider config is now stored in `data/providers/` via the Provider Registry.
 
 ## Acceptance Criteria
 
@@ -66,9 +85,14 @@ Replace the environment-variable-based configuration with a file-based workspace
 - [ ] Saving in System Settings persists changes to the `chorus.json` file on disk
 - [ ] Initial agent directory must be one of the allowed agent directories (validated in UI before save and on backend)
 - [ ] `CHORUS_CONFIG` env var pre-loads a config file at startup, skipping the Workspaces selection step
+- [ ] All registries (task, agent, provider) defer initialization until workspace config is loaded
+- [ ] Provider registry root derives from workspace config data directory (`<dataDirectory>/providers`)
 - [ ] Agents spawn with the initial agent directory as their working directory instead of a per-task workspace
 - [ ] File tools validate paths against the allowed agent directories instead of a per-task workspace root
 - [ ] Per-task workspace directories (`workspacesRoot/<taskId>`) are no longer created
+- [ ] System agent provider setting is configurable in System Settings tab (dropdown from provider registry)
+- [ ] Internal agents (task planner/validator) use the system agent provider from workspace config instead of hardcoded ClaudeCode
+- [ ] If system agent provider is `NotConfigured`, operations requiring internal agents return a descriptive error
 - [ ] The app builds successfully (`npm run build:all`)
 - [ ] Existing unit tests pass or are updated to reflect the new config structure
 
@@ -78,21 +102,24 @@ Replace the environment-variable-based configuration with a file-based workspace
 - Recent workspaces list or auto-reload of last workspace
 - Browser-native file picker dialogs (use text path input since config files are server-side)
 - Migrating existing workspace data
-- Changes to `CHORUS_API_BASE_URL`, `CHORUS_API_KEY`, or `CHORUS_DEFAULT_MODEL` (these remain as env vars for provider config)
+- Changes to provider configuration (handled by the separate provider-configuration-ui task; providers are stored in `<dataDirectory>/providers/`)
 
 ## Technical Context
 
 ### Files to Modify
 
 - `packages/shared/Types.gren` - Add `WorkspaceConfig` type with encoder/decoder for the new config format
-- `packages/chorus/src/Config.gren` - Rework `Config` type: remove `workspacesRoot`, add workspace config fields, add `CHORUS_CONFIG` env var support
-- `packages/chorus/src/Main.gren` - Add workspace config state to `Model`, new `Msg` variants for config API, conditional initialization (defer registry/agent-registry init until config is loaded), update agent spawn to use allowed dirs and initial agent dir instead of per-task workspace
+- `packages/chorus/src/Config.gren` - Rework `Config` type: remove `workspacesRoot`, `registryRoot`, `agentsRoot`, `providersRoot`, `uploadDir`; add workspace config fields; replace `CHORUS_DATA_DIR` with `CHORUS_CONFIG` env var support
+- `packages/chorus/src/Main.gren` - Add workspace config state to `Model`, new `Msg` variants for config API, defer ALL registry initialization (task, agent, provider) until config is loaded, update agent spawn to use allowed dirs and initial agent dir instead of per-task workspace
 - `packages/chorus/src/Web/Router.gren` - Add routes: `GetConfig`, `UpdateConfig`, `SelectConfig`, `CreateConfig`
-- `packages/chorus/src/Web/Api.gren` - Add request handlers for the four config API endpoints; add `WorkspaceConfig` read/write/create logic
+- `packages/chorus/src/Web/Api.gren` - Add request handlers for the four config API endpoints; add `WorkspaceConfig` read/write/create logic; update registry initialization to use workspace config paths
 - `packages/chorus/src/Web/ToolExecution.gren` - Change `ToolExecutionContext.workspaceRoot` to use allowed directories; update `dispatchFileTool` to pass allowed directories instead of single workspace root
 - `packages/tools/src/Tools/Validation.gren` - Replace single `WorkspaceRoot` with multiple allowed directories; `validatePath` checks against any of the allowed directories
 - `packages/tools/src/Tools/File.gren` - Update function signatures to accept the new validation type (allowed directories instead of single workspace root)
-- `packages/chorus-ui/src/Main.gren` - Add `WorkspacesPage` and `SystemSettingsPage` to `Page` type, add workspace config state to `Model`, add `Msg` variants for config operations, disable tabs when no config loaded, update `viewHeader` navigation
+- `packages/chorus/src/Provider/Registry.gren` - Update to accept root path at initialization time (derived from workspace config data directory) instead of from static Config
+- `packages/chorus/src/Agent/Registry.gren` - Update to accept root path from workspace config agents directory
+- `packages/chorus/src/Task/Registry.gren` - Update to accept root path from workspace config data directory
+- `packages/chorus-ui/src/Main.gren` - Add `WorkspacesPage` and `SystemSettingsPage` to `Page` type, add workspace config state to `Model`, add `Msg` variants for config operations, disable tabs (Board, Agents, Providers, System Settings) when no config loaded, update `viewHeader` navigation
 - `packages/chorus-ui/src/Api.gren` - Add API client functions: `getConfig`, `updateConfig`, `selectConfig`, `createConfig`
 - `packages/chorus-ui/src/View/Workspaces.gren` - New file: Workspaces tab view with Open/Create workspace UI
 - `packages/chorus-ui/src/View/SystemSettings.gren` - New file: System Settings tab view with editable config fields and Save button
@@ -101,14 +128,13 @@ Replace the environment-variable-based configuration with a file-based workspace
 
 ### Related Files (reference only)
 
-- `packages/chorus/src/Agent/Registry.gren` - Uses `agentsRoot` from config; will now derive from workspace config
-- `packages/chorus/src/Task/Registry.gren` - Uses `registryRoot` from config; will now derive from workspace config data directory
 - `packages/chorus/src/Agent/Executor.gren` - Uses `workspaceRoot` in `Config` type; needs update for allowed directories
 - `packages/chorus/src/Provider/ClaudeCode.gren` - Uses `workspaceRoot` in `CliArgs` and `buildShellCommand` for `--add-dir`; needs update
 - `packages/chorus/src/Provider/OpenCode.gren` - May use workspace root similarly
-- `packages/chorus/src/Provider/OpenAiCompat.gren` - Uses `conversationsDir` derived from `workspacesRoot`
+- `packages/chorus/src/Provider/OpenAiCompatible.gren` - Uses `conversationsDir` derived from `workspacesRoot`; should move to `<dataDirectory>/conversations`
 - `packages/chorus-ui/src/View/Agents.gren` - Reference for existing tab/view patterns
 - `packages/chorus-ui/src/View/Board.gren` - Reference for existing tab/view patterns
+- `packages/chorus-ui/src/View/Providers.gren` - Reference for existing tab/view patterns (added by provider-configuration-ui task)
 
 ### Patterns to Follow
 
@@ -144,7 +170,7 @@ Replace the environment-variable-based configuration with a file-based workspace
 ## Notes
 
 - **File picker is path-based**: Since the UI runs in the browser and config files are on the server filesystem, there is no browser file picker. The user types a filesystem path. This is the simplest approach.
-- **Deferred initialization**: Currently the app initializes the task registry and agent registry in `init`. With the workspace config system, these must be deferred until a config is loaded (either via `CHORUS_CONFIG` env var or UI selection). The server should still start and serve the UI, but API routes that depend on the registry should return 503 until a workspace is loaded -- this pattern already exists in `handleRoute` when `model.registry` is `Nothing`.
+- **Deferred initialization**: Currently the app initializes the task registry, agent registry, and provider registry in `init`. With the workspace config system, ALL three registries must be deferred until a config is loaded (either via `CHORUS_CONFIG` env var or UI selection). The server should still start and serve the UI, but API routes that depend on registries should return 503 until a workspace is loaded -- this pattern already exists in `handleRoute` when `model.registry` is `Nothing`.
 - **No per-task workspaces**: The concept of `workspacesRoot/<taskId>` directories is removed. The `registryRoot` (task data files) still lives under the data directory. Agent file operations use the allowed directories list.
 - **Allowed directories as array**: `Tools.Validation` must accept an array of allowed directories. A path is valid if it resolves within any one of them. The `WorkspaceRoot` opaque type should be renamed/reworked to `AllowedDirectories` or similar.
 - **Config file format**: The `chorus.json` file should look like:
@@ -153,8 +179,11 @@ Replace the environment-variable-based configuration with a file-based workspace
     "dataDirectory": "/path/to/data",
     "agentsDirectory": "/path/to/agents",
     "allowedAgentDirectories": ["/path/to/agent_workspace"],
-    "initialAgentDirectory": "/path/to/agent_workspace"
+    "initialAgentDirectory": "/path/to/agent_workspace",
+    "systemAgentProvider": "not-configured"
   }
   ```
-- **OpenAI-compat conversations**: The `conversationsDir` in `Provider.OpenAiCompat` currently derives from `workspacesRoot`. This should move to a subdirectory of the data directory (e.g., `<dataDirectory>/conversations`).
-- **This is a large task**: Consider breaking the implementation into sequential commits: (1) config file + backend API, (2) UI workspaces tab, (3) UI system settings tab, (4) agent behavior changes + validation rework.
+  The `systemAgentProvider` field uses the same encoding as `AgentProvider`: `"not-configured"` or a provider name string (e.g., `"my-claude-code"`).
+- **OpenAI-compat conversations**: The `conversationsDir` in `Provider.OpenAiCompatible` currently derives from `workspacesRoot`. This should move to a subdirectory of the data directory (e.g., `<dataDirectory>/conversations`).
+- **System agent provider replaces hardcoded ClaudeCode**: The `providerConfig : ClaudeCode.Config` field on Model and the hardcoded claude-code spawning for the task-validator should be replaced. Instead, `makeProvider` for internal agents looks up the `systemAgentProvider` from the workspace config in the provider registry. This removes the last hardcoded provider dependency.
+- **This is a large task**: Consider breaking the implementation into sequential commits: (1) config file + backend API, (2) UI workspaces tab, (3) UI system settings tab, (4) agent behavior changes + validation rework + system agent provider.
