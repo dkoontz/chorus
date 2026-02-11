@@ -336,12 +336,12 @@ makeProvider model agentConfig maybeProviderConfig =
                                 Types.OpenAiCompatible config ->
                                     let
                                         conversationsDir =
-                                            when model.workspaceConfig is
-                                                Just wc ->
-                                                    wc.dataDirectory ++ "/conversations"
+                                            when model.workspaceConfigPath is
+                                                Just configPath ->
+                                                    parentDirectory configPath ++ "/conversations"
 
                                                 Nothing ->
-                                                    "./conversations"
+                                                    Debug.todo "conversationsDir called without a loaded workspace config"
                                     in
                                     Just
                                         (OpenAiCompatible.provider
@@ -547,12 +547,12 @@ update msg model =
                                             []
 
                                 registryRoot =
-                                    when model.workspaceConfig is
-                                        Just wc ->
-                                            wc.dataDirectory ++ "/registry"
+                                    when model.workspaceConfigPath is
+                                        Just configPath ->
+                                            parentDirectory configPath ++ "/registry"
 
                                         Nothing ->
-                                            "./data/registry"
+                                            Debug.todo "registryRoot called without a loaded workspace config"
 
                                 toolCtx =
                                     { filesystemPermission = model.filesystemPermission
@@ -1220,15 +1220,18 @@ update msg model =
 
                 Ok { config, configPath } ->
                     let
-                        -- Derive registry paths from workspace config
+                        -- Derive paths from workspace root (parent of chorus.json)
+                        configRoot =
+                            parentDirectory configPath
+
                         registryRoot =
-                            config.dataDirectory ++ "/registry"
+                            configRoot ++ "/registry"
 
                         providersRoot =
-                            config.dataDirectory ++ "/providers"
+                            configRoot ++ "/providers"
 
                         uploadDirPath =
-                            config.dataDirectory ++ "/uploads"
+                            configRoot ++ "/uploads"
 
                         -- Initialize all registries
                         initRegistryCmd =
@@ -2275,34 +2278,52 @@ questionsResultDecoder =
 -- WORKSPACE CONFIG
 
 
-{-| Derive the registry root path from workspace config.
+{-| Return the parent directory of a file path by stripping the last segment.
+
+For example, `parentDirectory "/home/user/chorus.json"` returns `"/home/user"`.
+-}
+parentDirectory : String -> String
+parentDirectory path =
+    path
+        |> String.split "/"
+        |> Array.dropLast 1
+        |> String.join "/"
+
+
+{-| Derive the workspace root directory from the config file path.
+
+Strips the filename (chorus.json) from the config path to get the directory.
+This function is only called in code paths where a workspace config is loaded
+(guarded by model.registry being Just), so the Nothing branch is unreachable.
+-}
+workspaceRoot : Model -> String
+workspaceRoot model =
+    when model.workspaceConfigPath is
+        Just configPath ->
+            parentDirectory configPath
+
+        Nothing ->
+            Debug.todo "workspaceRoot called without a loaded workspace config"
+
+
+{-| Derive the registry root path from workspace root.
 
 This function is only called in code paths where a workspace config is loaded
 (guarded by model.registry being Just), so the Nothing branch is unreachable.
 -}
 registryRootPath : Model -> Path
 registryRootPath model =
-    when model.workspaceConfig is
-        Just workspaceConfig ->
-            Path.fromPosixString (workspaceConfig.dataDirectory ++ "/registry")
-
-        Nothing ->
-            Debug.todo "registryRootPath called without a loaded workspace config"
+    Path.fromPosixString (workspaceRoot model ++ "/registry")
 
 
-{-| Derive the upload directory from workspace config.
+{-| Derive the upload directory from workspace root.
 
 This function is only called in code paths where a workspace config is loaded
 (guarded by model.registry being Just), so the Nothing branch is unreachable.
 -}
 uploadDir : Model -> String
 uploadDir model =
-    when model.workspaceConfig is
-        Just workspaceConfig ->
-            workspaceConfig.dataDirectory ++ "/uploads"
-
-        Nothing ->
-            Debug.todo "uploadDir called without a loaded workspace config"
+    workspaceRoot model ++ "/uploads"
 
 
 {-| Get the initial agent directory from workspace config.
@@ -2380,10 +2401,9 @@ createWorkspaceConfig filesystemPermission dirPath =
             dirPath ++ "/chorus.json"
 
         wsConfig =
-            { dataDirectory = dirPath ++ "/data"
-            , agentsDirectory = dirPath ++ "/agents"
-            , allowedAgentDirectories = [ dirPath ++ "/agent_workspace" ]
-            , initialAgentDirectory = dirPath ++ "/agent_workspace"
+            { agentsDirectory = dirPath ++ "/agents"
+            , allowedAgentDirectories = []
+            , initialAgentDirectory = ""
             , systemAgentProvider = NotConfigured
             , serverPort = Nothing
             }
@@ -2405,9 +2425,7 @@ createWorkspaceConfig filesystemPermission dirPath =
                 |> GrenTask.mapError (\err -> FileSystem.errorToString err)
     in
     ensureDir dirPath
-        |> GrenTask.andThen (\_ -> ensureDir wsConfig.dataDirectory)
         |> GrenTask.andThen (\_ -> ensureDir wsConfig.agentsDirectory)
-        |> GrenTask.andThen (\_ -> ensureDir wsConfig.initialAgentDirectory)
         |> GrenTask.andThen
             (\_ ->
                 FileSystem.writeFile filesystemPermission bytes configFilePath
@@ -2463,7 +2481,7 @@ handleUpdateConfig model request response =
                     sendBadRequest response "Invalid JSON body for config update"
 
                 Ok newConfig ->
-                    if not (Array.any (\dir -> dir == newConfig.initialAgentDirectory) newConfig.allowedAgentDirectories) then
+                    if not (String.isEmpty newConfig.initialAgentDirectory || Array.any (\dir -> dir == newConfig.initialAgentDirectory) newConfig.allowedAgentDirectories) then
                         sendBadRequest response "initialAgentDirectory must be one of the allowedAgentDirectories"
                     else
                         saveWorkspaceConfig model.filesystemPermission currentConfigPath newConfig

@@ -192,7 +192,6 @@ type Msg
     | SelectConfig
     | CreateConfig
       -- System settings
-    | UpdateSettingsDataDirectory String
     | UpdateSettingsAgentsDirectory String
     | UpdateSettingsAllowedDir { index : Int, value : String }
     | AddSettingsAllowedDir
@@ -1357,15 +1356,6 @@ update msg model =
 
         -- System settings
 
-        UpdateSettingsDataDirectory val ->
-            { model =
-                { model
-                    | settingsForm =
-                        Maybe.map (\f -> { f | dataDirectory = val }) model.settingsForm
-                }
-            , command = Cmd.none
-            }
-
         UpdateSettingsAgentsDirectory val ->
             { model =
                 { model
@@ -1458,7 +1448,8 @@ update msg model =
                 Just form ->
                     let
                         initialDirInAllowed =
-                            Array.any (\d -> d == form.initialAgentDirectory) form.allowedAgentDirectories
+                            String.isEmpty form.initialAgentDirectory
+                                || Array.any (\d -> d == form.initialAgentDirectory) form.allowedAgentDirectories
                     in
                     if not initialDirInAllowed then
                         { model =
@@ -1502,8 +1493,7 @@ update msg model =
                             Ok parsedPort ->
                                 let
                                     wc =
-                                        { dataDirectory = form.dataDirectory
-                                        , agentsDirectory = form.agentsDirectory
+                                        { agentsDirectory = form.agentsDirectory
                                         , allowedAgentDirectories = form.allowedAgentDirectories
                                         , initialAgentDirectory = form.initialAgentDirectory
                                         , systemAgentProvider = provider
@@ -1739,7 +1729,6 @@ viewMain model =
                     , providers = model.providers
                     , loading = model.loading
                     , validationError = model.settingsValidationError
-                    , onUpdateDataDirectory = UpdateSettingsDataDirectory
                     , onUpdateAgentsDirectory = UpdateSettingsAgentsDirectory
                     , onUpdateAllowedDir = UpdateSettingsAllowedDir
                     , onAddAllowedDir = AddSettingsAllowedDir

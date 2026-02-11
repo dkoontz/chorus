@@ -328,8 +328,7 @@ where agents live, which directories agents can access, and which
 provider to use for internal/system agents.
 -}
 type alias WorkspaceConfig =
-    { dataDirectory : String
-    , agentsDirectory : String
+    { agentsDirectory : String
     , allowedAgentDirectories : Array String
     , initialAgentDirectory : String
     , systemAgentProvider : AgentProvider
@@ -1339,8 +1338,7 @@ encodeWorkspaceConfig : WorkspaceConfig -> Encode.Value
 encodeWorkspaceConfig config =
     let
         requiredFields =
-            [ { key = "dataDirectory", value = Encode.string config.dataDirectory }
-            , { key = "agentsDirectory", value = Encode.string config.agentsDirectory }
+            [ { key = "agentsDirectory", value = Encode.string config.agentsDirectory }
             , { key = "allowedAgentDirectories", value = Encode.array Encode.string config.allowedAgentDirectories }
             , { key = "initialAgentDirectory", value = Encode.string config.initialAgentDirectory }
             , { key = "systemAgentProvider", value = encodeAgentProvider config.systemAgentProvider }
@@ -1361,17 +1359,15 @@ encodeWorkspaceConfig config =
 -}
 workspaceConfigDecoder : Decoder WorkspaceConfig
 workspaceConfigDecoder =
-    Decode.map5
-        (\dataDirectory agentsDirectory allowedAgentDirectories initialAgentDirectory systemAgentProvider ->
-            { dataDirectory = dataDirectory
-            , agentsDirectory = agentsDirectory
+    Decode.map4
+        (\agentsDirectory allowedAgentDirectories initialAgentDirectory systemAgentProvider ->
+            { agentsDirectory = agentsDirectory
             , allowedAgentDirectories = allowedAgentDirectories
             , initialAgentDirectory = initialAgentDirectory
             , systemAgentProvider = systemAgentProvider
             , serverPort = Nothing
             }
         )
-        (Decode.field "dataDirectory" Decode.string)
         (Decode.field "agentsDirectory" Decode.string)
         (Decode.field "allowedAgentDirectories" (Decode.array Decode.string))
         (Decode.field "initialAgentDirectory" Decode.string)
