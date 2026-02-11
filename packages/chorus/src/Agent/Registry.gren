@@ -34,7 +34,7 @@ import Types exposing (AgentConfig, encodeAgentConfig, agentConfigDecoder)
 -}
 type AgentRegistry
     = AgentRegistry
-        { fsPermission : FileSystem.Permission
+        { filesystemPermission : FileSystem.Permission
         , agentsRoot : Path
         }
 
@@ -56,27 +56,27 @@ type Error
 Creates `data/agents/` if missing, seeds default configs when the directory is empty.
 -}
 init : FileSystem.Permission -> { agentsRoot : String } -> GrenTask.Task Error AgentRegistry
-init fsPermission config =
+init filesystemPermission config =
     let
         agentsPath =
             Path.fromPosixString config.agentsRoot
 
         registry =
             AgentRegistry
-                { fsPermission = fsPermission
+                { filesystemPermission = filesystemPermission
                 , agentsRoot = agentsPath
                 }
     in
-    ensureDirectoryExists fsPermission agentsPath
-        |> GrenTask.andThen (\_ -> seedDefaultsIfEmpty fsPermission agentsPath)
+    ensureDirectoryExists filesystemPermission agentsPath
+        |> GrenTask.andThen (\_ -> seedDefaultsIfEmpty filesystemPermission agentsPath)
         |> GrenTask.map (\_ -> registry)
 
 
 {-| Ensure a directory exists, creating it if necessary.
 -}
 ensureDirectoryExists : FileSystem.Permission -> Path -> GrenTask.Task Error {}
-ensureDirectoryExists fsPermission path =
-    FileSystem.makeDirectory fsPermission { recursive = True } path
+ensureDirectoryExists filesystemPermission path =
+    FileSystem.makeDirectory filesystemPermission { recursive = True } path
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
         |> GrenTask.map (\_ -> {})
 
@@ -84,8 +84,8 @@ ensureDirectoryExists fsPermission path =
 {-| Seed default agent configs if the agents directory is empty.
 -}
 seedDefaultsIfEmpty : FileSystem.Permission -> Path -> GrenTask.Task Error {}
-seedDefaultsIfEmpty fsPermission agentsPath =
-    FileSystem.listDirectory fsPermission agentsPath
+seedDefaultsIfEmpty filesystemPermission agentsPath =
+    FileSystem.listDirectory filesystemPermission agentsPath
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
         |> GrenTask.andThen
             (\entries ->
@@ -95,7 +95,7 @@ seedDefaultsIfEmpty fsPermission agentsPath =
                             |> Array.keepIf (\entry -> String.endsWith ".json" (Path.toPosixString entry.path))
                 in
                 if Array.isEmpty jsonFiles then
-                    seedDefaults fsPermission agentsPath
+                    seedDefaults filesystemPermission agentsPath
                 else
                     GrenTask.succeed {}
             )
@@ -104,7 +104,7 @@ seedDefaultsIfEmpty fsPermission agentsPath =
 {-| Write default configs for the six known agents.
 -}
 seedDefaults : FileSystem.Permission -> Path -> GrenTask.Task Error {}
-seedDefaults fsPermission agentsPath =
+seedDefaults filesystemPermission agentsPath =
     let
         defaults =
             [ { name = "researcher"
@@ -155,7 +155,7 @@ seedDefaults fsPermission agentsPath =
         |> Array.foldl
             (\config acc ->
                 acc
-                    |> GrenTask.andThen (\_ -> writeAgentConfig fsPermission agentsPath config)
+                    |> GrenTask.andThen (\_ -> writeAgentConfig filesystemPermission agentsPath config)
             )
             (GrenTask.succeed {})
 
@@ -205,7 +205,7 @@ getAgent (AgentRegistry config) name =
         filePath =
             Path.append (Path.fromPosixString (name ++ ".json")) config.agentsRoot
     in
-    readAgentConfigFile config.fsPermission filePath
+    readAgentConfigFile config.filesystemPermission filePath
         |> GrenTask.onError
             (\err ->
                 when err is
@@ -224,7 +224,7 @@ getAgent (AgentRegistry config) name =
 -}
 listAgents : AgentRegistry -> GrenTask.Task Error (Array AgentConfig)
 listAgents (AgentRegistry config) =
-    FileSystem.listDirectory config.fsPermission config.agentsRoot
+    FileSystem.listDirectory config.filesystemPermission config.agentsRoot
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
         |> GrenTask.andThen
             (\entries ->
@@ -243,7 +243,7 @@ listAgents (AgentRegistry config) =
                                             filePath =
                                                 Path.append entry.path config.agentsRoot
                                         in
-                                        readAgentConfigFile config.fsPermission filePath
+                                        readAgentConfigFile config.filesystemPermission filePath
                                             |> GrenTask.map (\agentConfig -> Array.pushLast agentConfig configs)
                                     )
                         )
@@ -255,7 +255,7 @@ listAgents (AgentRegistry config) =
 -}
 updateAgent : AgentRegistry -> AgentConfig -> GrenTask.Task Error AgentConfig
 updateAgent (AgentRegistry config) agentConfig =
-    writeAgentConfig config.fsPermission config.agentsRoot agentConfig
+    writeAgentConfig config.filesystemPermission config.agentsRoot agentConfig
         |> GrenTask.map (\_ -> agentConfig)
 
 
@@ -267,7 +267,7 @@ deleteAgent (AgentRegistry config) name =
         filePath =
             Path.append (Path.fromPosixString (name ++ ".json")) config.agentsRoot
     in
-    FileSystem.remove config.fsPermission { recursive = False } filePath
+    FileSystem.remove config.filesystemPermission { recursive = False } filePath
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
         |> GrenTask.map (\_ -> {})
         |> GrenTask.onError
@@ -306,7 +306,7 @@ errorToString err =
 {-| Write a single agent config file.
 -}
 writeAgentConfig : FileSystem.Permission -> Path -> AgentConfig -> GrenTask.Task Error {}
-writeAgentConfig fsPermission agentsPath agentConfig =
+writeAgentConfig filesystemPermission agentsPath agentConfig =
     let
         filePath =
             Path.append (Path.fromPosixString (agentConfig.name ++ ".json")) agentsPath
@@ -318,7 +318,7 @@ writeAgentConfig fsPermission agentsPath agentConfig =
         bytes =
             Bytes.fromString json
     in
-    FileSystem.writeFile fsPermission bytes filePath
+    FileSystem.writeFile filesystemPermission bytes filePath
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
         |> GrenTask.map (\_ -> {})
 
@@ -326,8 +326,8 @@ writeAgentConfig fsPermission agentsPath agentConfig =
 {-| Read and decode an agent config from a file path.
 -}
 readAgentConfigFile : FileSystem.Permission -> Path -> GrenTask.Task Error AgentConfig
-readAgentConfigFile fsPermission filePath =
-    FileSystem.readFile fsPermission filePath
+readAgentConfigFile filesystemPermission filePath =
+    FileSystem.readFile filesystemPermission filePath
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
         |> GrenTask.andThen
             (\bytes ->

@@ -39,12 +39,12 @@ main =
 init : Node.Environment -> Init.Task (Cmd a)
 init env =
     Init.await ChildProcess.initialize <|
-        \cpPermission ->
-            runTool env cpPermission
+        \childProcessPermission ->
+            runTool env childProcessPermission
 
 
 runTool : Node.Environment -> ChildProcess.Permission -> Init.Task (Cmd a)
-runTool env cpPermission =
+runTool env childProcessPermission =
     when env.args is
         [ _, _, _, jsonInput ] ->
             when TaskJson.decodeTaskToolRequest jsonInput is
@@ -52,7 +52,7 @@ runTool env cpPermission =
                     outputError env ("Invalid JSON input: " ++ decodeError)
 
                 Ok request ->
-                    executeRequest env cpPermission request
+                    executeRequest env childProcessPermission request
 
         _ ->
             outputError env "Usage: task-tools <workspace_root> <json_input>. Use {\"tool\":\"help\"} for available commands."
@@ -63,16 +63,16 @@ executeRequest :
     -> ChildProcess.Permission
     -> TaskToolRequest
     -> Init.Task (Cmd a)
-executeRequest env cpPermission request =
+executeRequest env childProcessPermission request =
     when request is
         TaskGetRequest input ->
-            TaskStatus.getTask cpPermission input
+            TaskStatus.getTask childProcessPermission input
                 |> Task.map encodeTaskGetOutput
                 |> Task.mapError TaskStatus.taskStatusErrorToString
                 |> handleResult env
 
         TaskListRequest input ->
-            TaskStatus.listTasks cpPermission input
+            TaskStatus.listTasks childProcessPermission input
                 |> Task.map encodeTaskListOutput
                 |> Task.mapError TaskStatus.taskStatusErrorToString
                 |> handleResult env

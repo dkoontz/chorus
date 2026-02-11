@@ -62,7 +62,7 @@ enqueue :
     -> TaskId
     -> String
     -> GrenTask.Task Error QueuedMessage
-enqueue fsPermission secureContext taskDir taskId content =
+enqueue filesystemPermission secureContext taskDir taskId content =
     let
         queuePath =
             Path.append (Path.fromPosixString "queue.json") taskDir
@@ -86,7 +86,7 @@ enqueue fsPermission secureContext taskDir taskId content =
                                     }
                                 }
                             )
-                            (readQueue fsPermission queuePath)
+                            (readQueue filesystemPermission queuePath)
                             Time.now
             )
         |> GrenTask.andThen
@@ -95,7 +95,7 @@ enqueue fsPermission secureContext taskDir taskId content =
                     updatedQueue =
                         { queue | messages = Array.pushLast message queue.messages }
                 in
-                writeQueue fsPermission queuePath updatedQueue
+                writeQueue filesystemPermission queuePath updatedQueue
                     |> GrenTask.map (\_ -> message)
             )
 
@@ -106,12 +106,12 @@ dequeue :
     FileSystem.Permission
     -> Path
     -> GrenTask.Task Error (Maybe QueuedMessage)
-dequeue fsPermission taskDir =
+dequeue filesystemPermission taskDir =
     let
         queuePath =
             Path.append (Path.fromPosixString "queue.json") taskDir
     in
-    readQueue fsPermission queuePath
+    readQueue filesystemPermission queuePath
         |> GrenTask.andThen
             (\queue ->
                 when Array.first queue.messages is
@@ -123,7 +123,7 @@ dequeue fsPermission taskDir =
                             updatedQueue =
                                 { queue | messages = Array.dropFirst 1 queue.messages }
                         in
-                        writeQueue fsPermission queuePath updatedQueue
+                        writeQueue filesystemPermission queuePath updatedQueue
                             |> GrenTask.map (\_ -> Just message)
             )
 
@@ -134,12 +134,12 @@ peek :
     FileSystem.Permission
     -> Path
     -> GrenTask.Task Error (Maybe QueuedMessage)
-peek fsPermission taskDir =
+peek filesystemPermission taskDir =
     let
         queuePath =
             Path.append (Path.fromPosixString "queue.json") taskDir
     in
-    readQueue fsPermission queuePath
+    readQueue filesystemPermission queuePath
         |> GrenTask.map (\queue -> Array.first queue.messages)
 
 
@@ -149,12 +149,12 @@ isEmpty :
     FileSystem.Permission
     -> Path
     -> GrenTask.Task Error Bool
-isEmpty fsPermission taskDir =
+isEmpty filesystemPermission taskDir =
     let
         queuePath =
             Path.append (Path.fromPosixString "queue.json") taskDir
     in
-    readQueue fsPermission queuePath
+    readQueue filesystemPermission queuePath
         |> GrenTask.map (\queue -> Array.isEmpty queue.messages)
 
 
@@ -164,12 +164,12 @@ length :
     FileSystem.Permission
     -> Path
     -> GrenTask.Task Error Int
-length fsPermission taskDir =
+length filesystemPermission taskDir =
     let
         queuePath =
             Path.append (Path.fromPosixString "queue.json") taskDir
     in
-    readQueue fsPermission queuePath
+    readQueue filesystemPermission queuePath
         |> GrenTask.map (\queue -> Array.length queue.messages)
 
 
@@ -180,8 +180,8 @@ length fsPermission taskDir =
 {-| Read queue from disk.
 -}
 readQueue : FileSystem.Permission -> Path -> GrenTask.Task Error Queue
-readQueue fsPermission path =
-    FileSystem.readFile fsPermission path
+readQueue filesystemPermission path =
+    FileSystem.readFile filesystemPermission path
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
         |> GrenTask.andThen
             (\bytes ->
@@ -202,7 +202,7 @@ readQueue fsPermission path =
 {-| Write queue to disk atomically.
 -}
 writeQueue : FileSystem.Permission -> Path -> Queue -> GrenTask.Task Error {}
-writeQueue fsPermission path queue =
+writeQueue filesystemPermission path queue =
     let
         content =
             Types.encodeQueue queue
@@ -214,7 +214,7 @@ writeQueue fsPermission path queue =
         bytes =
             Bytes.fromString content
     in
-    FileSystem.writeFile fsPermission bytes tempPath
-        |> GrenTask.andThen (\_ -> FileSystem.move fsPermission path tempPath)
+    FileSystem.writeFile filesystemPermission bytes tempPath
+        |> GrenTask.andThen (\_ -> FileSystem.move filesystemPermission path tempPath)
         |> GrenTask.map (\_ -> {})
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))

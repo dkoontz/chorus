@@ -96,10 +96,10 @@ parseRoute method path =
             withTaskId rawId EnqueueMessage
 
         { method = POST, segments = [ "api", "tasks", rawId, "attachments" ] } ->
-            when { tid = Id.taskIdFromString rawId, filename = Dict.get "filename" queryParams } is
-                { tid = Just tid, filename = Just fname } ->
-                    if isValidFilename fname then
-                        UploadAttachment { taskId = tid, filename = fname }
+            when { taskId = Id.taskIdFromString rawId, filename = Dict.get "filename" queryParams } is
+                { taskId = Just taskId, filename = Just fileName } ->
+                    if isValidFilename fileName then
+                        UploadAttachment { taskId = taskId, filename = fileName }
                     else
                         NotFound
 
@@ -108,9 +108,9 @@ parseRoute method path =
 
         { method = GET, segments = [ "api", "tasks", rawId, "attachments", filename ] } ->
             when Id.taskIdFromString rawId is
-                Just tid ->
+                Just taskId ->
                     if isValidFilename filename then
-                        DownloadAttachment { taskId = tid, filename = filename }
+                        DownloadAttachment { taskId = taskId, filename = filename }
                     else
                         NotFound
 
@@ -119,9 +119,9 @@ parseRoute method path =
 
         { method = DELETE, segments = [ "api", "tasks", rawId, "attachments", filename ] } ->
             when Id.taskIdFromString rawId is
-                Just tid ->
+                Just taskId ->
                     if isValidFilename filename then
-                        DeleteAttachment { taskId = tid, filename = filename }
+                        DeleteAttachment { taskId = taskId, filename = filename }
                     else
                         NotFound
 
@@ -177,8 +177,8 @@ Returns NotFound if the segment is not a valid TaskId.
 withTaskId : String -> (TaskId -> Route) -> Route
 withTaskId raw toRoute =
     when Id.taskIdFromString raw is
-        Just tid ->
-            toRoute tid
+        Just taskId ->
+            toRoute taskId
 
         Nothing ->
             NotFound
@@ -273,26 +273,26 @@ routeToString route =
                 Nothing ->
                     "ListTasks"
 
-        GetTask tid ->
-            "GetTask(" ++ Id.taskIdToString tid ++ ")"
+        GetTask taskId ->
+            "GetTask(" ++ Id.taskIdToString taskId ++ ")"
 
         CreateTask ->
             "CreateTask"
 
-        UpdateTaskStatus tid ->
-            "UpdateTaskStatus(" ++ Id.taskIdToString tid ++ ")"
+        UpdateTaskStatus taskId ->
+            "UpdateTaskStatus(" ++ Id.taskIdToString taskId ++ ")"
 
-        UpdateTaskPlanning tid ->
-            "UpdateTaskPlanning(" ++ Id.taskIdToString tid ++ ")"
+        UpdateTaskPlanning taskId ->
+            "UpdateTaskPlanning(" ++ Id.taskIdToString taskId ++ ")"
 
-        GetTaskHistory tid ->
-            "GetTaskHistory(" ++ Id.taskIdToString tid ++ ")"
+        GetTaskHistory taskId ->
+            "GetTaskHistory(" ++ Id.taskIdToString taskId ++ ")"
 
-        GetTaskQueue tid ->
-            "GetTaskQueue(" ++ Id.taskIdToString tid ++ ")"
+        GetTaskQueue taskId ->
+            "GetTaskQueue(" ++ Id.taskIdToString taskId ++ ")"
 
-        EnqueueMessage tid ->
-            "EnqueueMessage(" ++ Id.taskIdToString tid ++ ")"
+        EnqueueMessage taskId ->
+            "EnqueueMessage(" ++ Id.taskIdToString taskId ++ ")"
 
         UploadAttachment { taskId } ->
             "UploadAttachment(" ++ Id.taskIdToString taskId ++ ")"
@@ -303,20 +303,20 @@ routeToString route =
         DeleteAttachment { taskId, filename } ->
             "DeleteAttachment(" ++ Id.taskIdToString taskId ++ ", " ++ filename ++ ")"
 
-        ExecuteTool tid ->
-            "ExecuteTool(" ++ Id.taskIdToString tid ++ ")"
+        ExecuteTool taskId ->
+            "ExecuteTool(" ++ Id.taskIdToString taskId ++ ")"
 
-        UpdateAgentTools tid ->
-            "UpdateAgentTools(" ++ Id.taskIdToString tid ++ ")"
+        UpdateAgentTools taskId ->
+            "UpdateAgentTools(" ++ Id.taskIdToString taskId ++ ")"
 
-        SubmitAnswers tid ->
-            "SubmitAnswers(" ++ Id.taskIdToString tid ++ ")"
+        SubmitAnswers taskId ->
+            "SubmitAnswers(" ++ Id.taskIdToString taskId ++ ")"
 
-        StartHandoff tid ->
-            "StartHandoff(" ++ Id.taskIdToString tid ++ ")"
+        StartHandoff taskId ->
+            "StartHandoff(" ++ Id.taskIdToString taskId ++ ")"
 
-        CompleteHandoff tid ->
-            "CompleteHandoff(" ++ Id.taskIdToString tid ++ ")"
+        CompleteHandoff taskId ->
+            "CompleteHandoff(" ++ Id.taskIdToString taskId ++ ")"
 
         ListAgents ->
             "ListAgents"

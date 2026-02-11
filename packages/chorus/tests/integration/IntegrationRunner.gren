@@ -29,14 +29,14 @@ main =
 
 init : Node.Environment -> Init.Task (Cmd a)
 init env =
-    Init.await FileSystem.initialize <| \fsPermission ->
+    Init.await FileSystem.initialize <| \filesystemPermission ->
     Init.awaitTask (getSecureContextOrCrash env) <| \secureContext ->
         let
             tempDir =
                 Path.fromPosixString "/tmp/chorus-integration-test"
 
             ctx =
-                { fsPermission = fsPermission
+                { filesystemPermission = filesystemPermission
                 , secureContext = secureContext
                 , tempDir = tempDir
                 , stdout = env.stdout
@@ -44,13 +44,13 @@ init env =
         in
         Stream.writeLineAsBytes "Running 19 integration tests...\n" env.stdout
             |> GrenTask.onError (\_ -> GrenTask.succeed env.stdout)
-            |> GrenTask.andThen (\_ -> setupTempDir fsPermission tempDir)
+            |> GrenTask.andThen (\_ -> setupTempDir filesystemPermission tempDir)
             |> GrenTask.andThen (\_ -> runAllTests ctx)
             |> GrenTask.andThen (\results -> reportResults ctx results)
             |> GrenTask.andThen
                 (\exitCode ->
                     -- Cleanup temp dir
-                    FileSystem.remove fsPermission { recursive = True } tempDir
+                    FileSystem.remove filesystemPermission { recursive = True } tempDir
                         |> GrenTask.onError (\_ -> GrenTask.succeed tempDir)
                         |> GrenTask.map (\_ -> exitCode)
                 )
@@ -75,7 +75,7 @@ getSecureContextOrCrash _ =
 
 
 type alias Context =
-    { fsPermission : FileSystem.Permission
+    { filesystemPermission : FileSystem.Permission
     , secureContext : SecureContext
     , tempDir : Path
     , stdout : Stream.Writable Bytes.Bytes
@@ -90,11 +90,11 @@ type alias TestResult =
 
 
 setupTempDir : FileSystem.Permission -> Path -> GrenTask.Task x {}
-setupTempDir fsPermission tempDir =
+setupTempDir filesystemPermission tempDir =
     -- Remove existing temp dir if present, then create fresh
-    FileSystem.remove fsPermission { recursive = True } tempDir
+    FileSystem.remove filesystemPermission { recursive = True } tempDir
         |> GrenTask.onError (\_ -> GrenTask.succeed tempDir)
-        |> GrenTask.andThen (\_ -> FileSystem.makeDirectory fsPermission { recursive = True } tempDir)
+        |> GrenTask.andThen (\_ -> FileSystem.makeDirectory filesystemPermission { recursive = True } tempDir)
         |> GrenTask.onError (\_ -> GrenTask.succeed tempDir)
         |> GrenTask.map (\_ -> {})
 
@@ -263,7 +263,7 @@ initRegistry ctx subdir =
         workspacesRoot =
             Path.append (Path.fromPosixString (subdir ++ "/workspaces")) ctx.tempDir
     in
-    Registry.init ctx.fsPermission ctx.secureContext
+    Registry.init ctx.filesystemPermission ctx.secureContext
         { registryRoot = Path.toPosixString registryRoot
         , workspacesRoot = Path.toPosixString workspacesRoot
         }
@@ -272,8 +272,8 @@ initRegistry ctx subdir =
 
 
 assertFileExists : FileSystem.Permission -> Path -> GrenTask.Task String {}
-assertFileExists fsPermission path =
-    FileSystem.checkAccess fsPermission [] path
+assertFileExists filesystemPermission path =
+    FileSystem.checkAccess filesystemPermission [] path
         |> GrenTask.map (\_ -> {})
         |> GrenTask.mapError (\_ -> "File does not exist: " ++ Path.toPosixString path)
 
@@ -320,8 +320,8 @@ testInitCreatesDirectories ctx subdir =
             Path.append (Path.fromPosixString (subdir ++ "/workspaces")) ctx.tempDir
     in
     initRegistry ctx subdir
-        |> GrenTask.andThen (\_ -> assertFileExists ctx.fsPermission registryRoot)
-        |> GrenTask.andThen (\_ -> assertFileExists ctx.fsPermission workspacesRoot)
+        |> GrenTask.andThen (\_ -> assertFileExists ctx.filesystemPermission registryRoot)
+        |> GrenTask.andThen (\_ -> assertFileExists ctx.filesystemPermission workspacesRoot)
 
 
 testInitCreatesRegistryJson : Context -> String -> GrenTask.Task String {}
@@ -331,7 +331,7 @@ testInitCreatesRegistryJson ctx subdir =
             Path.append (Path.fromPosixString (subdir ++ "/registry/registry.json")) ctx.tempDir
     in
     initRegistry ctx subdir
-        |> GrenTask.andThen (\_ -> assertFileExists ctx.fsPermission registryJsonPath)
+        |> GrenTask.andThen (\_ -> assertFileExists ctx.filesystemPermission registryJsonPath)
 
 
 testCreateTaskCreatesTask : Context -> String -> GrenTask.Task String {}
@@ -384,7 +384,7 @@ testCreateTaskWritesTaskJson ctx subdir =
                     taskJsonPath =
                         Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Id.taskIdToString (Types.taskId task) ++ "/task.json")) ctx.tempDir
                 in
-                assertFileExists ctx.fsPermission taskJsonPath
+                assertFileExists ctx.filesystemPermission taskJsonPath
             )
 
 
@@ -409,7 +409,7 @@ testCreateTaskWritesQueueJson ctx subdir =
                     queueJsonPath =
                         Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Id.taskIdToString (Types.taskId task) ++ "/queue.json")) ctx.tempDir
                 in
-                assertFileExists ctx.fsPermission queueJsonPath
+                assertFileExists ctx.filesystemPermission queueJsonPath
             )
 
 
@@ -434,7 +434,7 @@ testCreateTaskWritesHistoryJson ctx subdir =
                     historyJsonPath =
                         Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Id.taskIdToString (Types.taskId task) ++ "/history.json")) ctx.tempDir
                 in
-                assertFileExists ctx.fsPermission historyJsonPath
+                assertFileExists ctx.filesystemPermission historyJsonPath
             )
 
 
@@ -634,7 +634,7 @@ testRecordEventAppendsToHistory ctx subdir =
                     historyPath =
                         Path.append (Path.fromPosixString (subdir ++ "/registry/" ++ Id.taskIdToString (Types.taskId task) ++ "/history.json")) ctx.tempDir
                 in
-                FileSystem.readFile ctx.fsPermission historyPath
+                FileSystem.readFile ctx.filesystemPermission historyPath
                     |> GrenTask.mapError (\e -> "Failed to read history: " ++ FileSystem.errorToString e)
                     |> GrenTask.andThen
                         (\bytes ->
@@ -678,8 +678,8 @@ queueErrorToString err =
         Queue.JsonDecodeError msg ->
             "JsonDecodeError: " ++ msg
 
-        Queue.TaskNotFound tid ->
-            "TaskNotFound: " ++ Id.taskIdToString tid
+        Queue.TaskNotFound taskId ->
+            "TaskNotFound: " ++ Id.taskIdToString taskId
 
 
 testEnqueueAddsMessage : Context -> String -> GrenTask.Task String {}
@@ -703,7 +703,7 @@ testEnqueueAddsMessage ctx subdir =
                     taskDir =
                         getTaskDir ctx subdir (Types.taskId task)
                 in
-                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir (Types.taskId task) "Hello, world!"
+                Queue.enqueue ctx.filesystemPermission ctx.secureContext taskDir (Types.taskId task) "Hello, world!"
                     |> GrenTask.mapError queueErrorToString
             )
         |> GrenTask.andThen
@@ -738,18 +738,18 @@ testDequeueFIFO ctx subdir =
         |> GrenTask.andThen
             (\task ->
                 let
-                    tid =
+                    taskId =
                         Types.taskId task
 
                     taskDir =
-                        getTaskDir ctx subdir tid
+                        getTaskDir ctx subdir taskId
                 in
                 -- Enqueue two messages
-                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir tid "First message"
+                Queue.enqueue ctx.filesystemPermission ctx.secureContext taskDir taskId "First message"
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen
                         (\_ ->
-                            Queue.enqueue ctx.fsPermission ctx.secureContext taskDir tid "Second message"
+                            Queue.enqueue ctx.filesystemPermission ctx.secureContext taskDir taskId "Second message"
                                 |> GrenTask.mapError queueErrorToString
                         )
                     |> GrenTask.map (\_ -> taskDir)
@@ -757,7 +757,7 @@ testDequeueFIFO ctx subdir =
         |> GrenTask.andThen
             (\taskDir ->
                 -- Dequeue first message
-                Queue.dequeue ctx.fsPermission taskDir
+                Queue.dequeue ctx.filesystemPermission taskDir
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen
                         (\maybeMsg ->
@@ -771,7 +771,7 @@ testDequeueFIFO ctx subdir =
                     |> GrenTask.andThen
                         (\_ ->
                             -- Dequeue second message
-                            Queue.dequeue ctx.fsPermission taskDir
+                            Queue.dequeue ctx.filesystemPermission taskDir
                                 |> GrenTask.mapError queueErrorToString
                         )
                     |> GrenTask.andThen
@@ -807,7 +807,7 @@ testDequeueEmptyQueue ctx subdir =
                     taskDir =
                         getTaskDir ctx subdir (Types.taskId task)
                 in
-                Queue.dequeue ctx.fsPermission taskDir
+                Queue.dequeue ctx.filesystemPermission taskDir
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen (assertNothing "dequeue from empty queue")
             )
@@ -834,14 +834,14 @@ testPeekDoesNotRemove ctx subdir =
                     taskDir =
                         getTaskDir ctx subdir (Types.taskId task)
                 in
-                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir (Types.taskId task) "Peek me"
+                Queue.enqueue ctx.filesystemPermission ctx.secureContext taskDir (Types.taskId task) "Peek me"
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.map (\_ -> taskDir)
             )
         |> GrenTask.andThen
             (\taskDir ->
                 -- Peek should return the message
-                Queue.peek ctx.fsPermission taskDir
+                Queue.peek ctx.filesystemPermission taskDir
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen
                         (\maybeMsg ->
@@ -855,7 +855,7 @@ testPeekDoesNotRemove ctx subdir =
                     |> GrenTask.andThen
                         (\_ ->
                             -- Peek again - should still return the same message (not removed)
-                            Queue.peek ctx.fsPermission taskDir
+                            Queue.peek ctx.filesystemPermission taskDir
                                 |> GrenTask.mapError queueErrorToString
                         )
                     |> GrenTask.andThen
@@ -888,19 +888,19 @@ testIsEmpty ctx subdir =
         |> GrenTask.andThen
             (\task ->
                 let
-                    tid =
+                    taskId =
                         Types.taskId task
 
                     taskDir =
-                        getTaskDir ctx subdir tid
+                        getTaskDir ctx subdir taskId
                 in
                 -- Should be empty initially
-                Queue.isEmpty ctx.fsPermission taskDir
+                Queue.isEmpty ctx.filesystemPermission taskDir
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen
                         (\empty ->
                             if empty then
-                                GrenTask.succeed { taskDir = taskDir, taskId = tid }
+                                GrenTask.succeed { taskDir = taskDir, taskId = taskId }
                             else
                                 GrenTask.fail "Expected queue to be empty initially"
                         )
@@ -908,14 +908,14 @@ testIsEmpty ctx subdir =
         |> GrenTask.andThen
             (\{ taskDir, taskId } ->
                 -- Add a message
-                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir taskId "Message"
+                Queue.enqueue ctx.filesystemPermission ctx.secureContext taskDir taskId "Message"
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.map (\_ -> taskDir)
             )
         |> GrenTask.andThen
             (\taskDir ->
                 -- Should not be empty now
-                Queue.isEmpty ctx.fsPermission taskDir
+                Queue.isEmpty ctx.filesystemPermission taskDir
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen
                         (\empty ->
@@ -945,31 +945,31 @@ testQueueLength ctx subdir =
         |> GrenTask.andThen
             (\task ->
                 let
-                    tid =
+                    taskId =
                         Types.taskId task
 
                     taskDir =
-                        getTaskDir ctx subdir tid
+                        getTaskDir ctx subdir taskId
                 in
                 -- Should be 0 initially
-                Queue.length ctx.fsPermission taskDir
+                Queue.length ctx.filesystemPermission taskDir
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen (assertEqual "initial length" 0)
-                    |> GrenTask.map (\_ -> { taskDir = taskDir, taskId = tid })
+                    |> GrenTask.map (\_ -> { taskDir = taskDir, taskId = taskId })
             )
         |> GrenTask.andThen
             (\{ taskDir, taskId } ->
                 -- Add 3 messages
-                Queue.enqueue ctx.fsPermission ctx.secureContext taskDir taskId "One"
+                Queue.enqueue ctx.filesystemPermission ctx.secureContext taskDir taskId "One"
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen
                         (\_ ->
-                            Queue.enqueue ctx.fsPermission ctx.secureContext taskDir taskId "Two"
+                            Queue.enqueue ctx.filesystemPermission ctx.secureContext taskDir taskId "Two"
                                 |> GrenTask.mapError queueErrorToString
                         )
                     |> GrenTask.andThen
                         (\_ ->
-                            Queue.enqueue ctx.fsPermission ctx.secureContext taskDir taskId "Three"
+                            Queue.enqueue ctx.filesystemPermission ctx.secureContext taskDir taskId "Three"
                                 |> GrenTask.mapError queueErrorToString
                         )
                     |> GrenTask.map (\_ -> taskDir)
@@ -977,7 +977,7 @@ testQueueLength ctx subdir =
         |> GrenTask.andThen
             (\taskDir ->
                 -- Should be 3 now
-                Queue.length ctx.fsPermission taskDir
+                Queue.length ctx.filesystemPermission taskDir
                     |> GrenTask.mapError queueErrorToString
                     |> GrenTask.andThen (assertEqual "length after 3 enqueues" 3)
             )
@@ -1014,7 +1014,7 @@ testTaskSummaryIncludesCurrentAgent ctx subdir =
                     registryJsonPath =
                         Path.append (Path.fromPosixString (subdir ++ "/registry/registry.json")) ctx.tempDir
                 in
-                FileSystem.readFile ctx.fsPermission registryJsonPath
+                FileSystem.readFile ctx.filesystemPermission registryJsonPath
                     |> GrenTask.mapError (\e -> "Failed to read registry.json: " ++ FileSystem.errorToString e)
                     |> GrenTask.andThen
                         (\bytes ->

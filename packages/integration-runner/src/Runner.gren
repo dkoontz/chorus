@@ -36,15 +36,15 @@ runScenario :
     -> Path
     -> Scenario
     -> Task String ScenarioResult
-runScenario fsPermission cpPermission toolPath workspace scenario =
-    setupFiles fsPermission workspace scenario.setup
+runScenario filesystemPermission childProcessPermission toolPath workspace scenario =
+    setupFiles filesystemPermission workspace scenario.setup
         |> Task.andThen
             (\_ ->
-                executeToolTask cpPermission toolPath workspace scenario.input
+                executeToolTask childProcessPermission toolPath workspace scenario.input
             )
         |> Task.andThen
             (\toolOutput ->
-                checkAssertions fsPermission workspace scenario.expect toolOutput
+                checkAssertions filesystemPermission workspace scenario.expect toolOutput
             )
         |> Task.map
             (\assertionResult ->
@@ -74,7 +74,7 @@ runScenario fsPermission cpPermission toolPath workspace scenario =
 {-| Create fixture files in workspace.
 -}
 setupFiles : FileSystem.Permission -> Path -> Setup -> Task String {}
-setupFiles fsPermission workspace setup =
+setupFiles filesystemPermission workspace setup =
     let
         fileKeys =
             Dict.keys setup.files
@@ -97,11 +97,11 @@ setupFiles fsPermission workspace setup =
                         bytes =
                             Bytes.fromString content
                     in
-                    FileSystem.makeDirectory fsPermission { recursive = True } dirPath
+                    FileSystem.makeDirectory filesystemPermission { recursive = True } dirPath
                         |> Task.onError (\_ -> Task.succeed dirPath)
                         |> Task.andThen
                             (\_ ->
-                                FileSystem.writeFile fsPermission bytes filePath
+                                FileSystem.writeFile filesystemPermission bytes filePath
                                     |> Task.mapError (\e -> "Failed to create file " ++ key ++ ": " ++ FileSystem.errorToString e)
                                     |> Task.map (\_ -> {})
                             )
@@ -122,7 +122,7 @@ executeToolTask :
     -> Path
     -> Decode.Value
     -> Task String ToolOutput
-executeToolTask cpPermission toolPath workspace input =
+executeToolTask childProcessPermission toolPath workspace input =
     let
         jsonInput =
             Encode.encode 0 input
@@ -138,7 +138,7 @@ executeToolTask cpPermission toolPath workspace input =
             , runDuration = ChildProcess.NoLimit
             }
     in
-    ChildProcess.run cpPermission (Path.toPosixString toolPath) [ workspaceStr, jsonInput ] options
+    ChildProcess.run childProcessPermission (Path.toPosixString toolPath) [ workspaceStr, jsonInput ] options
         |> Task.map parseSuccessOutput
         |> Task.onError
             (\failedRun ->
@@ -247,7 +247,7 @@ checkAssertions :
     -> Expect
     -> ToolOutput
     -> Task String AssertionResult
-checkAssertions fsPermission workspace expect output =
+checkAssertions filesystemPermission workspace expect output =
     let
         statusResult =
             Assertions.checkStatus expect.status output.status
@@ -277,7 +277,7 @@ checkAssertions fsPermission workspace expect output =
             Task.succeed (Fail msg)
 
         Pass ->
-            checkFileAssertions fsPermission workspace expect
+            checkFileAssertions filesystemPermission workspace expect
 
 
 checkFileAssertions :
@@ -285,7 +285,7 @@ checkFileAssertions :
     -> Path
     -> Expect
     -> Task String AssertionResult
-checkFileAssertions fsPermission workspace expect =
+checkFileAssertions filesystemPermission workspace expect =
     if
         Array.isEmpty expect.filesExist
             && Array.isEmpty expect.filesNotExist
@@ -293,7 +293,7 @@ checkFileAssertions fsPermission workspace expect =
     then
         Task.succeed Pass
     else
-        listWorkspaceFiles fsPermission workspace
+        listWorkspaceFiles filesystemPermission workspace
             |> Task.andThen
                 (\existingFiles ->
                     let
@@ -308,13 +308,13 @@ checkFileAssertions fsPermission workspace expect =
                             Task.succeed (Fail msg)
 
                         Pass ->
-                            checkFileContents fsPermission workspace expect.fileContent
+                            checkFileContents filesystemPermission workspace expect.fileContent
                 )
 
 
 listWorkspaceFiles : FileSystem.Permission -> Path -> Task String (Array String)
-listWorkspaceFiles fsPermission workspace =
-    listDirectoryRecursive fsPermission workspace
+listWorkspaceFiles filesystemPermission workspace =
+    listDirectoryRecursive filesystemPermission workspace
         |> Task.map
             (\paths ->
                 paths
@@ -338,8 +338,8 @@ listWorkspaceFiles fsPermission workspace =
 {-| Recursively list all files in a directory.
 -}
 listDirectoryRecursive : FileSystem.Permission -> Path -> Task String (Array Path)
-listDirectoryRecursive fsPermission dir =
-    FileSystem.listDirectory fsPermission dir
+listDirectoryRecursive filesystemPermission dir =
+    FileSystem.listDirectory filesystemPermission dir
         |> Task.mapError (\e -> "Failed to list directory: " ++ FileSystem.errorToString e)
         |> Task.andThen
             (\entries ->
@@ -359,7 +359,7 @@ listDirectoryRecursive fsPermission dir =
                                                 Task.succeed (Array.pushLast fullPath accPaths)
 
                                             FileSystem.Directory ->
-                                                listDirectoryRecursive fsPermission fullPath
+                                                listDirectoryRecursive filesystemPermission fullPath
                                                     |> Task.map (\subPaths -> Array.append accPaths subPaths)
 
                                             _ ->
@@ -375,7 +375,7 @@ checkFileContents :
     -> Path
     -> Dict String String
     -> Task String AssertionResult
-checkFileContents fsPermission workspace expected =
+checkFileContents filesystemPermission workspace expected =
     let
         fileKeys =
             Dict.keys expected
@@ -386,7 +386,7 @@ checkFileContents fsPermission workspace expected =
                 filePath =
                     Path.append (Path.fromPosixString key) workspace
             in
-            FileSystem.readFile fsPermission filePath
+            FileSystem.readFile filesystemPermission filePath
                 |> Task.mapError (\e -> "Failed to read " ++ key ++ ": " ++ FileSystem.errorToString e)
                 |> Task.andThen
                     (\bytes ->

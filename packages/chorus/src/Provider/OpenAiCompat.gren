@@ -42,7 +42,7 @@ import Task exposing (Task)
 -}
 type alias Config =
     { httpClientPermission : HttpClient.Permission
-    , fsPermission : FileSystem.Permission
+    , filesystemPermission : FileSystem.Permission
     , secureContext : SecureContext
     , apiBaseUrl : String
     , apiKey : String
@@ -328,7 +328,7 @@ readConversationHistory config sessionId =
         path =
             conversationFilePath config sessionId
     in
-    FileSystem.readFile config.fsPermission path
+    FileSystem.readFile config.filesystemPermission path
         |> Task.mapError
             (\_ -> SessionNotFound { sessionId = Id.sessionIdToString sessionId })
         |> Task.andThen
@@ -362,7 +362,7 @@ writeConversationHistory config sessionId history =
         bytes =
             Bytes.fromString json
     in
-    FileSystem.writeFile config.fsPermission bytes path
+    FileSystem.writeFile config.filesystemPermission bytes path
         |> Task.mapError
             (\fsErr -> NetworkError { message = "Failed to write conversation: " ++ FileSystem.errorToString fsErr })
         |> Task.map (\_ -> {})

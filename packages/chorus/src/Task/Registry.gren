@@ -50,7 +50,7 @@ import Types exposing (Task(..), TaskStatus(..), SourceInfo, Attachment, Event, 
 -}
 type Registry
     = Registry
-        { fsPermission : FileSystem.Permission
+        { filesystemPermission : FileSystem.Permission
         , secureContext : SecureContext
         , registryRoot : Path
         , workspacesRoot : Path
@@ -77,8 +77,8 @@ errorToString err =
         JsonDecodeError msg ->
             "JSON decode error: " ++ msg
 
-        TaskNotFound tid ->
-            "Task not found: " ++ Id.taskIdToString tid
+        TaskNotFound taskId ->
+            "Task not found: " ++ Id.taskIdToString taskId
 
         RegistryCorrupt msg ->
             "Registry corrupt: " ++ msg
@@ -123,7 +123,7 @@ init :
     -> SecureContext
     -> { registryRoot : String, workspacesRoot : String }
     -> GrenTask.Task Error Registry
-init fsPermission secureContext config =
+init filesystemPermission secureContext config =
     let
         registryPath =
             Path.fromPosixString config.registryRoot
@@ -133,23 +133,23 @@ init fsPermission secureContext config =
 
         registry =
             Registry
-                { fsPermission = fsPermission
+                { filesystemPermission = filesystemPermission
                 , secureContext = secureContext
                 , registryRoot = registryPath
                 , workspacesRoot = workspacesPath
                 }
     in
-    ensureDirectoryExists fsPermission registryPath
-        |> GrenTask.andThen (\_ -> ensureDirectoryExists fsPermission workspacesPath)
-        |> GrenTask.andThen (\_ -> ensureRegistryIndex fsPermission registryPath)
+    ensureDirectoryExists filesystemPermission registryPath
+        |> GrenTask.andThen (\_ -> ensureDirectoryExists filesystemPermission workspacesPath)
+        |> GrenTask.andThen (\_ -> ensureRegistryIndex filesystemPermission registryPath)
         |> GrenTask.map (\_ -> registry)
 
 
 {-| Ensure a directory exists, creating it if necessary.
 -}
 ensureDirectoryExists : FileSystem.Permission -> Path -> GrenTask.Task Error {}
-ensureDirectoryExists fsPermission path =
-    FileSystem.makeDirectory fsPermission { recursive = True } path
+ensureDirectoryExists filesystemPermission path =
+    FileSystem.makeDirectory filesystemPermission { recursive = True } path
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
         |> GrenTask.map (\_ -> {})
 
@@ -157,7 +157,7 @@ ensureDirectoryExists fsPermission path =
 {-| Ensure registry.json exists with valid structure.
 -}
 ensureRegistryIndex : FileSystem.Permission -> Path -> GrenTask.Task Error {}
-ensureRegistryIndex fsPermission registryRoot =
+ensureRegistryIndex filesystemPermission registryRoot =
     let
         indexPath =
             Path.append (Path.fromPosixString "registry.json") registryRoot
@@ -167,12 +167,12 @@ ensureRegistryIndex fsPermission registryRoot =
                 |> Encode.encode 2
     in
     -- Try to access the file - if it succeeds, file exists; if it fails with ENOENT, create it
-    FileSystem.checkAccess fsPermission [] indexPath
+    FileSystem.checkAccess filesystemPermission [] indexPath
         |> GrenTask.andThen (\_ -> GrenTask.succeed {})
         |> GrenTask.onError
             (\err ->
                 if FileSystem.errorIsNoSuchFileOrDirectory err then
-                    writeFileAtomic fsPermission indexPath emptyIndex
+                    writeFileAtomic filesystemPermission indexPath emptyIndex
                         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
                 else
                     GrenTask.fail (FileSystemError (FileSystem.errorToString err))
@@ -228,9 +228,9 @@ createTask (Registry config) { description, source } =
                                     }
                         in
                         -- 2. Create task directory
-                        ensureDirectoryExists config.fsPermission taskDir
+                        ensureDirectoryExists config.filesystemPermission taskDir
                             -- 3. Create workspace directory
-                            |> GrenTask.andThen (\_ -> ensureDirectoryExists config.fsPermission workspaceDir)
+                            |> GrenTask.andThen (\_ -> ensureDirectoryExists config.filesystemPermission workspaceDir)
                             -- 4. Write task.json
                             |> GrenTask.andThen
                                 (\_ ->
@@ -242,7 +242,7 @@ createTask (Registry config) { description, source } =
                                             Types.encodeTask task
                                                 |> Encode.encode 2
                                     in
-                                    writeFileAtomic config.fsPermission taskPath taskJson
+                                    writeFileAtomic config.filesystemPermission taskPath taskJson
                                         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
                                 )
                             -- 5. Write queue.json (empty queue)
@@ -256,7 +256,7 @@ createTask (Registry config) { description, source } =
                                             Types.encodeQueue { messages = [] }
                                                 |> Encode.encode 2
                                     in
-                                    writeFileAtomic config.fsPermission queuePath queueJson
+                                    writeFileAtomic config.filesystemPermission queuePath queueJson
                                         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
                                 )
                             -- 6. Write history.json with task_created event
@@ -276,13 +276,13 @@ createTask (Registry config) { description, source } =
                                             Types.encodeHistory { events = [ initialEvent ] }
                                                 |> Encode.encode 2
                                     in
-                                    writeFileAtomic config.fsPermission historyPath historyJson
+                                    writeFileAtomic config.filesystemPermission historyPath historyJson
                                         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
                                 )
                             -- 7. Update registry.json index
                             |> GrenTask.andThen
                                 (\_ ->
-                                    updateRegistryIndex config.fsPermission config.registryRoot
+                                    updateRegistryIndex config.filesystemPermission config.registryRoot
                                         (\index ->
                                             let
                                                 summary =
@@ -304,10 +304,10 @@ createTask (Registry config) { description, source } =
 {-| Get a task by ID.
 -}
 getTask : Registry -> TaskId -> GrenTask.Task Error (Maybe Task)
-getTask (Registry config) tid =
+getTask (Registry config) taskId =
     let
         tidStr =
-            Id.taskIdToString tid
+            Id.taskIdToString taskId
 
         taskDir =
             Path.append (Path.fromPosixString tidStr) config.registryRoot
@@ -315,7 +315,7 @@ getTask (Registry config) tid =
         taskPath =
             Path.append (Path.fromPosixString "task.json") taskDir
     in
-    FileSystem.readFile config.fsPermission taskPath
+    FileSystem.readFile config.filesystemPermission taskPath
         |> GrenTask.onError
             (\err ->
                 if FileSystem.errorIsNoSuchFileOrDirectory err then
@@ -391,12 +391,12 @@ updateTask (Registry config) theTaskId updateFn =
                                             Types.encodeTask updatedTask
                                                 |> Encode.encode 2
                                     in
-                                    writeFileAtomic config.fsPermission taskPath taskJson
+                                    writeFileAtomic config.filesystemPermission taskPath taskJson
                                         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
                                         |> GrenTask.andThen
                                             (\_ ->
                                                 -- Update registry index with new status/updatedAt/currentAgent
-                                                updateRegistryIndex config.fsPermission config.registryRoot
+                                                updateRegistryIndex config.filesystemPermission config.registryRoot
                                                     (\index ->
                                                         { index
                                                             | tasks =
@@ -435,7 +435,7 @@ updateStatus registry theTaskId newStatus =
 -}
 listTasks : Registry -> Maybe TaskStatus -> GrenTask.Task Error (Array Task)
 listTasks (Registry config) maybeStatus =
-    readRegistryIndex config.fsPermission config.registryRoot
+    readRegistryIndex config.filesystemPermission config.registryRoot
         |> GrenTask.andThen
             (\index ->
                 let
@@ -498,10 +498,10 @@ recordEvent :
     -> TaskId
     -> { eventType : String, data : Dict String String }
     -> GrenTask.Task Error {}
-recordEvent (Registry config) tid event =
+recordEvent (Registry config) taskId event =
     let
         tidStr =
-            Id.taskIdToString tid
+            Id.taskIdToString taskId
 
         taskDir =
             Path.append (Path.fromPosixString tidStr) config.registryRoot
@@ -513,7 +513,7 @@ recordEvent (Registry config) tid event =
         |> GrenTask.mapError (\_ -> FileSystemError "Failed to get time")
         |> GrenTask.andThen
             (\now ->
-                readHistory config.fsPermission historyPath
+                readHistory config.filesystemPermission historyPath
                     |> GrenTask.andThen
                         (\history ->
                             let
@@ -530,7 +530,7 @@ recordEvent (Registry config) tid event =
                                     Types.encodeHistory updatedHistory
                                         |> Encode.encode 2
                             in
-                            writeFileAtomic config.fsPermission historyPath historyJson
+                            writeFileAtomic config.filesystemPermission historyPath historyJson
                                 |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
                         )
             )
@@ -564,12 +564,12 @@ type alias RegistryIndex =
 {-| Read the registry index from disk.
 -}
 readRegistryIndex : FileSystem.Permission -> Path -> GrenTask.Task Error RegistryIndex
-readRegistryIndex fsPermission registryRoot =
+readRegistryIndex filesystemPermission registryRoot =
     let
         indexPath =
             Path.append (Path.fromPosixString "registry.json") registryRoot
     in
-    FileSystem.readFile fsPermission indexPath
+    FileSystem.readFile filesystemPermission indexPath
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
         |> GrenTask.andThen
             (\bytes ->
@@ -594,8 +594,8 @@ updateRegistryIndex :
     -> Path
     -> (RegistryIndex -> RegistryIndex)
     -> GrenTask.Task Error {}
-updateRegistryIndex fsPermission registryRoot updateFn =
-    readRegistryIndex fsPermission registryRoot
+updateRegistryIndex filesystemPermission registryRoot updateFn =
+    readRegistryIndex filesystemPermission registryRoot
         |> GrenTask.andThen
             (\index ->
                 let
@@ -609,7 +609,7 @@ updateRegistryIndex fsPermission registryRoot updateFn =
                         encodeRegistryIndex updatedIndex
                             |> Encode.encode 2
                 in
-                writeFileAtomic fsPermission indexPath indexJson
+                writeFileAtomic filesystemPermission indexPath indexJson
                     |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
             )
 
@@ -676,8 +676,8 @@ taskSummaryDecoder =
 {-| Read history from disk.
 -}
 readHistory : FileSystem.Permission -> Path -> GrenTask.Task Error History
-readHistory fsPermission path =
-    FileSystem.readFile fsPermission path
+readHistory filesystemPermission path =
+    FileSystem.readFile filesystemPermission path
         |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
         |> GrenTask.andThen
             (\bytes ->
@@ -754,7 +754,7 @@ contentTypeFromExtension filename =
 {-| Write a file atomically (write to temp, then rename).
 -}
 writeFileAtomic : FileSystem.Permission -> Path -> String -> GrenTask.Task FileSystem.Error {}
-writeFileAtomic fsPermission path content =
+writeFileAtomic filesystemPermission path content =
     let
         tempPath =
             Path.fromPosixString (Path.toPosixString path ++ ".tmp")
@@ -762,6 +762,6 @@ writeFileAtomic fsPermission path content =
         bytes =
             Bytes.fromString content
     in
-    FileSystem.writeFile fsPermission bytes tempPath
-        |> GrenTask.andThen (\_ -> FileSystem.move fsPermission path tempPath)
+    FileSystem.writeFile filesystemPermission bytes tempPath
+        |> GrenTask.andThen (\_ -> FileSystem.move filesystemPermission path tempPath)
         |> GrenTask.map (\_ -> {})

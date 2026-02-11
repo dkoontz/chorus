@@ -67,8 +67,8 @@ type alias Model =
     , agentRegistry : Maybe AgentRegistry.AgentRegistry
     , activeExecutors : Dict String ExecutorState
     , providerConfig : ClaudeCode.Config
-    , fsPermission : FileSystem.Permission
-    , cpPermission : ChildProcess.Permission
+    , filesystemPermission : FileSystem.Permission
+    , childProcessPermission : ChildProcess.Permission
     , httpClientPermission : HttpClient.Permission
     , secureContext : SecureContext
     , config : Config
@@ -140,8 +140,8 @@ type Msg
 
 init : Node.Environment -> Init.Task { model : Model, command : Cmd Msg }
 init env =
-    Init.await FileSystem.initialize <| \fsPermission ->
-        Init.await ChildProcess.initialize <| \cpPermission ->
+    Init.await FileSystem.initialize <| \filesystemPermission ->
+        Init.await ChildProcess.initialize <| \childProcessPermission ->
             Init.await HttpClient.initialize <| \httpClientPermission ->
                 Init.awaitTask getSecureContext <| \secureContext ->
                     Init.awaitTask Node.getEnvironmentVariables <| \envVars ->
@@ -160,7 +160,7 @@ init env =
                                     Logging.makeLogger env.stdout config.logLevel
 
                                 providerCfg =
-                                    { childProcessPermission = cpPermission
+                                    { childProcessPermission = childProcessPermission
                                     , chorusToolsPath = config.chorusToolsPath
                                     , baseUrl = "http://" ++ config.host ++ ":" ++ String.fromInt config.serverPort
                                     }
@@ -172,8 +172,8 @@ init env =
                                     , agentRegistry = Nothing
                                     , activeExecutors = Dict.empty
                                     , providerConfig = providerCfg
-                                    , fsPermission = fsPermission
-                                    , cpPermission = cpPermission
+                                    , filesystemPermission = filesystemPermission
+                                    , childProcessPermission = childProcessPermission
                                     , httpClientPermission = httpClientPermission
                                     , secureContext = secureContext
                                     , config = config
@@ -194,14 +194,14 @@ init env =
                                             |> GrenTask.attempt GotServer
 
                                         , -- Initialize the task registry
-                                          Registry.init fsPermission secureContext
+                                          Registry.init filesystemPermission secureContext
                                             { registryRoot = config.registryRoot
                                             , workspacesRoot = config.workspacesRoot
                                             }
                                             |> GrenTask.attempt GotRegistry
 
                                         , -- Initialize the agent registry
-                                          AgentRegistry.init fsPermission
+                                          AgentRegistry.init filesystemPermission
                                             { agentsRoot = config.agentsRoot
                                             }
                                             |> GrenTask.attempt GotAgentRegistry
@@ -234,8 +234,8 @@ makeProvider model agentConfig =
         "opencode" ->
             Just
                 (OpenCode.provider
-                    { childProcessPermission = model.cpPermission
-                    , fsPermission = model.fsPermission
+                    { childProcessPermission = model.childProcessPermission
+                    , filesystemPermission = model.filesystemPermission
                     , chorusToolsPath = model.config.chorusToolsPath
                     , baseUrl = "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
                     }
@@ -245,7 +245,7 @@ makeProvider model agentConfig =
             Just
                 (OpenAiCompat.provider
                     { httpClientPermission = model.httpClientPermission
-                    , fsPermission = model.fsPermission
+                    , filesystemPermission = model.filesystemPermission
                     , secureContext = model.secureContext
                     , apiBaseUrl = model.config.apiBaseUrl
                     , apiKey = model.config.apiKey
@@ -331,13 +331,13 @@ update msg model =
                         Just reg ->
                             let
                                 toolCtx =
-                                    { fsPermission = model.fsPermission
-                                    , cpPermission = model.cpPermission
+                                    { filesystemPermission = model.filesystemPermission
+                                    , childProcessPermission = model.childProcessPermission
                                     , workspaceRoot = model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
                                     , allowedTools = agentConfig.allowedTools
                                     , apiContext =
                                         { registry = reg
-                                        , fsPermission = model.fsPermission
+                                        , filesystemPermission = model.filesystemPermission
                                         , secureContext = model.secureContext
                                         , registryRoot = Path.fromPosixString model.config.registryRoot
                                         }
@@ -376,7 +376,7 @@ update msg model =
                             let
                                 ctx =
                                     { registry = registry
-                                    , fsPermission = model.fsPermission
+                                    , filesystemPermission = model.filesystemPermission
                                     , secureContext = model.secureContext
                                     , registryRoot = Path.fromPosixString model.config.registryRoot
                                     }
@@ -458,7 +458,7 @@ update msg model =
                     , command =
                         Cmd.batch
                             [ sendResponseCmd
-                            , ChildProcess.run model.cpPermission "bash" [ "-c", shellCommand ] options
+                            , ChildProcess.run model.childProcessPermission "bash" [ "-c", shellCommand ] options
                                 |> GrenTask.map
                                     (\cliResult ->
                                         let
@@ -532,7 +532,7 @@ update msg model =
                         let
                             ctx =
                                 { registry = registry
-                                , fsPermission = model.fsPermission
+                                , filesystemPermission = model.filesystemPermission
                                 , secureContext = model.secureContext
                                 , registryRoot = Path.fromPosixString model.config.registryRoot
                                 }
@@ -567,7 +567,7 @@ update msg model =
                                 let
                                     ctx =
                                         { registry = registry
-                                        , fsPermission = model.fsPermission
+                                        , filesystemPermission = model.filesystemPermission
                                         , secureContext = model.secureContext
                                         , registryRoot = Path.fromPosixString model.config.registryRoot
                                         }
@@ -592,7 +592,7 @@ update msg model =
                                 let
                                     ctx =
                                         { registry = registry
-                                        , fsPermission = model.fsPermission
+                                        , filesystemPermission = model.filesystemPermission
                                         , secureContext = model.secureContext
                                         , registryRoot = Path.fromPosixString model.config.registryRoot
                                         }
@@ -762,7 +762,7 @@ update msg model =
                     let
                         ctx =
                             { registry = registry
-                            , fsPermission = model.fsPermission
+                            , filesystemPermission = model.filesystemPermission
                             , secureContext = model.secureContext
                             , registryRoot = Path.fromPosixString model.config.registryRoot
                             }
@@ -949,7 +949,7 @@ handleRoute model route request response =
     when route is
         Router.StaticFile filePath ->
             Static.readStaticFile
-                { fsPermission = model.fsPermission
+                { filesystemPermission = model.filesystemPermission
                 , staticRoot = Path.fromPosixString model.config.staticRoot
                 }
                 filePath
@@ -965,7 +965,7 @@ handleRoute model route request response =
                     let
                         ctx =
                             { registry = registry
-                            , fsPermission = model.fsPermission
+                            , filesystemPermission = model.filesystemPermission
                             , secureContext = model.secureContext
                             , registryRoot = Path.fromPosixString model.config.registryRoot
                             }
@@ -993,7 +993,7 @@ handleRoute model route request response =
                                                                 |> Result.mapError Decode.errorToString
                                                                 |> Result.andThen (\idStr ->
                                                                     when Id.taskIdFromString idStr is
-                                                                        Just tid -> Ok tid
+                                                                        Just taskId -> Ok taskId
                                                                         Nothing -> Err "Invalid task ID"
                                                                 )
 
@@ -1606,7 +1606,7 @@ dispatchPlanner model agentReg taskId description =
                         , runDuration = ChildProcess.Milliseconds 300000
                         }
                 in
-                ChildProcess.run model.cpPermission "bash" [ "-c", shellCommand ] options
+                ChildProcess.run model.childProcessPermission "bash" [ "-c", shellCommand ] options
                     |> GrenTask.map
                         (\cliResult ->
                             let

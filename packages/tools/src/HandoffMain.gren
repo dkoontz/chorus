@@ -34,12 +34,12 @@ main =
 init : Node.Environment -> Init.Task (Cmd a)
 init env =
     Init.await ChildProcess.initialize <|
-        \cpPermission ->
-            runTool env cpPermission
+        \childProcessPermission ->
+            runTool env childProcessPermission
 
 
 runTool : Node.Environment -> ChildProcess.Permission -> Init.Task (Cmd a)
-runTool env cpPermission =
+runTool env childProcessPermission =
     when env.args is
         [ _, _, _, jsonInput ] ->
             when Json.decodeRequest jsonInput is
@@ -47,7 +47,7 @@ runTool env cpPermission =
                     outputError env ("Invalid JSON input: " ++ decodeError)
 
                 Ok request ->
-                    executeRequest env cpPermission request
+                    executeRequest env childProcessPermission request
 
         _ ->
             outputError env "Usage: handoff-tool <workspace_root> <json_input>"
@@ -58,10 +58,10 @@ executeRequest :
     -> ChildProcess.Permission
     -> ToolRequest
     -> Init.Task (Cmd a)
-executeRequest env cpPermission request =
+executeRequest env childProcessPermission request =
     when request is
         HandoffRequest input ->
-            Handoff.run cpPermission input
+            Handoff.run childProcessPermission input
                 |> Task.map encodeHandoffOutput
                 |> Task.mapError Handoff.handoffErrorToString
                 |> handleResult env

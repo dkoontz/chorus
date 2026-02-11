@@ -63,7 +63,7 @@ import Web.Router exposing (Route(..))
 -}
 type alias ApiContext =
     { registry : Registry.Registry
-    , fsPermission : FileSystem.Permission
+    , filesystemPermission : FileSystem.Permission
     , secureContext : SecureContext
     , registryRoot : Path
     }
@@ -596,7 +596,7 @@ requestHistory ctx taskId toMsg =
                 (Path.fromPosixString (taskIdStr ++ "/history.json"))
                 ctx.registryRoot
     in
-    FileSystem.readFile ctx.fsPermission historyPath
+    FileSystem.readFile ctx.filesystemPermission historyPath
         |> GrenTask.andThen
             (\bytes ->
                 when Bytes.toString bytes is
@@ -642,7 +642,7 @@ requestQueue ctx taskId toMsg =
                 (Path.fromPosixString (taskIdStr ++ "/queue.json"))
                 ctx.registryRoot
     in
-    FileSystem.readFile ctx.fsPermission queuePath
+    FileSystem.readFile ctx.filesystemPermission queuePath
         |> GrenTask.andThen
             (\bytes ->
                 when Bytes.toString bytes is
@@ -686,7 +686,7 @@ requestEnqueue ctx taskId content toMsg =
         taskDir =
             Path.append (Path.fromPosixString taskIdStr) ctx.registryRoot
     in
-    Queue.enqueue ctx.fsPermission ctx.secureContext taskDir taskId content
+    Queue.enqueue ctx.filesystemPermission ctx.secureContext taskDir taskId content
         |> GrenTask.andThen
             (\message ->
                 Time.now
@@ -750,12 +750,12 @@ requestUploadAttachment ctx taskId filename fileBytes uploadDir toMsg =
                 Path.append (Path.fromPosixString filename) taskUploadDir
         in
         -- Create the per-task upload directory
-        FileSystem.makeDirectory ctx.fsPermission { recursive = True } taskUploadDir
+        FileSystem.makeDirectory ctx.filesystemPermission { recursive = True } taskUploadDir
             |> GrenTask.mapError (\e -> Registry.FileSystemError (FileSystem.errorToString e))
             |> GrenTask.andThen
                 (\_ ->
                     -- Write the file
-                    FileSystem.writeFile ctx.fsPermission fileBytes filePath
+                    FileSystem.writeFile ctx.filesystemPermission fileBytes filePath
                         |> GrenTask.mapError (\e -> Registry.FileSystemError (FileSystem.errorToString e))
                 )
             |> GrenTask.andThen
@@ -835,7 +835,7 @@ requestDownloadAttachment ctx taskId filename uploadDir toMsg =
                                 GrenTask.fail (Registry.FileSystemError ("Attachment not found: " ++ filename))
 
                             Just { value } ->
-                                FileSystem.readFile ctx.fsPermission filePath
+                                FileSystem.readFile ctx.filesystemPermission filePath
                                     |> GrenTask.mapError (\e -> Registry.FileSystemError (FileSystem.errorToString e))
                                     |> GrenTask.map
                                         (\bytes ->
@@ -880,7 +880,7 @@ requestDeleteAttachment ctx taskId filename uploadDir toMsg =
             Path.append (Path.fromPosixString filename) taskUploadDir
     in
     -- Delete the file from disk
-    FileSystem.remove ctx.fsPermission { recursive = False } filePath
+    FileSystem.remove ctx.filesystemPermission { recursive = False } filePath
         |> GrenTask.mapError (\e -> Registry.FileSystemError (FileSystem.errorToString e))
         |> GrenTask.andThen
             (\_ ->
@@ -1442,8 +1442,8 @@ queueErrorToString err =
         Queue.JsonDecodeError msg ->
             "JSON decode error: " ++ msg
 
-        Queue.TaskNotFound tid ->
-            "Task not found: " ++ Id.taskIdToString tid
+        Queue.TaskNotFound taskId ->
+            "Task not found: " ++ Id.taskIdToString taskId
 
 
 {-| Convert an Array of strings into a Dict with numbered keys.

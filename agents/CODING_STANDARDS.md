@@ -278,6 +278,56 @@ Underscore-suffixed field names are fine when the record is directly consumed by
 
 If you define a record type for application use, choose a descriptive field name. Reserve underscore-suffixed names for records that must match an external library API. Map between the two at the boundary.
 
+## Avoid Abbreviated Field and Variable Names
+
+Do not abbreviate field or variable names to 2-letter prefixes or short contractions. Use the full descriptive name so that the code reads clearly without requiring the reader to mentally expand abbreviations.
+
+### Why?
+
+- **Readability**: `filesystemPermission` is immediately clear; `fsPermission` requires the reader to know that `fs` means "filesystem"
+- **Consistency**: Full names eliminate guesswork about which abbreviation was chosen (is it `fs`, `file`, `fil`?)
+- **Searchability**: Full words are easier to search for across the codebase
+
+### Bad: 2-letter abbreviated prefixes
+
+```gren
+-- BAD: Abbreviated prefixes obscure meaning
+type alias Permissions =
+    { fsPermission : Permission
+    , cpPermission : Permission
+    }
+```
+
+### Good: Full descriptive names
+
+```gren
+-- GOOD: No ambiguity about what these fields represent
+type alias Permissions =
+    { filesystemPermission : Permission
+    , childProcessPermission : Permission
+    }
+```
+
+### More examples
+
+| Bad | Good | Why |
+|-----|------|-----|
+| `fsPermission` | `filesystemPermission` | `fs` is a 2-letter abbreviation of "filesystem" |
+| `cpPermission` | `childProcessPermission` | `cp` is a 2-letter abbreviation of "child process" |
+| `wsRoot` | `workspaceRoot` | `ws` is a 2-letter abbreviation of "workspace" |
+| `tid` | `taskId` | `tid` is a contraction of "task id" |
+| `fname` | `fileName` | `fname` is a contraction of "file name" |
+
+### What this rule does NOT cover
+
+- Names that are already full words (e.g., `env`, `msg`, `cmd`) are fine
+- Names required by external library APIs are exempt
+- 3+ letter abbreviations are not targeted by this rule
+
+### The rule
+
+When naming a field or variable, spell out the full name. If you find yourself reaching for a 2-letter prefix or a short contraction, use the complete word instead.
+
 ## Fail on Malformed or Missing Data
 
 Never silently substitute a default value or partially interpret data when the expected value is missing or malformed. Missing or invalid data must produce an explicit error so that the caller can detect and handle the problem. Hard-coded fallbacks hide bugs and make failures difficult to trace.

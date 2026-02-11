@@ -127,7 +127,7 @@ taskStatusErrorToString error =
 Makes a GET request to /api/tasks/:id and decodes the response.
 -}
 getTask : ChildProcess.Permission -> TaskGetInput -> Task TaskStatusError TaskGetOutput
-getTask cpPermission input =
+getTask childProcessPermission input =
     let
         url =
             input.baseUrl ++ "/api/tasks/" ++ input.taskId
@@ -139,7 +139,7 @@ getTask cpPermission input =
             , url
             ]
     in
-    ChildProcess.run cpPermission "curl" args defaultCurlOptions
+    ChildProcess.run childProcessPermission "curl" args defaultCurlOptions
         |> Task.mapError curlFailedRunToError
         |> Task.andThen
             (\result ->
@@ -167,7 +167,7 @@ getTask cpPermission input =
 Makes a GET request to /api/tasks?status=... and decodes the response.
 -}
 listTasks : ChildProcess.Permission -> TaskListInput -> Task TaskStatusError TaskListOutput
-listTasks cpPermission input =
+listTasks childProcessPermission input =
     let
         queryString =
             when input.status is
@@ -187,7 +187,7 @@ listTasks cpPermission input =
             , url
             ]
     in
-    ChildProcess.run cpPermission "curl" args defaultCurlOptions
+    ChildProcess.run childProcessPermission "curl" args defaultCurlOptions
         |> Task.mapError curlFailedRunToError
         |> Task.andThen
             (\result ->

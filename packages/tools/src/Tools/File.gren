@@ -162,7 +162,7 @@ read :
     -> WorkspaceRoot
     -> ReadInput
     -> Task FileError ReadOutput
-read fsPermission workspaceRoot input =
+read filesystemPermission workspaceRoot input =
     when Validation.validatePath workspaceRoot input.path is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
@@ -172,7 +172,7 @@ read fsPermission workspaceRoot input =
                 path =
                     Validation.toPath validPath
             in
-            FileSystem.readFile fsPermission path
+            FileSystem.readFile filesystemPermission path
                 |> Task.mapError FileSystemError
                 |> Task.andThen (processReadContent input)
 
@@ -234,7 +234,7 @@ create :
     -> WorkspaceRoot
     -> WriteInput
     -> Task FileError WriteOutput
-create fsPermission workspaceRoot input =
+create filesystemPermission workspaceRoot input =
     when Validation.validatePath workspaceRoot input.path is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
@@ -254,7 +254,7 @@ create fsPermission workspaceRoot input =
                     Bytes.length bytes
             in
             -- Check if file already exists
-            FileSystem.metadata fsPermission { resolveLink = True } path
+            FileSystem.metadata filesystemPermission { resolveLink = True } path
                 |> Task.mapError FileSystemError
                 |> Task.andThen
                     (\_ ->
@@ -269,8 +269,8 @@ create fsPermission workspaceRoot input =
 
                             _ ->
                                 -- File doesn't exist (metadata failed) - create it
-                                ensureParentDirectory fsPermission parentPath
-                                    |> Task.andThen (\_ -> FileSystem.writeFile fsPermission bytes path)
+                                ensureParentDirectory filesystemPermission parentPath
+                                    |> Task.andThen (\_ -> FileSystem.writeFile filesystemPermission bytes path)
                                     |> Task.mapError FileSystemError
                                     |> Task.map
                                         (\_ ->
@@ -310,7 +310,7 @@ write :
     -> WorkspaceRoot
     -> WriteInput
     -> Task FileError WriteOutput
-write fsPermission workspaceRoot input =
+write filesystemPermission workspaceRoot input =
     when Validation.validatePath workspaceRoot input.path is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
@@ -327,11 +327,11 @@ write fsPermission workspaceRoot input =
                     Bytes.length bytes
             in
             -- Verify file exists first
-            FileSystem.metadata fsPermission { resolveLink = True } path
+            FileSystem.metadata filesystemPermission { resolveLink = True } path
                 |> Task.mapError (\_ -> FileNotFound { path = input.path })
                 |> Task.andThen
                     (\_ ->
-                        FileSystem.writeFile fsPermission bytes path
+                        FileSystem.writeFile filesystemPermission bytes path
                             |> Task.mapError FileSystemError
                             |> Task.map
                                 (\_ ->
@@ -343,13 +343,13 @@ write fsPermission workspaceRoot input =
 
 
 ensureParentDirectory : FileSystem.Permission -> Maybe Path -> Task FileSystem.Error {}
-ensureParentDirectory fsPermission maybePath =
+ensureParentDirectory filesystemPermission maybePath =
     when maybePath is
         Nothing ->
             Task.succeed {}
 
         Just path ->
-            FileSystem.makeDirectory fsPermission { recursive = True } path
+            FileSystem.makeDirectory filesystemPermission { recursive = True } path
                 |> Task.map (\_ -> {})
                 |> Task.onError
                     (\err ->
@@ -400,7 +400,7 @@ patch :
     -> WorkspaceRoot
     -> PatchInput
     -> Task FileError PatchOutput
-patch fsPermission workspaceRoot input =
+patch filesystemPermission workspaceRoot input =
     when Validation.validatePath workspaceRoot input.path is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
@@ -410,7 +410,7 @@ patch fsPermission workspaceRoot input =
                 path =
                     Validation.toPath validPath
             in
-            FileSystem.readFile fsPermission path
+            FileSystem.readFile filesystemPermission path
                 |> Task.mapError FileSystemError
                 |> Task.andThen
                     (\bytes ->
@@ -426,7 +426,7 @@ patch fsPermission workspaceRoot input =
                                                 newBytes =
                                                     Bytes.fromString newContent
                                             in
-                                            FileSystem.writeFile fsPermission newBytes path
+                                            FileSystem.writeFile filesystemPermission newBytes path
                                                 |> Task.mapError FileSystemError
                                                 |> Task.map
                                                     (\_ ->
@@ -544,7 +544,7 @@ delete :
     -> WorkspaceRoot
     -> DeleteInput
     -> Task FileError DeleteOutput
-delete fsPermission workspaceRoot input =
+delete filesystemPermission workspaceRoot input =
     when Validation.validatePath workspaceRoot input.path is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
@@ -554,13 +554,13 @@ delete fsPermission workspaceRoot input =
                 path =
                     Validation.toPath validPath
             in
-            FileSystem.metadata fsPermission { resolveLink = True } path
+            FileSystem.metadata filesystemPermission { resolveLink = True } path
                 |> Task.mapError FileSystemError
                 |> Task.andThen
                     (\metadata ->
                         when metadata.entityType is
                             FileSystem.File ->
-                                FileSystem.remove fsPermission { recursive = False } path
+                                FileSystem.remove filesystemPermission { recursive = False } path
                                     |> Task.mapError FileSystemError
                                     |> Task.map (\_ -> { success = True })
 
@@ -609,7 +609,7 @@ list :
     -> WorkspaceRoot
     -> ListInput
     -> Task FileError ListOutput
-list fsPermission cpPermission workspaceRoot input =
+list filesystemPermission childProcessPermission workspaceRoot input =
     let
         pathStr =
             Maybe.withDefault "." input.path
@@ -626,23 +626,23 @@ list fsPermission cpPermission workspaceRoot input =
             when input.pattern is
                 Nothing ->
                     -- Simple directory listing
-                    listDirectorySimple fsPermission path
+                    listDirectorySimple filesystemPermission path
 
                 Just pattern ->
                     -- Use find command for glob patterns
-                    listWithPattern cpPermission workspaceRoot validPath pattern
+                    listWithPattern childProcessPermission workspaceRoot validPath pattern
 
 
 listDirectorySimple : FileSystem.Permission -> Path -> Task FileError ListOutput
-listDirectorySimple fsPermission path =
-    FileSystem.listDirectory fsPermission path
+listDirectorySimple filesystemPermission path =
+    FileSystem.listDirectory filesystemPermission path
         |> Task.mapError FileSystemError
         |> Task.andThen
             (\entries ->
                 entries
                     |> Array.map
                         (\entry ->
-                            FileSystem.metadata fsPermission { resolveLink = True } entry.path
+                            FileSystem.metadata filesystemPermission { resolveLink = True } entry.path
                                 |> Task.map
                                     (\metadata ->
                                         { path = Path.toPosixString entry.path
@@ -674,7 +674,7 @@ listWithPattern :
     -> ValidPath
     -> String
     -> Task FileError ListOutput
-listWithPattern cpPermission workspaceRoot validPath pattern =
+listWithPattern childProcessPermission workspaceRoot validPath pattern =
     let
         searchPath =
             Validation.toString validPath
@@ -696,7 +696,7 @@ listWithPattern cpPermission workspaceRoot validPath pattern =
             , runDuration = ChildProcess.Milliseconds 30000
             }
     in
-    ChildProcess.run cpPermission "find" args options
+    ChildProcess.run childProcessPermission "find" args options
         |> Task.mapError (\_ -> SearchFailed { reason = "find command failed" })
         |> Task.map
             (\result ->
@@ -765,7 +765,7 @@ search :
     -> WorkspaceRoot
     -> SearchInput
     -> Task FileError SearchOutput
-search cpPermission workspaceRoot input =
+search childProcessPermission workspaceRoot input =
     let
         searchPath =
             Maybe.withDefault "." input.path
@@ -778,7 +778,7 @@ search cpPermission workspaceRoot input =
             Task.fail (ValidationFailed validationError)
 
         Ok validPath ->
-            searchWithRipgrep cpPermission workspaceRoot validPath input maxResults
+            searchWithRipgrep childProcessPermission workspaceRoot validPath input maxResults
                 |> Task.onError
                     (\error ->
                         -- Only fall back to grep if ripgrep is not available
@@ -786,7 +786,7 @@ search cpPermission workspaceRoot input =
                         when error is
                             SearchFailed { reason } ->
                                 if String.contains "not available" reason then
-                                    searchWithGrep cpPermission workspaceRoot validPath input maxResults
+                                    searchWithGrep childProcessPermission workspaceRoot validPath input maxResults
                                 else
                                     Task.fail error
 
@@ -802,7 +802,7 @@ searchWithRipgrep :
     -> SearchInput
     -> Int
     -> Task FileError SearchOutput
-searchWithRipgrep cpPermission workspaceRoot validPath input maxResults =
+searchWithRipgrep childProcessPermission workspaceRoot validPath input maxResults =
     let
         searchPath =
             Validation.toString validPath
@@ -854,7 +854,7 @@ searchWithRipgrep cpPermission workspaceRoot validPath input maxResults =
             , runDuration = ChildProcess.Milliseconds 60000
             }
     in
-    ChildProcess.run cpPermission "rg" args options
+    ChildProcess.run childProcessPermission "rg" args options
         |> Task.map (parseRipgrepOutput maxResults)
         |> Task.onError (handleSearchError "ripgrep")
 
@@ -866,7 +866,7 @@ searchWithGrep :
     -> SearchInput
     -> Int
     -> Task FileError SearchOutput
-searchWithGrep cpPermission workspaceRoot validPath input maxResults =
+searchWithGrep childProcessPermission workspaceRoot validPath input maxResults =
     let
         searchPath =
             Validation.toString validPath
@@ -898,7 +898,7 @@ searchWithGrep cpPermission workspaceRoot validPath input maxResults =
             , runDuration = ChildProcess.Milliseconds 60000
             }
     in
-    ChildProcess.run cpPermission "grep" args options
+    ChildProcess.run childProcessPermission "grep" args options
         |> Task.map (parseGrepOutput maxResults)
         |> Task.onError (handleSearchError "grep")
 

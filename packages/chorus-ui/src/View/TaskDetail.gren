@@ -121,7 +121,7 @@ viewTaskHeader props task =
 viewStatusActions : Props msg -> Types.Task -> Html msg
 viewStatusActions props task =
     let
-        tid =
+        taskId =
             Id.taskIdToString (Types.taskId task)
     in
     div [ class "status-actions" ]
@@ -129,7 +129,7 @@ viewStatusActions props task =
             Pending ->
                 [ button
                     [ class "btn btn-primary"
-                    , onClick (props.onStatusUpdate tid "active")
+                    , onClick (props.onStatusUpdate taskId "active")
                     ]
                     [ text "Start Task" ]
                 ]
@@ -143,22 +143,22 @@ viewStatusActions props task =
                 ]
 
             ReadyToStart ->
-                viewStartWithAgent props tid
+                viewStartWithAgent props taskId
 
             Active ->
                 [ button
                     [ class "btn btn-secondary"
-                    , onClick (props.onStatusUpdate tid "waiting")
+                    , onClick (props.onStatusUpdate taskId "waiting")
                     ]
                     [ text "Pause" ]
                 , button
                     [ class "btn btn-success"
-                    , onClick (props.onStatusUpdate tid "completed")
+                    , onClick (props.onStatusUpdate taskId "completed")
                     ]
                     [ text "Mark Complete" ]
                 , button
                     [ class "btn btn-danger"
-                    , onClick (props.onStatusUpdate tid "failed")
+                    , onClick (props.onStatusUpdate taskId "failed")
                     ]
                     [ text "Mark Failed" ]
                 ]
@@ -166,12 +166,12 @@ viewStatusActions props task =
             Waiting ->
                 [ button
                     [ class "btn btn-primary"
-                    , onClick (props.onStatusUpdate tid "active")
+                    , onClick (props.onStatusUpdate taskId "active")
                     ]
                     [ text "Resume" ]
                 , button
                     [ class "btn btn-success"
-                    , onClick (props.onStatusUpdate tid "completed")
+                    , onClick (props.onStatusUpdate taskId "completed")
                     ]
                     [ text "Mark Complete" ]
                 ]
@@ -179,7 +179,7 @@ viewStatusActions props task =
             Completed ->
                 [ button
                     [ class "btn btn-secondary"
-                    , onClick (props.onStatusUpdate tid "pending")
+                    , onClick (props.onStatusUpdate taskId "pending")
                     ]
                     [ text "Reopen" ]
                 ]
@@ -187,7 +187,7 @@ viewStatusActions props task =
             Failed _ ->
                 [ button
                     [ class "btn btn-secondary"
-                    , onClick (props.onStatusUpdate tid "pending")
+                    , onClick (props.onStatusUpdate taskId "pending")
                     ]
                     [ text "Retry" ]
                 ]
@@ -195,7 +195,7 @@ viewStatusActions props task =
 
 
 viewStartWithAgent : Props msg -> String -> Array (Html msg)
-viewStartWithAgent props tid =
+viewStartWithAgent props taskId =
     let
         hasAgent =
             when props.selectedStartAgent is
@@ -224,7 +224,7 @@ viewStartWithAgent props tid =
         )
     , button
         [ class "btn btn-primary"
-        , onClick (props.onStartTask tid)
+        , onClick (props.onStartTask taskId)
         , disabled (not hasAgent)
         ]
         [ text "Start Task" ]
@@ -261,7 +261,7 @@ viewAttachments props task =
         attachments =
             Types.taskAttachments task
 
-        tid =
+        taskId =
             Id.taskIdToString (Types.taskId task)
     in
     div [ class "task-attachments card" ]
@@ -270,7 +270,7 @@ viewAttachments props task =
             p [ class "empty-state" ] [ text "No attachments" ]
           else
             ul [ class "attachment-list" ]
-                (Array.map (viewAttachment props.zone props.now props tid) attachments)
+                (Array.map (viewAttachment props.zone props.now props taskId) attachments)
         , div [ class "attachment-upload" ]
             [ label [ class "btn btn-secondary" ]
                 [ text "Upload File"
@@ -499,7 +499,7 @@ viewListSection props task title section items placeholder =
 viewQuestionsSection : Props msg -> Types.Task -> Array Types.PlanningQuestion -> Html msg
 viewQuestionsSection props task questions =
     let
-        tid =
+        taskId =
             Id.taskIdToString (Types.taskId task)
 
         isAwaitingInput =
@@ -544,7 +544,7 @@ viewQuestionsSection props task questions =
             div [ class "questions-actions" ]
                 [ button
                     [ class "btn btn-primary"
-                    , onClick (props.onSubmitAnswers tid)
+                    , onClick (props.onSubmitAnswers taskId)
                     ]
                     [ text "Submit Answers" ]
                 ]

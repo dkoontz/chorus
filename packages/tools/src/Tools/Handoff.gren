@@ -84,9 +84,9 @@ Makes a POST to /api/tasks/:id/handoff to start, then polls
 GET /api/tasks/:id until currentAgent is null.
 -}
 run : ChildProcess.Permission -> HandoffInput -> Task HandoffError HandoffOutput
-run cpPermission input =
-    startHandoff cpPermission input
-        |> Task.andThen (\_ -> pollForCompletion cpPermission input 0)
+run childProcessPermission input =
+    startHandoff childProcessPermission input
+        |> Task.andThen (\_ -> pollForCompletion childProcessPermission input 0)
 
 
 
@@ -96,7 +96,7 @@ run cpPermission input =
 {-| Start the handoff by POSTing to the Chorus API.
 -}
 startHandoff : ChildProcess.Permission -> HandoffInput -> Task HandoffError {}
-startHandoff cpPermission input =
+startHandoff childProcessPermission input =
     let
         url =
             input.baseUrl ++ "/api/tasks/" ++ input.taskId ++ "/handoff"
@@ -122,7 +122,7 @@ startHandoff cpPermission input =
             ]
 
     in
-    ChildProcess.run cpPermission "curl" args defaultCurlOptions
+    ChildProcess.run childProcessPermission "curl" args defaultCurlOptions
         |> Task.mapError (\failedRun -> curlFailedRunToError failedRun)
         |> Task.andThen
             (\result ->
@@ -144,7 +144,7 @@ startHandoff cpPermission input =
 {-| Poll the task endpoint until the agent completes or timeout is reached.
 -}
 pollForCompletion : ChildProcess.Permission -> HandoffInput -> Int -> Task HandoffError HandoffOutput
-pollForCompletion cpPermission input elapsedMs =
+pollForCompletion childProcessPermission input elapsedMs =
     if elapsedMs >= input.maxWaitMs then
         Task.fail (Timeout { elapsedMs = elapsedMs, maxWaitMs = input.maxWaitMs })
     else
@@ -156,7 +156,7 @@ pollForCompletion cpPermission input elapsedMs =
                         newElapsed =
                             elapsedMs + input.pollIntervalMs
                     in
-                    fetchTask cpPermission input
+                    fetchTask childProcessPermission input
                         |> Task.andThen
                             (\taskJson ->
                                 let
@@ -173,7 +173,7 @@ pollForCompletion cpPermission input elapsedMs =
 
                                     Ok (Just _) ->
                                         -- Agent still running, keep polling
-                                        pollForCompletion cpPermission input newElapsed
+                                        pollForCompletion childProcessPermission input newElapsed
 
                                     Ok Nothing ->
                                         -- Agent completed; extract output from the last agentChain entry
@@ -185,7 +185,7 @@ pollForCompletion cpPermission input elapsedMs =
 {-| Fetch the task JSON from the Chorus API.
 -}
 fetchTask : ChildProcess.Permission -> HandoffInput -> Task HandoffError String
-fetchTask cpPermission input =
+fetchTask childProcessPermission input =
     let
         url =
             input.baseUrl ++ "/api/tasks/" ++ input.taskId
@@ -197,7 +197,7 @@ fetchTask cpPermission input =
             , url
             ]
     in
-    ChildProcess.run cpPermission "curl" args defaultCurlOptions
+    ChildProcess.run childProcessPermission "curl" args defaultCurlOptions
         |> Task.mapError (\failedRun -> curlFailedRunToError failedRun)
         |> Task.andThen
             (\result ->

@@ -49,8 +49,8 @@ tests =
 testTaskId : String -> Id.TaskId
 testTaskId raw =
     when Id.taskIdFromString raw is
-        Just tid ->
-            tid
+        Just taskId ->
+            taskId
 
         Nothing ->
             Debug.todo ("Invalid test TaskId: " ++ raw)

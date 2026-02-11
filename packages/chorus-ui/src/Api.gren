@@ -58,9 +58,9 @@ getTasks maybeStatus toMsg =
 {-| Get a single task by ID.
 -}
 getTask : String -> (Result Http.Error Task -> msg) -> Cmd msg
-getTask tid toMsg =
+getTask taskId toMsg =
     Http.get
-        { url = "/api/tasks/" ++ tid
+        { url = "/api/tasks/" ++ taskId
         , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         }
 
@@ -92,7 +92,7 @@ updateTaskStatus :
     -> String
     -> (Result Http.Error Task -> msg)
     -> Cmd msg
-updateTaskStatus tid statusStr toMsg =
+updateTaskStatus taskId statusStr toMsg =
     let
         statusValue =
             when Types.statusFromString statusStr is
@@ -107,7 +107,7 @@ updateTaskStatus tid statusStr toMsg =
     Http.request
         { method = "PUT"
         , headers = []
-        , url = "/api/tasks/" ++ tid ++ "/status"
+        , url = "/api/tasks/" ++ taskId ++ "/status"
         , body =
             Http.jsonBody
                 (Encode.object
@@ -132,7 +132,7 @@ updateTaskPlanning :
        }
     -> (Result Http.Error Task -> msg)
     -> Cmd msg
-updateTaskPlanning tid params toMsg =
+updateTaskPlanning taskId params toMsg =
     let
         encodeMaybeField : String -> (a -> Encode.Value) -> Maybe a -> Array { key : String, value : Encode.Value }
         encodeMaybeField key encoder maybeVal =
@@ -154,7 +154,7 @@ updateTaskPlanning tid params toMsg =
     Http.request
         { method = "PUT"
         , headers = []
-        , url = "/api/tasks/" ++ tid ++ "/planning"
+        , url = "/api/tasks/" ++ taskId ++ "/planning"
         , body = Http.jsonBody (Encode.object fields)
         , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
@@ -169,9 +169,9 @@ submitAnswers :
     -> Array String
     -> (Result Http.Error Task -> msg)
     -> Cmd msg
-submitAnswers tid answers toMsg =
+submitAnswers taskId answers toMsg =
     Http.post
-        { url = "/api/tasks/" ++ tid ++ "/answers"
+        { url = "/api/tasks/" ++ taskId ++ "/answers"
         , body =
             Http.jsonBody
                 (Encode.object
@@ -189,9 +189,9 @@ startHandoff :
     -> { agentName : String, prompt : String }
     -> (Result Http.Error Task -> msg)
     -> Cmd msg
-startHandoff tid params toMsg =
+startHandoff taskId params toMsg =
     Http.post
-        { url = "/api/tasks/" ++ tid ++ "/handoff"
+        { url = "/api/tasks/" ++ taskId ++ "/handoff"
         , body =
             Http.jsonBody
                 (Encode.object
@@ -206,9 +206,9 @@ startHandoff tid params toMsg =
 {-| Get task event history.
 -}
 getTaskHistory : String -> (Result Http.Error History -> msg) -> Cmd msg
-getTaskHistory tid toMsg =
+getTaskHistory taskId toMsg =
     Http.get
-        { url = "/api/tasks/" ++ tid ++ "/history"
+        { url = "/api/tasks/" ++ taskId ++ "/history"
         , expect = Http.expectJson toMsg (dataDecoder Types.historyDecoder)
         }
 
@@ -216,9 +216,9 @@ getTaskHistory tid toMsg =
 {-| Get task message queue.
 -}
 getTaskQueue : String -> (Result Http.Error Queue -> msg) -> Cmd msg
-getTaskQueue tid toMsg =
+getTaskQueue taskId toMsg =
     Http.get
-        { url = "/api/tasks/" ++ tid ++ "/queue"
+        { url = "/api/tasks/" ++ taskId ++ "/queue"
         , expect = Http.expectJson toMsg (dataDecoder Types.queueDecoder)
         }
 
@@ -232,11 +232,11 @@ uploadAttachment :
     -> String
     -> (Result Http.Error Task -> msg)
     -> Cmd msg
-uploadAttachment tid filename fileBytes contentType toMsg =
+uploadAttachment taskId filename fileBytes contentType toMsg =
     Http.request
         { method = "POST"
         , headers = []
-        , url = "/api/tasks/" ++ tid ++ "/attachments?filename=" ++ filename
+        , url = "/api/tasks/" ++ taskId ++ "/attachments?filename=" ++ filename
         , body = Http.bytesBody contentType fileBytes
         , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
@@ -251,11 +251,11 @@ deleteAttachment :
     -> String
     -> (Result Http.Error Task -> msg)
     -> Cmd msg
-deleteAttachment tid filename toMsg =
+deleteAttachment taskId filename toMsg =
     Http.request
         { method = "DELETE"
         , headers = []
-        , url = "/api/tasks/" ++ tid ++ "/attachments/" ++ filename
+        , url = "/api/tasks/" ++ taskId ++ "/attachments/" ++ filename
         , body = Http.emptyBody
         , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing

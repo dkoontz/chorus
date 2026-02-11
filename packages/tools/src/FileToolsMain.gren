@@ -43,14 +43,14 @@ main =
 init : Node.Environment -> Init.Task (Cmd a)
 init env =
     Init.await FileSystem.initialize <|
-        \fsPermission ->
+        \filesystemPermission ->
             Init.await ChildProcess.initialize <|
-                \cpPermission ->
-                    runTool env fsPermission cpPermission
+                \childProcessPermission ->
+                    runTool env filesystemPermission childProcessPermission
 
 
 runTool : Node.Environment -> FileSystem.Permission -> ChildProcess.Permission -> Init.Task (Cmd a)
-runTool env fsPermission cpPermission =
+runTool env filesystemPermission childProcessPermission =
     when env.args is
         [ _, _, workspaceRootStr, jsonInput ] ->
             let
@@ -62,7 +62,7 @@ runTool env fsPermission cpPermission =
                     outputError env ("Invalid JSON input: " ++ decodeError)
 
                 Ok request ->
-                    executeRequest env fsPermission cpPermission workspaceRoot request
+                    executeRequest env filesystemPermission childProcessPermission workspaceRoot request
 
         _ ->
             outputError env "Usage: file-tools <workspace_root> <json_input>. Use {\"tool\":\"help\"} for available commands."
@@ -75,46 +75,46 @@ executeRequest :
     -> WorkspaceRoot
     -> ToolRequest
     -> Init.Task (Cmd a)
-executeRequest env fsPermission cpPermission workspaceRoot request =
+executeRequest env filesystemPermission childProcessPermission workspaceRoot request =
     when request is
         ReadRequest input ->
-            File.read fsPermission workspaceRoot input
+            File.read filesystemPermission workspaceRoot input
                 |> Task.map encodeReadOutput
                 |> Task.mapError File.fileErrorToString
                 |> handleResult env
 
         CreateRequest input ->
-            File.create fsPermission workspaceRoot input
+            File.create filesystemPermission workspaceRoot input
                 |> Task.map encodeWriteOutput
                 |> Task.mapError File.fileErrorToString
                 |> handleResult env
 
         WriteRequest input ->
-            File.write fsPermission workspaceRoot input
+            File.write filesystemPermission workspaceRoot input
                 |> Task.map encodeWriteOutput
                 |> Task.mapError File.fileErrorToString
                 |> handleResult env
 
         PatchRequest input ->
-            File.patch fsPermission workspaceRoot input
+            File.patch filesystemPermission workspaceRoot input
                 |> Task.map encodePatchOutput
                 |> Task.mapError File.fileErrorToString
                 |> handleResult env
 
         DeleteRequest input ->
-            File.delete fsPermission workspaceRoot input
+            File.delete filesystemPermission workspaceRoot input
                 |> Task.map encodeDeleteOutput
                 |> Task.mapError File.fileErrorToString
                 |> handleResult env
 
         ListRequest input ->
-            File.list fsPermission cpPermission workspaceRoot input
+            File.list filesystemPermission childProcessPermission workspaceRoot input
                 |> Task.map encodeListOutput
                 |> Task.mapError File.fileErrorToString
                 |> handleResult env
 
         SearchRequest input ->
-            File.search cpPermission workspaceRoot input
+            File.search childProcessPermission workspaceRoot input
                 |> Task.map encodeSearchOutput
                 |> Task.mapError File.fileErrorToString
                 |> handleResult env

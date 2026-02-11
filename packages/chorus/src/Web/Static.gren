@@ -26,7 +26,7 @@ import Task as GrenTask
 {-| Configuration for static file serving.
 -}
 type alias Config =
-    { fsPermission : FileSystem.Permission
+    { filesystemPermission : FileSystem.Permission
     , staticRoot : Path
     }
 
@@ -65,7 +65,7 @@ readStaticFile config relativePath toMsg =
         contentType =
             getContentType relativePath
     in
-    FileSystem.readFile config.fsPermission filePath
+    FileSystem.readFile config.filesystemPermission filePath
         |> GrenTask.map (\bytes -> FileFound { bytes = bytes, contentType = contentType })
         |> GrenTask.onError
             (\err ->
@@ -89,7 +89,7 @@ readIndexFile config =
         indexPath =
             Path.append (Path.fromPosixString "index.html") config.staticRoot
     in
-    FileSystem.readFile config.fsPermission indexPath
+    FileSystem.readFile config.filesystemPermission indexPath
         |> GrenTask.map (\bytes -> FileFound { bytes = bytes, contentType = "text/html; charset=utf-8" })
         |> GrenTask.onError (\_ -> GrenTask.succeed (FileNotFound "index.html"))
 

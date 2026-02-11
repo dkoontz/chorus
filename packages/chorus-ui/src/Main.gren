@@ -1069,7 +1069,7 @@ viewMain model =
                     , history = model.taskHistory
                     , queue = model.taskQueue
                     , loading = model.loading
-                    , onStatusUpdate = \tid status -> UpdateTaskStatus { taskId = tid, status = status }
+                    , onStatusUpdate = \statusTaskId status -> UpdateTaskStatus { taskId = statusTaskId, status = status }
                     , onStartTask = StartTask
                     , onSelectStartAgent = SelectStartAgent
                     , agents = Array.map .name model.agents

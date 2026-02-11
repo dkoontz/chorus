@@ -431,8 +431,8 @@ buildShellCommand args =
             let
                 taskIdVar =
                     when args.taskId is
-                        Just tid ->
-                            "CHORUS_TASK_ID=" ++ escapeForShell tid ++ " "
+                        Just taskId ->
+                            "CHORUS_TASK_ID=" ++ escapeForShell taskId ++ " "
 
                         Nothing ->
                             ""

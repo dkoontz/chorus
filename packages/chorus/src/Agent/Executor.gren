@@ -389,7 +389,7 @@ executeToolCall :
     -> Path  -- workspace root
     -> ToolCall
     -> Task String String
-executeToolCall cpPermission fileToolsPath workspaceRoot toolCall =
+executeToolCall childProcessPermission fileToolsPath workspaceRoot toolCall =
     let
         -- Convert tool call to file-tools JSON input format
         inputJson =
@@ -407,7 +407,7 @@ executeToolCall cpPermission fileToolsPath workspaceRoot toolCall =
             , runDuration = ChildProcess.Milliseconds 60000
             }
     in
-    ChildProcess.run cpPermission (Path.toPosixString fileToolsPath) [ Path.toPosixString workspaceRoot, inputJson ] options
+    ChildProcess.run childProcessPermission (Path.toPosixString fileToolsPath) [ Path.toPosixString workspaceRoot, inputJson ] options
         |> Task.mapError
             (\runError ->
                 when runError is
@@ -446,7 +446,7 @@ saveSessionId :
     -> Path
     -> SessionId
     -> Task String {}
-saveSessionId fsPermission workspaceRoot sessionId =
+saveSessionId filesystemPermission workspaceRoot sessionId =
     let
         path =
             sessionFilePath workspaceRoot
@@ -454,7 +454,7 @@ saveSessionId fsPermission workspaceRoot sessionId =
         bytes =
             Bytes.fromString (Id.sessionIdToString sessionId)
     in
-    FileSystem.writeFile fsPermission bytes path
+    FileSystem.writeFile filesystemPermission bytes path
         |> Task.mapError (\e -> FileSystem.errorToString e)
         |> Task.map (\_ -> {})
 
@@ -465,12 +465,12 @@ loadSessionId :
     FileSystem.Permission
     -> Path
     -> Task String SessionId
-loadSessionId fsPermission workspaceRoot =
+loadSessionId filesystemPermission workspaceRoot =
     let
         path =
             sessionFilePath workspaceRoot
     in
-    FileSystem.readFile fsPermission path
+    FileSystem.readFile filesystemPermission path
         |> Task.mapError (\e -> FileSystem.errorToString e)
         |> Task.andThen
             (\bytes ->

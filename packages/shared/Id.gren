@@ -103,8 +103,8 @@ taskIdDecoder =
         |> Decode.andThen
             (\raw ->
                 when taskIdFromString raw is
-                    Just tid ->
-                        Decode.succeed tid
+                    Just taskId ->
+                        Decode.succeed taskId
 
                     Nothing ->
                         Decode.fail "TaskId cannot be empty"

@@ -40,7 +40,7 @@ import Task
 -}
 type alias Config =
     { childProcessPermission : ChildProcess.Permission
-    , fsPermission : FileSystem.Permission
+    , filesystemPermission : FileSystem.Permission
     , chorusToolsPath : String
     , baseUrl : String
     }
@@ -130,7 +130,7 @@ createSession config agentSpec workspaceRoot toMsg =
             Path.append (Path.fromPosixString "AGENTS.md") (Path.fromPosixString workspaceRoot)
     in
     -- Write system prompt to AGENTS.md in workspace
-    FileSystem.writeFile config.fsPermission (Bytes.fromString agentSpec.systemPrompt) agentsPath
+    FileSystem.writeFile config.filesystemPermission (Bytes.fromString agentSpec.systemPrompt) agentsPath
         |> Task.mapError
             (\fsErr ->
                 EnvironmentError { message = "Failed to write AGENTS.md: " ++ FileSystem.errorToString fsErr }
@@ -310,8 +310,8 @@ buildShellCommand args =
             let
                 taskIdVar =
                     when args.taskId is
-                        Just tid ->
-                            "CHORUS_TASK_ID=" ++ escapeForShell tid ++ " "
+                        Just taskId ->
+                            "CHORUS_TASK_ID=" ++ escapeForShell taskId ++ " "
 
                         Nothing ->
                             ""

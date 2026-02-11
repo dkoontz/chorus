@@ -37,14 +37,14 @@ main =
 init : Node.Environment -> Init.Task (Cmd a)
 init env =
     Init.await ChildProcess.initialize <|
-        \cpPermission ->
+        \childProcessPermission ->
             Init.awaitTask Node.getEnvironmentVariables <|
                 \envVars ->
-                    runTool env cpPermission envVars
+                    runTool env childProcessPermission envVars
 
 
 runTool : Node.Environment -> ChildProcess.Permission -> Dict.Dict String String -> Init.Task (Cmd a)
-runTool env cpPermission envVars =
+runTool env childProcessPermission envVars =
     let
         baseUrl =
             Dict.get "CHORUS_BASE_URL" envVars
@@ -60,7 +60,7 @@ runTool env cpPermission envVars =
         Just taskId ->
             when env.args is
                 [ _, _, jsonInput ] ->
-                    dispatchTool env cpPermission baseUrl taskId jsonInput
+                    dispatchTool env childProcessPermission baseUrl taskId jsonInput
 
                 _ ->
                     outputError env "Usage: chorus-tools <json_input>"
@@ -75,7 +75,7 @@ dispatchTool :
     -> String
     -> String
     -> Init.Task (Cmd a)
-dispatchTool env cpPermission baseUrl taskId jsonInput =
+dispatchTool env childProcessPermission baseUrl taskId jsonInput =
     let
         toolNameResult =
             Decode.decodeString (Decode.field "tool" Decode.string) jsonInput
@@ -88,11 +88,11 @@ dispatchTool env cpPermission baseUrl taskId jsonInput =
             when toolName is
                 "handoff" ->
                     -- Special case: handoff uses start + poll pattern
-                    dispatchHandoff env cpPermission baseUrl taskId jsonInput
+                    dispatchHandoff env childProcessPermission baseUrl taskId jsonInput
 
                 _ ->
                     -- Forward to server's tool execution endpoint
-                    forwardToServer env cpPermission baseUrl taskId jsonInput
+                    forwardToServer env childProcessPermission baseUrl taskId jsonInput
 
 
 {-| Forward a tool request to the server's POST /api/tasks/:id/tools endpoint.
@@ -104,7 +104,7 @@ forwardToServer :
     -> String
     -> String
     -> Init.Task (Cmd a)
-forwardToServer env cpPermission baseUrl taskId jsonInput =
+forwardToServer env childProcessPermission baseUrl taskId jsonInput =
     let
         url =
             baseUrl ++ "/api/tasks/" ++ taskId ++ "/tools"
@@ -118,7 +118,7 @@ forwardToServer env cpPermission baseUrl taskId jsonInput =
             , url
             ]
     in
-    ChildProcess.run cpPermission "curl" args defaultCurlOptions
+    ChildProcess.run childProcessPermission "curl" args defaultCurlOptions
         |> Task.mapError curlFailedToString
         |> Task.andThen
             (\result ->
@@ -182,7 +182,7 @@ dispatchHandoff :
     -> String
     -> String
     -> Init.Task (Cmd a)
-dispatchHandoff env cpPermission baseUrl taskId jsonInput =
+dispatchHandoff env childProcessPermission baseUrl taskId jsonInput =
     let
         inputResult =
             Decode.decodeString
@@ -206,7 +206,7 @@ dispatchHandoff env cpPermission baseUrl taskId jsonInput =
             outputError env "Invalid handoff request: requires 'agentName' and 'prompt' fields"
 
         Ok handoffInput ->
-            Handoff.run cpPermission handoffInput
+            Handoff.run childProcessPermission handoffInput
                 |> Task.map Json.encodeHandoffOutput
                 |> Task.mapError Handoff.handoffErrorToString
                 |> handleResult env
