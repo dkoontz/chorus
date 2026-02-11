@@ -356,8 +356,17 @@ update msg model =
                     }
 
                 Err err ->
-                    { model = { model | status = Error (Server.errorToString err) }
-                    , command = Logging.logError model.logger ("Server error: " ++ Server.errorToString err) NoOp
+                    let
+                        serverConfig =
+                            { host = model.config.host
+                            , port_ = model.config.port_
+                            }
+
+                        errMsg =
+                            Server.errorToString serverConfig err
+                    in
+                    { model = { model | status = Error errMsg }
+                    , command = Logging.logError model.logger ("Server error: " ++ errMsg) NoOp
                     }
 
         GotRegistry result ->

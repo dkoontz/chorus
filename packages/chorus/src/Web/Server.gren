@@ -79,9 +79,29 @@ createServer permission config =
 
 
 {-| Convert a server error to a human-readable string.
+
+Accepts the server Config so the message can include the host and port.
+Pattern matches on known OS error codes to produce descriptive messages.
+Unknown codes fall back to the raw message and code from the OS.
+
 -}
-errorToString : Error -> String
-errorToString error =
+errorToString : Config -> Error -> String
+errorToString config error =
     when error is
-        ServerError _ ->
-            "Server error: Failed to create HTTP server"
+        ServerError (HttpServer.ServerError { code, message }) ->
+            let
+                addr =
+                    config.host ++ ":" ++ String.fromInt config.port_
+            in
+            when code is
+                "EADDRINUSE" ->
+                    "Address " ++ addr ++ " is already in use (EADDRINUSE)"
+
+                "EACCES" ->
+                    "Permission denied for " ++ addr ++ " (EACCES)"
+
+                "EADDRNOTAVAIL" ->
+                    "Address " ++ addr ++ " is not available (EADDRNOTAVAIL)"
+
+                _ ->
+                    message ++ " (" ++ code ++ ")"
