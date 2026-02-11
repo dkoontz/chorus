@@ -5,8 +5,11 @@ module ConfigTests exposing (tests)
 
 import Config
 import Dict
+import Json.Decode as Decode
+import Json.Encode as Encode
 import Logging exposing (LogLevel(..))
 import Task
+import Types exposing (AgentProvider(..), WorkspaceConfig)
 
 
 tests : Array { name : String, run : Task.Task String {} }
@@ -22,6 +25,26 @@ tests =
     , testChorusConfigEnvVar
     , testChorusConfigDefault
     , testAbsoluteBaseDir
+    -- CLI arg parsing tests
+    , testParsePortFromArgsValid
+    , testParsePortFromArgsNotPresent
+    , testParsePortFromArgsInvalidNonInteger
+    , testParsePortFromArgsOutOfRange
+    , testParsePortFromArgsMissingValue
+    , testParsePortFromArgsAmongOtherArgs
+    -- Port edge case tests
+    , testParsePortFromArgsZero
+    , testParsePortFromArgsBoundaryValid
+    , testParsePortFromArgsBoundaryInvalid
+    -- Port precedence tests
+    , testCliPortOverridesEnvVar
+    , testCliPortOverridesDefault
+    , testApplyWorkspacePortWhenNoCliPort
+    , testCliPortTakesPrecedenceOverWorkspacePort
+    , testWorkspacePortOverridesEnvVar
+    -- WorkspaceConfig decoder tests
+    , testWorkspaceConfigDecoderWithPort
+    , testWorkspaceConfigDecoderWithoutPort
     ]
 
 
@@ -206,4 +229,253 @@ testAbsoluteBaseDir =
                     ++ "  staticRoot: " ++ config.staticRoot ++ "\n"
                     ++ "  chorusToolsPath: " ++ config.chorusToolsPath
                 )
+    }
+
+
+
+-- CLI ARG PARSING TESTS
+
+
+testParsePortFromArgsValid : { name : String, run : Task.Task String {} }
+testParsePortFromArgsValid =
+    { name = "parsePortFromArgs extracts valid port from --port 9090"
+    , run =
+        expectEqual (Ok (Just 9090)) (Config.parsePortFromArgs [ "--port", "9090" ])
+    }
+
+
+testParsePortFromArgsNotPresent : { name : String, run : Task.Task String {} }
+testParsePortFromArgsNotPresent =
+    { name = "parsePortFromArgs returns Ok Nothing when --port not present"
+    , run =
+        expectEqual (Ok Nothing) (Config.parsePortFromArgs [ "--other", "value" ])
+    }
+
+
+testParsePortFromArgsInvalidNonInteger : { name : String, run : Task.Task String {} }
+testParsePortFromArgsInvalidNonInteger =
+    { name = "parsePortFromArgs returns Err for non-integer --port abc"
+    , run =
+        when Config.parsePortFromArgs [ "--port", "abc" ] is
+            Err _ ->
+                Task.succeed {}
+
+            Ok val ->
+                Task.fail ("Expected Err but got Ok " ++ Debug.toString val)
+    }
+
+
+testParsePortFromArgsOutOfRange : { name : String, run : Task.Task String {} }
+testParsePortFromArgsOutOfRange =
+    { name = "parsePortFromArgs returns Err for out-of-range port 99999"
+    , run =
+        when Config.parsePortFromArgs [ "--port", "99999" ] is
+            Err _ ->
+                Task.succeed {}
+
+            Ok val ->
+                Task.fail ("Expected Err but got Ok " ++ Debug.toString val)
+    }
+
+
+testParsePortFromArgsMissingValue : { name : String, run : Task.Task String {} }
+testParsePortFromArgsMissingValue =
+    { name = "parsePortFromArgs returns Err when --port has no value"
+    , run =
+        when Config.parsePortFromArgs [ "--port" ] is
+            Err _ ->
+                Task.succeed {}
+
+            Ok val ->
+                Task.fail ("Expected Err but got Ok " ++ Debug.toString val)
+    }
+
+
+testParsePortFromArgsAmongOtherArgs : { name : String, run : Task.Task String {} }
+testParsePortFromArgsAmongOtherArgs =
+    { name = "parsePortFromArgs finds --port among other arguments"
+    , run =
+        expectEqual (Ok (Just 3000)) (Config.parsePortFromArgs [ "--verbose", "--port", "3000", "--config", "foo.json" ])
+    }
+
+
+
+-- PORT PRECEDENCE TESTS
+
+
+testCliPortOverridesEnvVar : { name : String, run : Task.Task String {} }
+testCliPortOverridesEnvVar =
+    { name = "CLI port overrides CHORUS_PORT env var"
+    , run =
+        let
+            envVars =
+                Dict.empty
+                    |> Dict.set "CHORUS_PORT" "4000"
+
+            config =
+                Config.defaultConfig
+                    |> Config.configFromEnv "." envVars
+                    |> Config.applyCliPort (Just 9090)
+        in
+        expectEqual 9090 config.serverPort
+    }
+
+
+testCliPortOverridesDefault : { name : String, run : Task.Task String {} }
+testCliPortOverridesDefault =
+    { name = "CLI port overrides default port"
+    , run =
+        let
+            config =
+                Config.defaultConfig
+                    |> Config.configFromEnv "." Dict.empty
+                    |> Config.applyCliPort (Just 5000)
+        in
+        expectEqual 5000 config.serverPort
+    }
+
+
+testApplyWorkspacePortWhenNoCliPort : { name : String, run : Task.Task String {} }
+testApplyWorkspacePortWhenNoCliPort =
+    { name = "Workspace config port applies when no CLI port is set"
+    , run =
+        let
+            config =
+                Config.defaultConfig
+                    |> Config.configFromEnv "." Dict.empty
+                    |> Config.applyCliPort Nothing
+                    |> Config.applyWorkspacePort Nothing (Just 3000)
+        in
+        expectEqual 3000 config.serverPort
+    }
+
+
+testCliPortTakesPrecedenceOverWorkspacePort : { name : String, run : Task.Task String {} }
+testCliPortTakesPrecedenceOverWorkspacePort =
+    { name = "CLI port takes precedence over workspace config port"
+    , run =
+        let
+            config =
+                Config.defaultConfig
+                    |> Config.configFromEnv "." Dict.empty
+                    |> Config.applyCliPort (Just 9090)
+                    |> Config.applyWorkspacePort (Just 9090) (Just 3000)
+        in
+        expectEqual 9090 config.serverPort
+    }
+
+
+testWorkspacePortOverridesEnvVar : { name : String, run : Task.Task String {} }
+testWorkspacePortOverridesEnvVar =
+    { name = "Workspace config port overrides env var when no CLI port"
+    , run =
+        let
+            envVars =
+                Dict.empty
+                    |> Dict.set "CHORUS_PORT" "4000"
+
+            config =
+                Config.defaultConfig
+                    |> Config.configFromEnv "." envVars
+                    |> Config.applyCliPort Nothing
+                    |> Config.applyWorkspacePort Nothing (Just 3000)
+        in
+        expectEqual 3000 config.serverPort
+    }
+
+
+
+-- PORT EDGE CASE TESTS
+
+
+testParsePortFromArgsZero : { name : String, run : Task.Task String {} }
+testParsePortFromArgsZero =
+    { name = "parsePortFromArgs rejects port 0 as out of range"
+    , run =
+        when Config.parsePortFromArgs [ "--port", "0" ] is
+            Err _ ->
+                Task.succeed {}
+
+            Ok val ->
+                Task.fail ("Expected Err but got Ok " ++ Debug.toString val)
+    }
+
+
+testParsePortFromArgsBoundaryValid : { name : String, run : Task.Task String {} }
+testParsePortFromArgsBoundaryValid =
+    { name = "parsePortFromArgs accepts boundary port 65535"
+    , run =
+        expectEqual (Ok (Just 65535)) (Config.parsePortFromArgs [ "--port", "65535" ])
+    }
+
+
+testParsePortFromArgsBoundaryInvalid : { name : String, run : Task.Task String {} }
+testParsePortFromArgsBoundaryInvalid =
+    { name = "parsePortFromArgs rejects boundary port 65536 as out of range"
+    , run =
+        when Config.parsePortFromArgs [ "--port", "65536" ] is
+            Err _ ->
+                Task.succeed {}
+
+            Ok val ->
+                Task.fail ("Expected Err but got Ok " ++ Debug.toString val)
+    }
+
+
+
+-- WORKSPACE CONFIG DECODER TESTS
+
+
+testWorkspaceConfigDecoderWithPort : { name : String, run : Task.Task String {} }
+testWorkspaceConfigDecoderWithPort =
+    { name = "workspaceConfigDecoder decodes JSON with port field"
+    , run =
+        let
+            json =
+                Encode.object
+                    [ { key = "dataDirectory", value = Encode.string "/data" }
+                    , { key = "agentsDirectory", value = Encode.string "/agents" }
+                    , { key = "allowedAgentDirectories", value = Encode.array Encode.string [ "/workspace" ] }
+                    , { key = "initialAgentDirectory", value = Encode.string "/workspace" }
+                    , { key = "systemAgentProvider", value = Encode.string "not-configured" }
+                    , { key = "port", value = Encode.int 3000 }
+                    ]
+                    |> Encode.encode 0
+
+            result =
+                Decode.decodeString Types.workspaceConfigDecoder json
+        in
+        when result is
+            Ok config ->
+                expectEqual (Just 3000) config.serverPort
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
+    }
+
+
+testWorkspaceConfigDecoderWithoutPort : { name : String, run : Task.Task String {} }
+testWorkspaceConfigDecoderWithoutPort =
+    { name = "workspaceConfigDecoder decodes JSON without port field"
+    , run =
+        let
+            json =
+                Encode.object
+                    [ { key = "dataDirectory", value = Encode.string "/data" }
+                    , { key = "agentsDirectory", value = Encode.string "/agents" }
+                    , { key = "allowedAgentDirectories", value = Encode.array Encode.string [ "/workspace" ] }
+                    , { key = "initialAgentDirectory", value = Encode.string "/workspace" }
+                    , { key = "systemAgentProvider", value = Encode.string "not-configured" }
+                    ]
+                    |> Encode.encode 0
+
+            result =
+                Decode.decodeString Types.workspaceConfigDecoder json
+        in
+        when result is
+            Ok config ->
+                expectEqual Nothing config.serverPort
+
+            Err err ->
+                Task.fail ("Decode failed: " ++ Decode.errorToString err)
     }

@@ -17,6 +17,7 @@ type alias SettingsForm =
     , allowedAgentDirectories : Array String
     , initialAgentDirectory : String
     , systemAgentProvider : String
+    , serverPort : String
     }
 
 
@@ -35,6 +36,13 @@ workspaceConfigToForm wc =
 
             ProviderRef name ->
                 name
+    , serverPort =
+        when wc.serverPort is
+            Just p ->
+                String.fromInt p
+
+            Nothing ->
+                ""
     }
 
 
@@ -52,6 +60,7 @@ type alias Config msg =
     , onRemoveAllowedDir : Int -> msg
     , onUpdateInitialAgentDirectory : String -> msg
     , onUpdateSystemAgentProvider : String -> msg
+    , onUpdateServerPort : String -> msg
     , onSaveSettings : msg
     }
 
@@ -148,6 +157,21 @@ viewSettingsForm config form =
                         config.providers
                     ]
                 )
+            ]
+        , div [ class "form-group" ]
+            [ label [ for "settings-port" ] [ text "Server Port" ]
+            , p [ class "section-help" ]
+                [ text "Port number for the Chorus server. Leave empty to use the default (8080). Changing this value requires a restart." ]
+            , input
+                [ id "settings-port"
+                , type_ "number"
+                , Html.Attributes.min "1"
+                , Html.Attributes.max "65535"
+                , value form.serverPort
+                , onInput config.onUpdateServerPort
+                , placeholder "8080"
+                ]
+                []
             ]
         , div [ class "form-actions" ]
             [ button

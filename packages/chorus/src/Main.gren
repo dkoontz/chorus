@@ -78,6 +78,7 @@ type alias Model =
     , status : Status
     , pendingResponses : Array PendingResponse
     , logger : Logging.Logger
+    , cliPort : Maybe Int
     }
 
 
@@ -158,62 +159,124 @@ init env =
                                         |> Maybe.map Path.toPosixString
                                         |> Maybe.withDefault "."
 
-                                config =
-                                    Config.configFromEnv baseDir envVars Config.defaultConfig
+                                -- Parse --port from CLI args
+                                portResult =
+                                    Config.parsePortFromArgs env.args
 
-                                logger =
-                                    Logging.makeLogger env.stdout config.logLevel
+                                cliPort =
+                                    when portResult is
+                                        Ok maybePort ->
+                                            maybePort
 
-                                model =
-                                    { env = env
-                                    , server = Nothing
-                                    , registry = Nothing
-                                    , agentRegistry = Nothing
-                                    , providerRegistry = Nothing
-                                    , activeExecutors = Dict.empty
-                                    , filesystemPermission = filesystemPermission
-                                    , childProcessPermission = childProcessPermission
-                                    , httpClientPermission = httpClientPermission
-                                    , secureContext = secureContext
-                                    , config = config
-                                    , workspaceConfig = Nothing
-                                    , workspaceConfigPath = Nothing
-                                    , status = Initializing
-                                    , pendingResponses = []
-                                    , logger = logger
-                                    }
+                                        Err _ ->
+                                            Nothing
 
-                                -- If CHORUS_CONFIG is set, auto-load that config file
-                                configCmd =
-                                    when config.chorusConfigPath is
+                                -- Build config: default -> env vars -> CLI args
+                                baseConfig =
+                                    Config.defaultConfig
+                                        |> Config.configFromEnv baseDir envVars
+                                        |> Config.applyCliPort cliPort
+                            in
+                            -- If CHORUS_CONFIG is set, load it before creating the server
+                            -- so the workspace port is applied before the server binds.
+                            let
+                                loadConfigTask =
+                                    when baseConfig.chorusConfigPath is
                                         Just configPath ->
                                             loadWorkspaceConfig filesystemPermission configPath
-                                                |> GrenTask.perform
-                                                    (\result ->
-                                                        GotConfigLoaded { response = Nothing, result = result }
-                                                    )
 
                                         Nothing ->
-                                            Cmd.none
+                                            GrenTask.succeed (Err "no-config")
                             in
-                            Node.startProgram
-                                { model = model
-                                , command =
-                                    Cmd.batch
-                                        [ -- Initialize the HTTP server
-                                          Server.createServer httpPermission
-                                            { host = config.host
-                                            , port_ = config.serverPort
-                                            }
-                                            |> GrenTask.attempt GotServer
+                            Init.awaitTask loadConfigTask <| \preloadedConfigResult ->
+                                let
+                                    -- Apply workspace config port (if loaded) before server creation
+                                    workspacePort =
+                                        when preloadedConfigResult is
+                                            Ok loaded ->
+                                                loaded.config.serverPort
 
-                                        , -- Auto-load config if CHORUS_CONFIG is set
-                                          configCmd
+                                            Err _ ->
+                                                Nothing
 
-                                        , -- Log startup
-                                          Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.serverPort) NoOp
-                                        ]
-                                }
+                                    config =
+                                        baseConfig
+                                            |> Config.applyWorkspacePort cliPort workspacePort
+
+                                    logger =
+                                        Logging.makeLogger env.stdout config.logLevel
+
+                                    model =
+                                        { env = env
+                                        , server = Nothing
+                                        , registry = Nothing
+                                        , agentRegistry = Nothing
+                                        , providerRegistry = Nothing
+                                        , activeExecutors = Dict.empty
+                                        , filesystemPermission = filesystemPermission
+                                        , childProcessPermission = childProcessPermission
+                                        , httpClientPermission = httpClientPermission
+                                        , secureContext = secureContext
+                                        , config = config
+                                        , workspaceConfig = Nothing
+                                        , workspaceConfigPath = Nothing
+                                        , status = Initializing
+                                        , pendingResponses = []
+                                        , logger = logger
+                                        , cliPort = cliPort
+                                        }
+
+                                    -- Deliver pre-loaded config to GotConfigLoaded for registry init
+                                    configCmd =
+                                        when preloadedConfigResult is
+                                            Ok _ ->
+                                                GrenTask.succeed preloadedConfigResult
+                                                    |> GrenTask.perform
+                                                        (\result ->
+                                                            GotConfigLoaded { response = Nothing, result = result }
+                                                        )
+
+                                            Err _ ->
+                                                Cmd.none
+
+                                    -- Handle invalid port: log error and exit
+                                    portErrorCmd =
+                                        when portResult is
+                                            Err errMsg ->
+                                                Cmd.batch
+                                                    [ Logging.logError logger ("Invalid --port argument: " ++ errMsg) NoOp
+                                                    , Stream.writeLineAsBytes ("Error: " ++ errMsg ++ "\n") env.stderr
+                                                        |> GrenTask.onError (\_ -> GrenTask.succeed env.stderr)
+                                                        |> GrenTask.andThen (\_ -> Node.setExitCode 1)
+                                                        |> GrenTask.perform (\_ -> NoOp)
+                                                    ]
+
+                                            Ok _ ->
+                                                Cmd.none
+                                in
+                                Node.startProgram
+                                    { model = model
+                                    , command =
+                                        when portResult is
+                                            Err _ ->
+                                                portErrorCmd
+
+                                            Ok _ ->
+                                                Cmd.batch
+                                                    [ -- Initialize the HTTP server
+                                                      Server.createServer httpPermission
+                                                        { host = config.host
+                                                        , port_ = config.serverPort
+                                                        }
+                                                        |> GrenTask.attempt GotServer
+
+                                                    , -- Deliver pre-loaded config for registry initialization
+                                                      configCmd
+
+                                                    , -- Log startup
+                                                      Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.serverPort) NoOp
+                                                    ]
+                                    }
 
 
 
@@ -1211,10 +1274,28 @@ update msg model =
                                 Nothing ->
                                     Cmd.none
                     in
+                    let
+                        -- Apply workspace config port with CLI port precedence
+                        updatedConfig =
+                            Config.applyWorkspacePort model.cliPort config.serverPort model.config
+
+                        -- Warn if the workspace config port differs from the running server port
+                        portWarningCmd =
+                            when config.serverPort is
+                                Just wsPort ->
+                                    if wsPort /= model.config.serverPort then
+                                        Logging.logWarn model.logger ("Workspace config specifies port " ++ String.fromInt wsPort ++ " but server is running on " ++ String.fromInt model.config.serverPort ++ ". Restart required for port change to take effect.") NoOp
+                                    else
+                                        Cmd.none
+
+                                Nothing ->
+                                    Cmd.none
+                    in
                     { model =
                         { model
                             | workspaceConfig = Just config
                             , workspaceConfigPath = Just configPath
+                            , config = updatedConfig
                         }
                     , command =
                         Cmd.batch
@@ -1223,6 +1304,7 @@ update msg model =
                             , initProviderRegistryCmd
                             , ensureUploadDirCmd
                             , responseCmd
+                            , portWarningCmd
                             , Logging.logInfo model.logger ("Workspace config loaded from: " ++ configPath) NoOp
                             ]
                     }
@@ -2303,6 +2385,7 @@ createWorkspaceConfig filesystemPermission dirPath =
             , allowedAgentDirectories = [ dirPath ++ "/agent_workspace" ]
             , initialAgentDirectory = dirPath ++ "/agent_workspace"
             , systemAgentProvider = NotConfigured
+            , serverPort = Nothing
             }
 
         json =

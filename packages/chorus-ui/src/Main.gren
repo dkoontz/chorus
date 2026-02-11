@@ -199,6 +199,7 @@ type Msg
     | RemoveSettingsAllowedDir Int
     | UpdateSettingsInitialAgentDirectory String
     | UpdateSettingsSystemAgentProvider String
+    | UpdateSettingsServerPort String
     | SaveSettings
     | SettingsSaved (Result Http.Error Api.ConfigResponse)
     | NoOp
@@ -1443,6 +1444,15 @@ update msg model =
             , command = Cmd.none
             }
 
+        UpdateSettingsServerPort val ->
+            { model =
+                { model
+                    | settingsForm =
+                        Maybe.map (\f -> { f | serverPort = val }) model.settingsForm
+                }
+            , command = Cmd.none
+            }
+
         SaveSettings ->
             when model.settingsForm is
                 Just form ->
@@ -1466,17 +1476,43 @@ update msg model =
                                 else
                                     ProviderRef (String.trim form.systemAgentProvider)
 
-                            wc =
-                                { dataDirectory = form.dataDirectory
-                                , agentsDirectory = form.agentsDirectory
-                                , allowedAgentDirectories = form.allowedAgentDirectories
-                                , initialAgentDirectory = form.initialAgentDirectory
-                                , systemAgentProvider = provider
-                                }
+                            portValue =
+                                if String.isEmpty (String.trim form.serverPort) then
+                                    Ok Nothing
+                                else
+                                    when String.toInt (String.trim form.serverPort) is
+                                        Just p ->
+                                            if p >= 1 && p <= 65535 then
+                                                Ok (Just p)
+                                            else
+                                                Err "Port must be between 1 and 65535."
+
+                                        Nothing ->
+                                            Err "Port must be a valid integer."
                         in
-                        { model = { model | loading = True, settingsValidationError = Nothing }
-                        , command = Api.updateConfig wc SettingsSaved
-                        }
+                        when portValue is
+                            Err portErr ->
+                                { model =
+                                    { model
+                                        | settingsValidationError = Just portErr
+                                    }
+                                , command = Cmd.none
+                                }
+
+                            Ok parsedPort ->
+                                let
+                                    wc =
+                                        { dataDirectory = form.dataDirectory
+                                        , agentsDirectory = form.agentsDirectory
+                                        , allowedAgentDirectories = form.allowedAgentDirectories
+                                        , initialAgentDirectory = form.initialAgentDirectory
+                                        , systemAgentProvider = provider
+                                        , serverPort = parsedPort
+                                        }
+                                in
+                                { model = { model | loading = True, settingsValidationError = Nothing }
+                                , command = Api.updateConfig wc SettingsSaved
+                                }
 
                 Nothing ->
                     { model = model
@@ -1710,6 +1746,7 @@ viewMain model =
                     , onRemoveAllowedDir = RemoveSettingsAllowedDir
                     , onUpdateInitialAgentDirectory = UpdateSettingsInitialAgentDirectory
                     , onUpdateSystemAgentProvider = UpdateSettingsSystemAgentProvider
+                    , onUpdateServerPort = UpdateSettingsServerPort
                     , onSaveSettings = SaveSettings
                     }
 

@@ -2,6 +2,9 @@ module Config exposing
     ( Config
     , defaultConfig
     , configFromEnv
+    , parsePortFromArgs
+    , applyCliPort
+    , applyWorkspacePort
     )
 
 {-| Application configuration.
@@ -87,3 +90,81 @@ configFromEnv baseDir envVars config =
     , logLevel = logLevel
     , chorusConfigPath = chorusConfigPath
     }
+
+
+{-| Parse the --port argument from CLI args.
+
+Returns Ok (Just port) if --port is present with a valid value,
+Ok Nothing if --port is not present,
+Err message if --port is present but has an invalid value.
+
+Valid port range is 1-65535.
+
+-}
+parsePortFromArgs : Array String -> Result String (Maybe Int)
+parsePortFromArgs args =
+    let
+        findPort : Array String -> Result String (Maybe Int)
+        findPort remaining =
+            when Array.first remaining is
+                Nothing ->
+                    Ok Nothing
+
+                Just arg ->
+                    if arg == "--port" then
+                        when Array.get 1 remaining is
+                            Nothing ->
+                                Err "--port requires a value"
+
+                            Just value ->
+                                when String.toInt value is
+                                    Nothing ->
+                                        Err ("Invalid port value: " ++ value ++ " (must be an integer)")
+
+                                    Just portNum ->
+                                        if portNum >= 1 && portNum <= 65535 then
+                                            Ok (Just portNum)
+                                        else
+                                            Err ("Port out of range: " ++ String.fromInt portNum ++ " (must be 1-65535)")
+                    else
+                        findPort (Array.dropFirst 1 remaining)
+    in
+    findPort args
+
+
+{-| Apply the CLI --port override to a config.
+
+CLI port takes highest precedence, overriding both env var and default.
+
+-}
+applyCliPort : Maybe Int -> Config -> Config
+applyCliPort maybePort config =
+    when maybePort is
+        Just portNum ->
+            { config | serverPort = portNum }
+
+        Nothing ->
+            config
+
+
+{-| Apply the workspace config port to a config, but only if no CLI port was specified.
+
+The cliPort parameter indicates whether a CLI port was given (Just = yes, Nothing = no).
+If CLI port was given, the workspace config port is ignored (CLI takes precedence).
+If no CLI port was given, the workspace config port overrides the current value.
+
+-}
+applyWorkspacePort : Maybe Int -> Maybe Int -> Config -> Config
+applyWorkspacePort cliPort workspacePort config =
+    when cliPort is
+        Just _ ->
+            -- CLI port takes precedence, ignore workspace config port
+            config
+
+        Nothing ->
+            when workspacePort is
+                Just portNum ->
+                    { config | serverPort = portNum }
+
+                Nothing ->
+                    config

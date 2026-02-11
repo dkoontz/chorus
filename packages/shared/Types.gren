@@ -333,6 +333,7 @@ type alias WorkspaceConfig =
     , allowedAgentDirectories : Array String
     , initialAgentDirectory : String
     , systemAgentProvider : AgentProvider
+    , serverPort : Maybe Int
     }
 
 
@@ -1336,13 +1337,24 @@ providerConfigDecoder =
 -}
 encodeWorkspaceConfig : WorkspaceConfig -> Encode.Value
 encodeWorkspaceConfig config =
-    Encode.object
-        [ { key = "dataDirectory", value = Encode.string config.dataDirectory }
-        , { key = "agentsDirectory", value = Encode.string config.agentsDirectory }
-        , { key = "allowedAgentDirectories", value = Encode.array Encode.string config.allowedAgentDirectories }
-        , { key = "initialAgentDirectory", value = Encode.string config.initialAgentDirectory }
-        , { key = "systemAgentProvider", value = encodeAgentProvider config.systemAgentProvider }
-        ]
+    let
+        requiredFields =
+            [ { key = "dataDirectory", value = Encode.string config.dataDirectory }
+            , { key = "agentsDirectory", value = Encode.string config.agentsDirectory }
+            , { key = "allowedAgentDirectories", value = Encode.array Encode.string config.allowedAgentDirectories }
+            , { key = "initialAgentDirectory", value = Encode.string config.initialAgentDirectory }
+            , { key = "systemAgentProvider", value = encodeAgentProvider config.systemAgentProvider }
+            ]
+
+        portField =
+            when config.serverPort is
+                Just p ->
+                    [ { key = "port", value = Encode.int p } ]
+
+                Nothing ->
+                    []
+    in
+    Encode.object (Array.flatten [ requiredFields, portField ])
 
 
 {-| Decode a WorkspaceConfig from JSON.
@@ -1356,6 +1368,7 @@ workspaceConfigDecoder =
             , allowedAgentDirectories = allowedAgentDirectories
             , initialAgentDirectory = initialAgentDirectory
             , systemAgentProvider = systemAgentProvider
+            , serverPort = Nothing
             }
         )
         (Decode.field "dataDirectory" Decode.string)
@@ -1363,6 +1376,11 @@ workspaceConfigDecoder =
         (Decode.field "allowedAgentDirectories" (Decode.array Decode.string))
         (Decode.field "initialAgentDirectory" Decode.string)
         (Decode.field "systemAgentProvider" agentProviderDecoder)
+        |> Decode.andThen
+            (\config ->
+                Decode.maybe (Decode.field "port" Decode.int)
+                    |> Decode.map (\maybePort -> { config | serverPort = maybePort })
+            )
 
 
 

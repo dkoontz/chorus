@@ -54,6 +54,8 @@ There are two kinds of executable resources available:
 
 ## Codebase Exploration
 
+Read `agents/CODING_STANDARDS.md` when planning a task that involves writing or modifying source code.
+
 Before finalizing the task, explore the codebase to:
 - Identify the specific files that will need changes
 - Find existing patterns the developer should follow
