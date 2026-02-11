@@ -14,6 +14,7 @@ The server exposes:
 import Agent.Registry as AgentRegistry
 import Bytes
 import ChildProcess
+import Config exposing (Config)
 import Crypto exposing (SecureContext)
 import Debug
 import Dict exposing (Dict)
@@ -103,100 +104,10 @@ type alias PendingResponse =
     }
 
 
-type alias Config =
-    { host : String
-    , serverPort : Int
-    , registryRoot : String
-    , workspacesRoot : String
-    , staticRoot : String
-    , uploadDir : String
-    , agentsRoot : String
-    , chorusToolsPath : String
-    , logLevel : LogLevel
-    , apiBaseUrl : String
-    , apiKey : String
-    , defaultModel : String
-    }
-
-
 type Status
     = Initializing
     | Running
     | Error String
-
-
-defaultConfig : Config
-defaultConfig =
-    { host = "0.0.0.0"
-    , serverPort = 8080
-    , registryRoot = "./data/registry"
-    , workspacesRoot = "./data/workspaces"
-    , staticRoot = "./static"
-    , uploadDir = "./data/uploads"
-    , agentsRoot = "./data/agents"
-    , chorusToolsPath = "./tools/chorus-tools"
-    , logLevel = LogInfo
-    , apiBaseUrl = ""
-    , apiKey = ""
-    , defaultModel = ""
-    }
-
-
-{-| Create configuration from environment variables.
-
-    Supported environment variables:
-    - CHORUS_HOST: Server host (default: 0.0.0.0)
-    - CHORUS_PORT: Server port (default: 8080)
-    - CHORUS_DATA_DIR: Base data directory (default: ./data)
-    - CHORUS_STATIC_DIR: Static files directory (default: ./static)
-    - CHORUS_LOG_LEVEL: Log level - error, warn, info, debug (default: info)
-    - CHORUS_API_BASE_URL: Base URL for OpenAI-compatible API
-    - CHORUS_API_KEY: API key for the LLM provider
-    - CHORUS_DEFAULT_MODEL: Default model name for API providers
-
--}
-configFromEnv : Dict String String -> Config -> Config
-configFromEnv envVars config =
-    let
-        host =
-            Dict.get "CHORUS_HOST" envVars
-                |> Maybe.withDefault config.host
-
-        serverPort =
-            Dict.get "CHORUS_PORT" envVars
-                |> Maybe.andThen String.toInt
-                |> Maybe.withDefault config.serverPort
-
-        dataDir =
-            Dict.get "CHORUS_DATA_DIR" envVars
-                |> Maybe.withDefault "./data"
-
-        staticRoot =
-            Dict.get "CHORUS_STATIC_DIR" envVars
-                |> Maybe.withDefault config.staticRoot
-
-        logLevel =
-            Dict.get "CHORUS_LOG_LEVEL" envVars
-                |> Maybe.andThen Logging.parseLogLevel
-                |> Maybe.withDefault config.logLevel
-
-        uploadDir =
-            Dict.get "CHORUS_UPLOAD_DIR" envVars
-                |> Maybe.withDefault (dataDir ++ "/uploads")
-    in
-    { host = host
-    , serverPort = serverPort
-    , registryRoot = dataDir ++ "/registry"
-    , workspacesRoot = dataDir ++ "/workspaces"
-    , staticRoot = staticRoot
-    , uploadDir = uploadDir
-    , agentsRoot = dataDir ++ "/agents"
-    , chorusToolsPath = Dict.get "CHORUS_TOOLS_PATH" envVars |> Maybe.withDefault config.chorusToolsPath
-    , logLevel = logLevel
-    , apiBaseUrl = Dict.get "CHORUS_API_BASE_URL" envVars |> Maybe.withDefault config.apiBaseUrl
-    , apiKey = Dict.get "CHORUS_API_KEY" envVars |> Maybe.withDefault config.apiKey
-    , defaultModel = Dict.get "CHORUS_DEFAULT_MODEL" envVars |> Maybe.withDefault config.defaultModel
-    }
 
 
 -- MSG
@@ -236,8 +147,14 @@ init env =
                     Init.awaitTask Node.getEnvironmentVariables <| \envVars ->
                         Init.await HttpServer.initialize <| \httpPermission ->
                             let
+                                baseDir =
+                                    env.applicationPath
+                                        |> Path.parentPath
+                                        |> Maybe.map Path.toPosixString
+                                        |> Maybe.withDefault "."
+
                                 config =
-                                    configFromEnv envVars defaultConfig
+                                    Config.configFromEnv baseDir envVars Config.defaultConfig
 
                                 logger =
                                     Logging.makeLogger env.stdout config.logLevel
