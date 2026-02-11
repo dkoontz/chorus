@@ -445,3 +445,82 @@ The caller gets a typed error explaining what failed and why, and can take appro
 ### The rule
 
 If a `Task` can fail, its error must be propagated — either directly or mapped into the caller's error type. The only code that should decide to drop an error is the top-level handler that has full context about what the user should see.
+
+## Never Run Concurrent Tasks That Write to the Same File
+
+When multiple `Task` values perform read-modify-write on the same file, they must be chained sequentially with `Task.andThen`. Running them concurrently — via `Cmd.batch` or separate commands in the same update — creates a race condition where one write silently overwrites the other, losing data.
+
+### Why?
+
+Read-modify-write is not atomic. Each `Task` reads the current file contents, modifies them in memory, and writes the result back. When two tasks do this concurrently:
+
+1. Task A reads the file (sees state S₀)
+2. Task B reads the file (sees the same state S₀)
+3. Task A writes its update (file now contains S₁)
+4. Task B writes its update (file now contains S₂, based on S₀ — Task A's write is lost)
+
+The result is silent data loss. No error is raised, no log is written, and the lost data is unrecoverable.
+
+### Bad: Concurrent writes in Cmd.batch
+
+```gren
+-- BAD: Both tasks read/write the same file concurrently
+{ model = model
+, command =
+    Cmd.batch
+        [ writeRecordToFile registry taskId recordA
+        , writeRecordToFile registry taskId recordB
+        ]
+}
+```
+
+One of these writes will be lost. Which one depends on timing, making the bug non-deterministic and difficult to reproduce.
+
+### Bad: Mixing an API call that writes with a direct write
+
+```gren
+-- BAD: apiCallThatWritesFile internally writes to the same file
+-- that writeRecordToFile also targets
+{ model = model
+, command =
+    Cmd.batch
+        [ apiCallThatWritesFile ctx taskId params toMsg
+        , writeRecordToFile registry taskId record
+            |> Task.perform (\_ -> NoOp)
+        ]
+}
+```
+
+The race condition is hidden because the concurrent write is inside `apiCallThatWritesFile`. Any function that chains a write to the same file must not run concurrently with another write to that file.
+
+### Good: Chain writes sequentially with andThen
+
+```gren
+-- GOOD: Second write sees the result of the first
+writeRecordToFile registry taskId recordA
+    |> Task.andThen (\_ -> writeRecordToFile registry taskId recordB)
+```
+
+The second `Task` reads the file after the first has finished writing, so both records are preserved.
+
+### Good: Move both writes into the same Task chain
+
+```gren
+-- GOOD: All writes to the file happen in a single sequential chain
+apiCallThatWritesFile ctx taskId params extraRecord toMsg =
+    updateData ctx.registry taskId params
+        |> Task.andThen (\result ->
+            writeRecordToFile ctx.registry taskId extraRecord
+                |> Task.andThen (\_ ->
+                    writeRecordToFile ctx.registry taskId (deriveSecondRecord result)
+                        |> Task.andThen (\_ -> buildResponse result)
+                )
+        )
+        |> Task.perform toMsg
+```
+
+By keeping all writes in a single `Task` chain, each write completes before the next one starts.
+
+### The rule
+
+If two or more `Task` values write to the same file, they must be sequenced with `Task.andThen` — never placed in `Cmd.batch` or separate commands. This applies regardless of whether the writes are direct or buried inside helper functions. When adding a write to a file, check whether any other `Task` in the same `Cmd.batch` also writes to that file, including indirectly through API functions.
