@@ -7,13 +7,13 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Types exposing (WorkspaceConfig)
+import WorkspaceStatus exposing (WorkspaceStatus(..))
 
 
 {-| Configuration for the Workspaces view.
 -}
 type alias Config msg =
-    { workspaceConfig : Maybe WorkspaceConfig
-    , workspaceConfigPath : Maybe String
+    { workspaceStatus : WorkspaceStatus
     , openPath : String
     , createPath : String
     , loading : Bool
@@ -30,23 +30,26 @@ view : Config msg -> Html msg
 view config =
     div [ class "workspaces-page" ]
         [ h2 [] [ text "Workspaces" ]
-        , when config.workspaceConfig is
-            Just wc ->
-                viewActiveWorkspace config wc
+        , when config.workspaceStatus is
+            WorkspaceOpened { config = wc, configPath } ->
+                viewActiveWorkspace config wc configPath
 
-            Nothing ->
+            WorkspaceError errorMessage ->
+                viewWorkspaceError config errorMessage
+
+            NoWorkspace ->
                 viewNoWorkspace config
         ]
 
 
-viewActiveWorkspace : Config msg -> WorkspaceConfig -> Html msg
-viewActiveWorkspace config wc =
+viewActiveWorkspace : Config msg -> WorkspaceConfig -> String -> Html msg
+viewActiveWorkspace config wc configPath =
     div [ class "active-workspace" ]
         [ div [ class "workspace-info" ]
             [ h3 [] [ text "Active Workspace" ]
             , div [ class "info-row" ]
                 [ span [ class "info-label" ] [ text "Config Path:" ]
-                , span [ class "info-value" ] [ text (Maybe.withDefault "" config.workspaceConfigPath) ]
+                , span [ class "info-value" ] [ text configPath ]
                 ]
             , div [ class "info-row" ]
                 [ span [ class "info-label" ] [ text "Agents Directory:" ]
@@ -56,6 +59,20 @@ viewActiveWorkspace config wc =
         , hr [] []
         , viewOpenWorkspace config
         , viewCreateWorkspace config
+        ]
+
+
+viewWorkspaceError : Config msg -> String -> Html msg
+viewWorkspaceError config errorMessage =
+    div [ class "no-workspace" ]
+        [ div [ class "workspace-error" ]
+            [ p [ class "workspace-error-message" ]
+                [ text errorMessage ]
+            ]
+        , div [ class "workspace-actions" ]
+            [ viewOpenWorkspace config
+            , viewCreateWorkspace config
+            ]
         ]
 
 

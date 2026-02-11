@@ -1019,6 +1019,20 @@ body {
     font-size: 15px;
 }
 
+.workspace-error {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin-bottom: 24px;
+}
+
+.workspace-error-message {
+    color: #991b1b;
+    font-size: 14px;
+    margin: 0;
+}
+
 .workspace-actions {
     display: flex;
     flex-direction: column;

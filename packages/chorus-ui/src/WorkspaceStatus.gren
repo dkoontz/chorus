@@ -1,0 +1,32 @@
+module WorkspaceStatus exposing (WorkspaceStatus(..), isOpened)
+
+{-| Workspace status type for the UI.
+
+Represents the three possible states of a workspace:
+- No workspace loaded
+- Workspace opened successfully (with config and path)
+- Error opening/creating workspace (with error message)
+
+-}
+
+import Types exposing (WorkspaceConfig)
+
+
+{-| The status of the current workspace.
+-}
+type WorkspaceStatus
+    = NoWorkspace
+    | WorkspaceOpened { config : WorkspaceConfig, configPath : String }
+    | WorkspaceError String
+
+
+{-| Check whether a workspace is currently opened.
+-}
+isOpened : WorkspaceStatus -> Bool
+isOpened status =
+    when status is
+        WorkspaceOpened _ ->
+            True
+
+        _ ->
+            False

@@ -15,3 +15,5 @@ node_modules/
 # App data
 data
 packages/chorus/static/app.js
+
+.DS_Store

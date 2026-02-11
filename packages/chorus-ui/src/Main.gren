@@ -35,6 +35,7 @@ import View.Board as Board
 import View.SystemSettings as SystemSettings exposing (SettingsForm)
 import View.TaskDetail as TaskDetail exposing (PlanningSection(..), PlanningEditState)
 import View.Workspaces as Workspaces
+import WorkspaceStatus exposing (WorkspaceStatus(..))
 
 
 -- MAIN
@@ -77,8 +78,7 @@ type alias Model =
     , startingAgent : Maybe String
     , draftAnswers : Array String
     , expandedEvents : Set Int
-    , workspaceConfig : Maybe WorkspaceConfig
-    , workspaceConfigPath : Maybe String
+    , workspaceStatus : WorkspaceStatus
     , openPath : String
     , createPath : String
     , settingsForm : Maybe SettingsForm
@@ -186,6 +186,7 @@ type Msg
     | AnswersSubmitted (Result Http.Error Types.Task)
     | ToggleEventExpanded Int
       -- Workspace config
+    | GotInitialConfig (Result Http.Error Api.ConfigResponse)
     | GotConfig (Result Http.Error Api.ConfigResponse)
     | UpdateOpenPath String
     | UpdateCreatePath String
@@ -232,8 +233,7 @@ init _ url key =
             , startingAgent = Nothing
             , draftAnswers = []
             , expandedEvents = Set.empty
-            , workspaceConfig = Nothing
-            , workspaceConfigPath = Nothing
+            , workspaceStatus = NoWorkspace
             , openPath = ""
             , createPath = ""
             , settingsForm = Nothing
@@ -243,7 +243,7 @@ init _ url key =
     { model = model
     , command =
         Cmd.batch
-            [ Api.getConfig GotConfig
+            [ Api.getConfig GotInitialConfig
             , Task.perform GotZone Time.here
             ]
     }
@@ -308,13 +308,10 @@ loadPageData page =
             Api.getProviders GotProviders
 
         WorkspacesPage ->
-            Api.getConfig GotConfig
+            Cmd.none
 
         SystemSettingsPage ->
-            Cmd.batch
-                [ Api.getConfig GotConfig
-                , Api.getProviders GotProviders
-                ]
+            Api.getProviders GotProviders
 
         NotFoundPage ->
             Cmd.none
@@ -345,7 +342,7 @@ update msg model =
                     urlToPage url
 
                 page =
-                    if model.workspaceConfig == Nothing && requiresConfig requestedPage then
+                    if not (WorkspaceStatus.isOpened model.workspaceStatus) && requiresConfig requestedPage then
                         WorkspacesPage
                     else
                         requestedPage
@@ -356,7 +353,7 @@ update msg model =
                     , selectedTask = Nothing
                     , taskHistory = Nothing
                     , taskQueue = Nothing
-                    , loading = True
+                    , loading = pageLoadsData page
                     , editingPlanning = Nothing
                     , agentForm = Nothing
                     , providerForm = Nothing
@@ -366,7 +363,12 @@ update msg model =
                     , expandedEvents = Set.empty
                     , settingsForm =
                         if page == SystemSettingsPage then
-                            Maybe.map SystemSettings.workspaceConfigToForm model.workspaceConfig
+                            when model.workspaceStatus is
+                                WorkspaceOpened { config } ->
+                                    Just (SystemSettings.workspaceConfigToForm config)
+
+                                _ ->
+                                    Nothing
                         else
                             model.settingsForm
                     , settingsValidationError = Nothing
@@ -1292,7 +1294,7 @@ update msg model =
 
         -- Workspace config
 
-        GotConfig result ->
+        GotInitialConfig result ->
             when result is
                 Ok configResponse ->
                     let
@@ -1301,15 +1303,13 @@ update msg model =
 
                         newModel =
                             { model
-                                | workspaceConfig = Just wc
-                                , workspaceConfigPath = Just configResponse.configPath
+                                | workspaceStatus = WorkspaceOpened { config = wc, configPath = configResponse.configPath }
                                 , loading = False
                                 , error = Nothing
                                 , settingsForm = Just (SystemSettings.workspaceConfigToForm wc)
                             }
                     in
-                    if model.workspaceConfig == Nothing && model.page == WorkspacesPage then
-                        -- First config load from init or workspace selection: navigate to Board
+                    if model.page == WorkspacesPage then
                         { model = { newModel | page = BoardPage }
                         , command = loadPageData BoardPage
                         }
@@ -1319,8 +1319,49 @@ update msg model =
                         }
 
                 Err _ ->
-                    -- No config loaded (404 or error) - stay on WorkspacesPage
-                    { model = { model | loading = False, page = WorkspacesPage }
+                    -- No config found on initial load - expected when no workspace is configured
+                    { model = { model | loading = False, workspaceStatus = NoWorkspace }
+                    , command = Cmd.none
+                    }
+
+        GotConfig result ->
+            when result is
+                Ok configResponse ->
+                    let
+                        wc =
+                            configResponse.config
+
+                        wasOpened =
+                            WorkspaceStatus.isOpened model.workspaceStatus
+
+                        newModel =
+                            { model
+                                | workspaceStatus = WorkspaceOpened { config = wc, configPath = configResponse.configPath }
+                                , loading = False
+                                , error = Nothing
+                                , settingsForm = Just (SystemSettings.workspaceConfigToForm wc)
+                            }
+                    in
+                    if not wasOpened && model.page == WorkspacesPage then
+                        -- First workspace selection: navigate to Board
+                        { model = { newModel | page = BoardPage }
+                        , command = loadPageData BoardPage
+                        }
+                    else
+                        { model = newModel
+                        , command = Cmd.none
+                        }
+
+                Err err ->
+                    let
+                        errorMessage =
+                            configErrorToString err
+                    in
+                    { model =
+                        { model
+                            | loading = False
+                            , workspaceStatus = WorkspaceError errorMessage
+                        }
                     , command = Cmd.none
                     }
 
@@ -1518,8 +1559,7 @@ update msg model =
                     in
                     { model =
                         { model
-                            | workspaceConfig = Just wc
-                            , workspaceConfigPath = Just configResponse.configPath
+                            | workspaceStatus = WorkspaceOpened { config = wc, configPath = configResponse.configPath }
                             , settingsForm = Just (SystemSettings.workspaceConfigToForm wc)
                             , loading = False
                             , error = Nothing
@@ -1570,7 +1610,7 @@ viewHeader : Model -> Html Msg
 viewHeader model =
     let
         configLoaded =
-            model.workspaceConfig /= Nothing
+            WorkspaceStatus.isOpened model.workspaceStatus
 
         navLink url label isActive isEnabled =
             if isEnabled then
@@ -1712,8 +1752,7 @@ viewMain model =
 
             WorkspacesPage ->
                 Workspaces.view
-                    { workspaceConfig = model.workspaceConfig
-                    , workspaceConfigPath = model.workspaceConfigPath
+                    { workspaceStatus = model.workspaceStatus
                     , openPath = model.openPath
                     , createPath = model.createPath
                     , loading = model.loading
@@ -1896,6 +1935,22 @@ requiresConfig page =
             True
 
 
+{-| Does navigating to this page trigger a data-loading command?
+Used to set the loading flag correctly on page transitions.
+-}
+pageLoadsData : Page -> Bool
+pageLoadsData page =
+    when page is
+        WorkspacesPage ->
+            False
+
+        NotFoundPage ->
+            False
+
+        _ ->
+            True
+
+
 httpErrorToString : Http.Error -> String
 httpErrorToString error =
     when error is
@@ -1913,3 +1968,19 @@ httpErrorToString error =
 
         Http.BadBody body ->
             "Invalid response: " ++ body
+
+
+{-| Convert an Http.Error from a config endpoint to a user-facing string.
+For BadBody errors (which carry the server's error message extracted by
+expectConfigResponse), return the message directly without the "Invalid
+response: " prefix since the server is reporting a legitimate error, not
+sending a malformed response.
+-}
+configErrorToString : Http.Error -> String
+configErrorToString error =
+    when error is
+        Http.BadBody message ->
+            message
+
+        _ ->
+            httpErrorToString error

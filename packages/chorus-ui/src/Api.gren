@@ -423,13 +423,59 @@ configResponseDecoder =
         (Decode.field "configPath" Decode.string)
 
 
+{-| Decoder for error response bodies from the backend.
+Extracts the message from: { "error": { "message": "..." } }
+-}
+errorMessageDecoder : Decoder String
+errorMessageDecoder =
+    Decode.field "error" (Decode.field "message" Decode.string)
+
+
+{-| Custom expect function for config endpoints that extracts error messages
+from the response body on failure, rather than losing them to BadStatus.
+-}
+expectConfigResponse : (Result Http.Error ConfigResponse -> msg) -> Http.Expect msg
+expectConfigResponse toMsg =
+    Http.expectStringResponse toMsg <|
+        \response ->
+            when response is
+                Http.BadUrl_ url ->
+                    Err (Http.BadUrl url)
+
+                Http.Timeout_ ->
+                    Err Http.Timeout
+
+                Http.NetworkError_ ->
+                    Err Http.NetworkError
+
+                Http.BadStatus_ { body } ->
+                    let
+                        errorMessage =
+                            when Decode.decodeString errorMessageDecoder body is
+                                Ok message ->
+                                    message
+
+                                Err _ ->
+                                    body
+                    in
+                    Err (Http.BadBody errorMessage)
+
+                Http.GoodStatus_ { body } ->
+                    when Decode.decodeString configResponseDecoder body is
+                        Ok value ->
+                            Ok value
+
+                        Err err ->
+                            Err (Http.BadBody (Decode.errorToString err))
+
+
 {-| Get the current workspace config.
 -}
 getConfig : (Result Http.Error ConfigResponse -> msg) -> Cmd msg
 getConfig toMsg =
     Http.get
         { url = "/api/config"
-        , expect = Http.expectJson toMsg configResponseDecoder
+        , expect = expectConfigResponse toMsg
         }
 
 
@@ -442,7 +488,7 @@ updateConfig config toMsg =
         , headers = []
         , url = "/api/config"
         , body = Http.jsonBody (Types.encodeWorkspaceConfig config)
-        , expect = Http.expectJson toMsg configResponseDecoder
+        , expect = expectConfigResponse toMsg
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -460,7 +506,7 @@ selectConfig path toMsg =
                     [ { key = "path", value = Encode.string path }
                     ]
                 )
-        , expect = Http.expectJson toMsg configResponseDecoder
+        , expect = expectConfigResponse toMsg
         }
 
 
@@ -476,7 +522,7 @@ createConfig dirPath toMsg =
                     [ { key = "path", value = Encode.string dirPath }
                     ]
                 )
-        , expect = Http.expectJson toMsg configResponseDecoder
+        , expect = expectConfigResponse toMsg
         }
 
 
