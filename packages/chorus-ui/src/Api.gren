@@ -15,6 +15,11 @@ module Api exposing
     , createAgent
     , updateAgent
     , deleteAgent
+    , getProviders
+    , getProvider
+    , createProvider
+    , updateProvider
+    , deleteProvider
     , dataDecoder
     )
 
@@ -29,7 +34,7 @@ import Bytes exposing (Bytes)
 import Http
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
-import Types exposing (AgentConfig, History, Queue, SourceInfo, Task)
+import Types exposing (AgentConfig, History, ProviderConfig, Queue, SourceInfo, Task)
 
 
 
@@ -321,6 +326,71 @@ deleteAgent name toMsg =
         { method = "DELETE"
         , headers = []
         , url = "/api/agents/" ++ name
+        , body = Http.emptyBody
+        , expect = Http.expectJson toMsg (Decode.succeed {})
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+
+-- PROVIDER API FUNCTIONS
+
+
+{-| Get all providers.
+-}
+getProviders : (Result Http.Error (Array ProviderConfig) -> msg) -> Cmd msg
+getProviders toMsg =
+    Http.get
+        { url = "/api/providers"
+        , expect = Http.expectJson toMsg (dataDecoder (Decode.array Types.providerConfigDecoder))
+        }
+
+
+{-| Get a single provider by name.
+-}
+getProvider : String -> (Result Http.Error ProviderConfig -> msg) -> Cmd msg
+getProvider name toMsg =
+    Http.get
+        { url = "/api/providers/" ++ name
+        , expect = Http.expectJson toMsg (dataDecoder Types.providerConfigDecoder)
+        }
+
+
+{-| Create a new provider.
+-}
+createProvider : ProviderConfig -> (Result Http.Error ProviderConfig -> msg) -> Cmd msg
+createProvider config toMsg =
+    Http.post
+        { url = "/api/providers"
+        , body = Http.jsonBody (Types.encodeProviderConfig config)
+        , expect = Http.expectJson toMsg (dataDecoder Types.providerConfigDecoder)
+        }
+
+
+{-| Update an existing provider.
+-}
+updateProvider : String -> ProviderConfig -> (Result Http.Error ProviderConfig -> msg) -> Cmd msg
+updateProvider name config toMsg =
+    Http.request
+        { method = "PUT"
+        , headers = []
+        , url = "/api/providers/" ++ name
+        , body = Http.jsonBody (Types.encodeProviderConfig config)
+        , expect = Http.expectJson toMsg (dataDecoder Types.providerConfigDecoder)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+{-| Delete a provider.
+-}
+deleteProvider : String -> (Result Http.Error {} -> msg) -> Cmd msg
+deleteProvider name toMsg =
+    Http.request
+        { method = "DELETE"
+        , headers = []
+        , url = "/api/providers/" ++ name
         , body = Http.emptyBody
         , expect = Http.expectJson toMsg (Decode.succeed {})
         , timeout = Nothing

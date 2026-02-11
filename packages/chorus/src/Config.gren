@@ -24,11 +24,9 @@ type alias Config =
     , staticRoot : String
     , uploadDir : String
     , agentsRoot : String
+    , providersRoot : String
     , chorusToolsPath : String
     , logLevel : LogLevel
-    , apiBaseUrl : String
-    , apiKey : String
-    , defaultModel : String
     }
 
 
@@ -41,11 +39,9 @@ defaultConfig =
     , staticRoot = "./static"
     , uploadDir = "./data/uploads"
     , agentsRoot = "./data/agents"
+    , providersRoot = "./data/providers"
     , chorusToolsPath = "./tools/chorus-tools"
     , logLevel = LogInfo
-    , apiBaseUrl = ""
-    , apiKey = ""
-    , defaultModel = ""
     }
 
 
@@ -61,9 +57,6 @@ defaultConfig =
     - CHORUS_DATA_DIR: Base data directory (default: <baseDir>/data)
     - CHORUS_STATIC_DIR: Static files directory (default: <baseDir>/static)
     - CHORUS_LOG_LEVEL: Log level - error, warn, info, debug (default: info)
-    - CHORUS_API_BASE_URL: Base URL for OpenAI-compatible API
-    - CHORUS_API_KEY: API key for the LLM provider
-    - CHORUS_DEFAULT_MODEL: Default model name for API providers
 
 -}
 configFromEnv : String -> Dict String String -> Config -> Config
@@ -102,9 +95,7 @@ configFromEnv baseDir envVars config =
     , staticRoot = staticRoot
     , uploadDir = uploadDir
     , agentsRoot = dataDir ++ "/agents"
+    , providersRoot = dataDir ++ "/providers"
     , chorusToolsPath = Dict.get "CHORUS_TOOLS_PATH" envVars |> Maybe.withDefault (baseDir ++ "/tools/chorus-tools")
     , logLevel = logLevel
-    , apiBaseUrl = Dict.get "CHORUS_API_BASE_URL" envVars |> Maybe.withDefault config.apiBaseUrl
-    , apiKey = Dict.get "CHORUS_API_KEY" envVars |> Maybe.withDefault config.apiKey
-    , defaultModel = Dict.get "CHORUS_DEFAULT_MODEL" envVars |> Maybe.withDefault config.defaultModel
     }

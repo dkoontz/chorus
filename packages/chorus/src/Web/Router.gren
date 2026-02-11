@@ -42,6 +42,11 @@ type Route
     | CreateAgent                              -- POST /api/agents
     | UpdateAgent String                       -- PUT /api/agents/:name
     | DeleteAgent String                       -- DELETE /api/agents/:name
+    | ListProviders                            -- GET /api/providers
+    | GetProvider String                       -- GET /api/providers/:name
+    | CreateProvider                           -- POST /api/providers
+    | UpdateProvider String                    -- PUT /api/providers/:name
+    | DeleteProvider String                    -- DELETE /api/providers/:name
     | StaticFile String                        -- GET /* (for frontend assets)
     | NotFound
 
@@ -157,6 +162,21 @@ parseRoute method path =
 
         { method = DELETE, segments = [ "api", "agents", agentName ] } ->
             DeleteAgent agentName
+
+        { method = GET, segments = [ "api", "providers" ] } ->
+            ListProviders
+
+        { method = GET, segments = [ "api", "providers", providerName ] } ->
+            GetProvider providerName
+
+        { method = POST, segments = [ "api", "providers" ] } ->
+            CreateProvider
+
+        { method = PUT, segments = [ "api", "providers", providerName ] } ->
+            UpdateProvider providerName
+
+        { method = DELETE, segments = [ "api", "providers", providerName ] } ->
+            DeleteProvider providerName
 
         -- Static files (anything not matching /api/*)
         { method = GET, segments = segs } ->
@@ -332,6 +352,21 @@ routeToString route =
 
         DeleteAgent name ->
             "DeleteAgent(" ++ name ++ ")"
+
+        ListProviders ->
+            "ListProviders"
+
+        GetProvider name ->
+            "GetProvider(" ++ name ++ ")"
+
+        CreateProvider ->
+            "CreateProvider"
+
+        UpdateProvider name ->
+            "UpdateProvider(" ++ name ++ ")"
+
+        DeleteProvider name ->
+            "DeleteProvider(" ++ name ++ ")"
 
         StaticFile path ->
             "StaticFile(" ++ path ++ ")"

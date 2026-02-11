@@ -11,7 +11,7 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Json.Decode
-import Types exposing (AgentConfig(..))
+import Types exposing (AgentConfig(..), AgentProvider(..), ProviderConfig)
 
 
 {-| Form state for creating or editing an agent.
@@ -33,7 +33,7 @@ emptyAgentForm =
     { name = ""
     , instructions = ""
     , allowedTools = "Read,Grep,Glob,Write,Edit,Bash"
-    , provider = "claude-code"
+    , provider = ""
     , model = ""
     , isEditing = False
     }
@@ -41,6 +41,7 @@ emptyAgentForm =
 
 type alias Props msg =
     { agents : Array AgentConfig
+    , providers : Array ProviderConfig
     , loading : Bool
     , agentForm : Maybe AgentForm
     , onOpenCreateForm : msg
@@ -95,12 +96,32 @@ viewAgentCard props agent =
         name =
             Types.agentConfigName agent
 
-        { instructions, providerText, toolsText } =
+        providerNames =
+            Array.map .name props.providers
+
+        { instructions, providerText, toolsText, isValid } =
             when agent is
                 UserDefinedAgent r ->
+                    let
+                        providerName =
+                            when r.provider is
+                                NotConfigured ->
+                                    "not configured"
+
+                                ProviderRef pName ->
+                                    pName
+
+                        valid =
+                            when r.provider is
+                                NotConfigured ->
+                                    False
+
+                                ProviderRef pName ->
+                                    Array.any (\p -> p == pName) providerNames
+                    in
                     { instructions = r.instructions
                     , providerText =
-                        r.provider
+                        providerName
                             ++ (when r.model is
                                     Just m ->
                                         " / " ++ m
@@ -109,17 +130,28 @@ viewAgentCard props agent =
                                         ""
                                )
                     , toolsText = String.join ", " r.allowedTools
+                    , isValid = valid
                     }
 
                 InternalAgent r ->
                     { instructions = r.instructions
                     , providerText = "internal"
                     , toolsText = ""
+                    , isValid = True
                     }
+
+        validityIndicator =
+            if isValid then
+                span [ class "validity-badge valid", title "Provider configured" ] [ text "Ready" ]
+            else
+                span [ class "validity-badge invalid", title "Provider not configured or missing" ] [ text "No Provider" ]
     in
     div [ class "agent-card card" ]
         [ div [ class "agent-card-header" ]
-            [ h3 [ class "agent-card-name" ] [ text name ]
+            [ div [ class "agent-card-title" ]
+                [ h3 [ class "agent-card-name" ] [ text name ]
+                , validityIndicator
+                ]
             , div [ class "agent-card-actions" ]
                 [ button
                     [ class "btn btn-small btn-secondary"
@@ -214,8 +246,18 @@ viewAgentFormModal props =
                                 [ id "agent-provider"
                                 , onInput props.onUpdateProvider
                                 ]
-                                [ option [ value "claude-code", selected (form.provider == "claude-code") ] [ text "Claude Code (CLI)" ]
-                                ]
+                                ([ option [ value "", selected (form.provider == "") ] [ text "-- Not Configured --" ]
+                                 ]
+                                    ++ Array.map
+                                        (\p ->
+                                            option
+                                                [ value p.name
+                                                , selected (form.provider == p.name)
+                                                ]
+                                                [ text p.name ]
+                                        )
+                                        props.providers
+                                )
                             ]
                         , div [ class "form-group" ]
                             [ label [ for "agent-model" ] [ text "Model (optional)" ]

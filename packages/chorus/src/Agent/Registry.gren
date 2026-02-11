@@ -24,7 +24,7 @@ import FileSystem.Path as Path exposing (Path)
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import Task as GrenTask
-import Types exposing (AgentConfig(..), encodeAgentConfig, agentConfigDecoder)
+import Types exposing (AgentConfig(..), AgentProvider(..), encodeAgentConfig, agentConfigDecoder)
 
 
 -- TYPES
@@ -166,42 +166,42 @@ seedDefaults filesystemPermission agentsPath =
                 { name = "researcher"
                 , instructions = researcherInstructions
                 , allowedTools = [ "web.search" ]
-                , provider = "claude-code"
+                , provider = NotConfigured
                 , model = Nothing
                 }
             , Types.UserDefinedAgent
                 { name = "planner"
                 , instructions = plannerInstructions
                 , allowedTools = [ "file.read", "file.write", "file.create", "file.patch", "file.delete", "file.list", "file.search" ]
-                , provider = "claude-code"
+                , provider = NotConfigured
                 , model = Nothing
                 }
             , Types.UserDefinedAgent
                 { name = "writer-workflow"
                 , instructions = writerWorkflowInstructions
                 , allowedTools = [ "handoff", "file.read", "file.write" ]
-                , provider = "claude-code"
+                , provider = NotConfigured
                 , model = Nothing
                 }
             , Types.UserDefinedAgent
                 { name = "writer"
                 , instructions = writerInstructions
                 , allowedTools = [ "file.read", "file.write", "file.create", "file.patch", "file.list", "file.search" ]
-                , provider = "claude-code"
+                , provider = NotConfigured
                 , model = Nothing
                 }
             , Types.UserDefinedAgent
                 { name = "editor"
                 , instructions = editorInstructions
                 , allowedTools = [ "file.read", "file.list", "file.search" ]
-                , provider = "claude-code"
+                , provider = NotConfigured
                 , model = Nothing
                 }
             , Types.UserDefinedAgent
                 { name = "fact-checker"
                 , instructions = factCheckerInstructions
                 , allowedTools = [ "file.read", "file.list", "file.search", "web.search" ]
-                , provider = "claude-code"
+                , provider = NotConfigured
                 , model = Nothing
                 }
             , Types.InternalAgent

@@ -1,0 +1,230 @@
+module Provider.Registry exposing
+    ( ProviderRegistry
+    , Error(..)
+    , init
+    , getProvider
+    , listProviders
+    , updateProvider
+    , deleteProvider
+    , errorToString
+    )
+
+{-| File-based provider configuration registry.
+
+Provider configs are stored as individual JSON files in `data/providers/{name}.json`.
+On first run (empty directory), no defaults are seeded -- the directory starts empty.
+
+-}
+
+import Bytes
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+import Task as GrenTask
+import Types exposing (ProviderConfig, encodeProviderConfig, providerConfigDecoder)
+
+
+-- TYPES
+
+
+{-| Handle to the provider registry. Contains the filesystem permission and root path.
+-}
+type ProviderRegistry
+    = ProviderRegistry
+        { filesystemPermission : FileSystem.Permission
+        , providersRoot : Path
+        }
+
+
+{-| Errors that can occur during registry operations.
+-}
+type Error
+    = FileSystemError String
+    | JsonDecodeError String
+    | ProviderNotFound String
+
+
+
+-- INITIALIZATION
+
+
+{-| Initialize the provider registry.
+
+Creates `data/providers/` if missing. Does NOT seed any defaults.
+-}
+init : FileSystem.Permission -> { providersRoot : String } -> GrenTask.Task Error ProviderRegistry
+init filesystemPermission config =
+    let
+        providersPath =
+            Path.fromPosixString config.providersRoot
+
+        registry =
+            ProviderRegistry
+                { filesystemPermission = filesystemPermission
+                , providersRoot = providersPath
+                }
+    in
+    ensureDirectoryExists filesystemPermission providersPath
+        |> GrenTask.map (\_ -> registry)
+
+
+{-| Ensure a directory exists, creating it if necessary.
+-}
+ensureDirectoryExists : FileSystem.Permission -> Path -> GrenTask.Task Error {}
+ensureDirectoryExists filesystemPermission path =
+    FileSystem.makeDirectory filesystemPermission { recursive = True } path
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.map (\_ -> {})
+
+
+
+-- OPERATIONS
+
+
+{-| Get a provider config by name. Fails with ProviderNotFound if it does not exist.
+-}
+getProvider : ProviderRegistry -> String -> GrenTask.Task Error ProviderConfig
+getProvider (ProviderRegistry config) name =
+    let
+        filePath =
+            Path.append (Path.fromPosixString (name ++ ".json")) config.providersRoot
+    in
+    readProviderConfigFile config.filesystemPermission filePath
+        |> GrenTask.onError
+            (\err ->
+                when err is
+                    FileSystemError msg ->
+                        if String.contains "ENOENT" msg || String.contains "no such file" msg then
+                            GrenTask.fail (ProviderNotFound name)
+                        else
+                            GrenTask.fail err
+
+                    _ ->
+                        GrenTask.fail err
+            )
+
+
+{-| List all provider configs by reading all .json files in the providers directory.
+-}
+listProviders : ProviderRegistry -> GrenTask.Task Error (Array ProviderConfig)
+listProviders (ProviderRegistry config) =
+    FileSystem.listDirectory config.filesystemPermission config.providersRoot
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.andThen
+            (\entries ->
+                let
+                    jsonFiles =
+                        entries
+                            |> Array.keepIf (\entry -> String.endsWith ".json" (Path.toPosixString entry.path))
+                in
+                jsonFiles
+                    |> Array.foldl
+                        (\entry acc ->
+                            acc
+                                |> GrenTask.andThen
+                                    (\configs ->
+                                        let
+                                            filePath =
+                                                Path.append entry.path config.providersRoot
+                                        in
+                                        readProviderConfigFile config.filesystemPermission filePath
+                                            |> GrenTask.map (\providerConfig -> Array.pushLast providerConfig configs)
+                                    )
+                        )
+                        (GrenTask.succeed [])
+            )
+
+
+{-| Create or update a provider config.
+-}
+updateProvider : ProviderRegistry -> ProviderConfig -> GrenTask.Task Error ProviderConfig
+updateProvider (ProviderRegistry config) providerConfig =
+    writeProviderConfig config.filesystemPermission config.providersRoot providerConfig
+        |> GrenTask.map (\_ -> providerConfig)
+
+
+{-| Delete a provider config by name.
+-}
+deleteProvider : ProviderRegistry -> String -> GrenTask.Task Error {}
+deleteProvider (ProviderRegistry config) name =
+    let
+        filePath =
+            Path.append (Path.fromPosixString (name ++ ".json")) config.providersRoot
+    in
+    FileSystem.remove config.filesystemPermission { recursive = False } filePath
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.map (\_ -> {})
+        |> GrenTask.onError
+            (\err ->
+                when err is
+                    FileSystemError msg ->
+                        if String.contains "ENOENT" msg || String.contains "no such file" msg then
+                            GrenTask.fail (ProviderNotFound name)
+                        else
+                            GrenTask.fail err
+
+                    _ ->
+                        GrenTask.fail err
+            )
+
+
+
+-- HELPERS
+
+
+{-| Convert an error to a string.
+-}
+errorToString : Error -> String
+errorToString err =
+    when err is
+        FileSystemError msg ->
+            "File system error: " ++ msg
+
+        JsonDecodeError msg ->
+            "JSON decode error: " ++ msg
+
+        ProviderNotFound name ->
+            "Provider not found: " ++ name
+
+
+{-| Write a single provider config file.
+-}
+writeProviderConfig : FileSystem.Permission -> Path -> ProviderConfig -> GrenTask.Task Error {}
+writeProviderConfig filesystemPermission providersPath providerConfig =
+    let
+        filePath =
+            Path.append (Path.fromPosixString (providerConfig.name ++ ".json")) providersPath
+
+        json =
+            encodeProviderConfig providerConfig
+                |> Encode.encode 2
+
+        bytes =
+            Bytes.fromString json
+    in
+    FileSystem.writeFile filesystemPermission bytes filePath
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.map (\_ -> {})
+
+
+{-| Read and decode a provider config from a file path.
+-}
+readProviderConfigFile : FileSystem.Permission -> Path -> GrenTask.Task Error ProviderConfig
+readProviderConfigFile filesystemPermission filePath =
+    FileSystem.readFile filesystemPermission filePath
+        |> GrenTask.mapError (\e -> FileSystemError (FileSystem.errorToString e))
+        |> GrenTask.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        GrenTask.fail (JsonDecodeError "Could not decode provider config file as UTF-8")
+
+                    Just content ->
+                        when Decode.decodeString providerConfigDecoder content is
+                            Ok providerConfig ->
+                                GrenTask.succeed providerConfig
+
+                            Err err ->
+                                GrenTask.fail (JsonDecodeError (Decode.errorToString err))
+            )

@@ -7,7 +7,7 @@ import Id
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task
-import Types exposing (Task(..), TaskStatus(..), AgentConfig(..), SourceInfo, Attachment, HandoffRecord)
+import Types exposing (Task(..), TaskStatus(..), AgentConfig(..), AgentProvider(..), SourceInfo, Attachment, HandoffRecord)
 import Provider.ClaudeCode as ClaudeCode
 import Time
 
@@ -1041,7 +1041,7 @@ testUserDefinedAgentEncodeDecodeWithoutModel =
                     { name = "researcher"
                     , instructions = "Research topics"
                     , allowedTools = [ "web.search", "file.read" ]
-                    , provider = "claude-code"
+                    , provider = ProviderRef "claude-code"
                     , model = Nothing
                     }
 
@@ -1073,7 +1073,7 @@ testUserDefinedAgentEncodeDecodeWithModel =
                     { name = "writer"
                     , instructions = "Write content"
                     , allowedTools = [ "file.read", "file.write" ]
-                    , provider = "openai-compat"
+                    , provider = ProviderRef "openai-compat"
                     , model = Just "gpt-4"
                     }
 
@@ -1140,7 +1140,7 @@ testAgentConfigNameUserDefined =
                     { name = "researcher"
                     , instructions = "Research topics"
                     , allowedTools = []
-                    , provider = "claude-code"
+                    , provider = ProviderRef "claude-code"
                     , model = Nothing
                     }
         in
@@ -1173,7 +1173,7 @@ testIsInternalAgentFalse =
                     { name = "researcher"
                     , instructions = "Research topics"
                     , allowedTools = []
-                    , provider = "claude-code"
+                    , provider = ProviderRef "claude-code"
                     , model = Nothing
                     }
         in

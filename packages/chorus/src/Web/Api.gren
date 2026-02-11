@@ -20,6 +20,11 @@ module Web.Api exposing
     , requestCreateAgent
     , requestUpdateAgent
     , requestDeleteAgent
+    , requestProviders
+    , requestProvider
+    , requestCreateProvider
+    , requestUpdateProvider
+    , requestDeleteProvider
     , requestApplyPlan
     , requestSetQuestions
     , requestSubmitAnswers
@@ -29,6 +34,7 @@ module Web.Api exposing
     , UpdatePlanningParams
     , StartHandoffParams
     , CompleteHandoffParams
+    , indexedArrayToDict
     )
 
 {-| API request handlers for the Chorus web interface.
@@ -39,6 +45,7 @@ Each endpoint produces an ApiResult that should be sent back via the Response.
 
 import Agent.Registry as AgentRegistry
 import Bytes exposing (Bytes)
+import Provider.Registry as ProviderRegistry
 import Crypto exposing (SecureContext)
 import Dict exposing (Dict)
 import FileSystem
@@ -1127,26 +1134,69 @@ requestCompleteHandoff ctx taskId params toMsg =
 
 
 {-| GET /api/agents - List all agent configs.
+
+Includes a computed `isValid` field for each user-defined agent.
+An agent is valid if its provider is a ProviderRef and that provider exists.
 -}
-requestAgents : AgentRegistry.AgentRegistry -> (ApiResult -> msg) -> Cmd msg
-requestAgents agentRegistry toMsg =
+requestAgents : AgentRegistry.AgentRegistry -> ProviderRegistry.ProviderRegistry -> (ApiResult -> msg) -> Cmd msg
+requestAgents agentRegistry providerRegistry toMsg =
     AgentRegistry.listAgents agentRegistry
+        |> GrenTask.mapError (\err -> AgentRegistryError err)
         |> GrenTask.andThen
             (\agents ->
+                ProviderRegistry.listProviders providerRegistry
+                    |> GrenTask.mapError (\err -> ProviderRegistryError err)
+                    |> GrenTask.map (\providers -> { agents = agents, providers = providers })
+            )
+        |> GrenTask.andThen
+            (\{ agents, providers } ->
                 Time.now
-                    |> GrenTask.mapError (\_ -> AgentRegistry.FileSystemError "Failed to get time")
+                    |> GrenTask.mapError (\_ -> AgentRegistryError (AgentRegistry.FileSystemError "Failed to get time"))
                     |> GrenTask.map
                         (\now ->
                             let
+                                providerNames =
+                                    Array.map .name providers
+
                                 agentsJson =
-                                    Encode.array encodeAgentConfig agents
+                                    Encode.array
+                                        (\agent ->
+                                            let
+                                                base =
+                                                    encodeAgentConfig agent
+
+                                                isValid =
+                                                    when agent is
+                                                        UserDefinedAgent r ->
+                                                            when r.provider is
+                                                                Types.ProviderRef name ->
+                                                                    Array.any (\p -> p == name) providerNames
+
+                                                                Types.NotConfigured ->
+                                                                    False
+
+                                                        InternalAgent _ ->
+                                                            True
+                                            in
+                                            addJsonField "isValid" (Encode.bool isValid) base
+                                        )
+                                        agents
                             in
                             ApiSuccess { statusCode = 200, body = wrapResponse agentsJson now }
                         )
             )
         |> GrenTask.onError
             (\err ->
-                GrenTask.succeed (ApiError { statusCode = 500, code = "AGENT_REGISTRY_ERROR", message = AgentRegistry.errorToString err })
+                let
+                    message =
+                        when err is
+                            AgentRegistryError e ->
+                                AgentRegistry.errorToString e
+
+                            ProviderRegistryError e ->
+                                ProviderRegistry.errorToString e
+                in
+                GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = message })
             )
         |> GrenTask.perform toMsg
 
@@ -1277,6 +1327,226 @@ requestDeleteAgent agentRegistry name toMsg =
         |> GrenTask.perform toMsg
 
 
+-- PROVIDER CRUD
+
+
+{-| GET /api/providers - List all provider configs.
+-}
+requestProviders : ProviderRegistry.ProviderRegistry -> (ApiResult -> msg) -> Cmd msg
+requestProviders providerRegistry toMsg =
+    ProviderRegistry.listProviders providerRegistry
+        |> GrenTask.andThen
+            (\providers ->
+                Time.now
+                    |> GrenTask.mapError (\_ -> ProviderRegistry.FileSystemError "Failed to get time")
+                    |> GrenTask.map
+                        (\now ->
+                            let
+                                providersJson =
+                                    Encode.array Types.encodeProviderConfig providers
+                            in
+                            ApiSuccess { statusCode = 200, body = wrapResponse providersJson now }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "PROVIDER_REGISTRY_ERROR", message = ProviderRegistry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| GET /api/providers/:name - Get a single provider config.
+-}
+requestProvider : ProviderRegistry.ProviderRegistry -> String -> (ApiResult -> msg) -> Cmd msg
+requestProvider providerRegistry name toMsg =
+    ProviderRegistry.getProvider providerRegistry name
+        |> GrenTask.andThen
+            (\providerConfig ->
+                Time.now
+                    |> GrenTask.mapError (\_ -> ProviderRegistry.FileSystemError "Failed to get time")
+                    |> GrenTask.map
+                        (\now ->
+                            ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeProviderConfig providerConfig) now }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                when err is
+                    ProviderRegistry.ProviderNotFound _ ->
+                        GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = ProviderRegistry.errorToString err })
+
+                    _ ->
+                        GrenTask.succeed (ApiError { statusCode = 500, code = "PROVIDER_REGISTRY_ERROR", message = ProviderRegistry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| POST /api/providers - Create a new provider config.
+
+Fails with 409 Conflict if a provider with the same name already exists.
+-}
+requestCreateProvider : ProviderRegistry.ProviderRegistry -> Types.ProviderConfig -> (ApiResult -> msg) -> Cmd msg
+requestCreateProvider providerRegistry providerConfig toMsg =
+    let
+        name =
+            providerConfig.name
+    in
+    ProviderRegistry.getProvider providerRegistry name
+        |> GrenTask.andThen
+            (\_ ->
+                GrenTask.succeed (ApiError { statusCode = 409, code = "CONFLICT", message = "Provider already exists: " ++ name })
+            )
+        |> GrenTask.onError
+            (\err ->
+                when err is
+                    ProviderRegistry.ProviderNotFound _ ->
+                        ProviderRegistry.updateProvider providerRegistry providerConfig
+                            |> GrenTask.andThen
+                                (\created ->
+                                    Time.now
+                                        |> GrenTask.mapError (\_ -> ProviderRegistry.FileSystemError "Failed to get time")
+                                        |> GrenTask.map
+                                            (\now ->
+                                                ApiSuccess { statusCode = 201, body = wrapResponse (Types.encodeProviderConfig created) now }
+                                            )
+                                )
+                            |> GrenTask.onError
+                                (\createErr ->
+                                    GrenTask.succeed (ApiError { statusCode = 500, code = "PROVIDER_REGISTRY_ERROR", message = ProviderRegistry.errorToString createErr })
+                                )
+
+                    _ ->
+                        GrenTask.succeed (ApiError { statusCode = 500, code = "PROVIDER_REGISTRY_ERROR", message = ProviderRegistry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| PUT /api/providers/:name - Update an existing provider config.
+-}
+requestUpdateProvider : ProviderRegistry.ProviderRegistry -> String -> Types.ProviderConfig -> (ApiResult -> msg) -> Cmd msg
+requestUpdateProvider providerRegistry name providerConfig toMsg =
+    let
+        configWithName =
+            { providerConfig | name = name }
+    in
+    ProviderRegistry.updateProvider providerRegistry configWithName
+        |> GrenTask.andThen
+            (\updated ->
+                Time.now
+                    |> GrenTask.mapError (\_ -> ProviderRegistry.FileSystemError "Failed to get time")
+                    |> GrenTask.map
+                        (\now ->
+                            ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeProviderConfig updated) now }
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed (ApiError { statusCode = 500, code = "PROVIDER_REGISTRY_ERROR", message = ProviderRegistry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| DELETE /api/providers/:name - Delete a provider config.
+
+Before deleting, scans all agents to find those referencing this provider.
+Sets each affected agent's provider to NotConfigured, then deletes the provider.
+Returns the list of affected agent names in the response.
+-}
+requestDeleteProvider : ProviderRegistry.ProviderRegistry -> AgentRegistry.AgentRegistry -> String -> (ApiResult -> msg) -> Cmd msg
+requestDeleteProvider providerRegistry agentRegistry name toMsg =
+    AgentRegistry.listAgents agentRegistry
+        |> GrenTask.mapError (\err -> AgentRegistryError err)
+        |> GrenTask.andThen
+            (\agents ->
+                let
+                    affectedAgents =
+                        agents
+                            |> Array.keepIf
+                                (\agent ->
+                                    when agent is
+                                        UserDefinedAgent r ->
+                                            r.provider == Types.ProviderRef name
+
+                                        InternalAgent _ ->
+                                            False
+                                )
+                            |> Array.map Types.agentConfigName
+
+                    updateAffectedAgents =
+                        agents
+                            |> Array.keepIf
+                                (\agent ->
+                                    when agent is
+                                        UserDefinedAgent r ->
+                                            r.provider == Types.ProviderRef name
+
+                                        InternalAgent _ ->
+                                            False
+                                )
+                            |> Array.foldl
+                                (\agent acc ->
+                                    acc
+                                        |> GrenTask.andThen
+                                            (\_ ->
+                                                let
+                                                    updatedAgent =
+                                                        when agent is
+                                                            UserDefinedAgent r ->
+                                                                UserDefinedAgent { r | provider = Types.NotConfigured }
+
+                                                            InternalAgent _ ->
+                                                                agent
+                                                in
+                                                AgentRegistry.updateAgent agentRegistry updatedAgent
+                                                    |> GrenTask.mapError AgentRegistryError
+                                                    |> GrenTask.map (\_ -> {})
+                                            )
+                                )
+                                (GrenTask.succeed {})
+                in
+                updateAffectedAgents
+                    |> GrenTask.andThen
+                        (\_ ->
+                            ProviderRegistry.deleteProvider providerRegistry name
+                                |> GrenTask.mapError ProviderRegistryError
+                        )
+                    |> GrenTask.andThen
+                        (\_ ->
+                            Time.now
+                                |> GrenTask.mapError (\_ -> AgentRegistryError (AgentRegistry.FileSystemError "Failed to get time"))
+                                |> GrenTask.map
+                                    (\now ->
+                                        let
+                                            responseBody =
+                                                Encode.object
+                                                    [ { key = "deleted", value = Encode.string name }
+                                                    , { key = "affectedAgents", value = Encode.array Encode.string affectedAgents }
+                                                    ]
+                                        in
+                                        ApiSuccess { statusCode = 200, body = wrapResponse responseBody now }
+                                    )
+                        )
+            )
+        |> GrenTask.onError
+            (\err ->
+                let
+                    { statusCode, message } =
+                        when err is
+                            ProviderRegistryError (ProviderRegistry.ProviderNotFound _) ->
+                                { statusCode = 404, message = "Provider not found: " ++ name }
+
+                            ProviderRegistryError e ->
+                                { statusCode = 500, message = ProviderRegistry.errorToString e }
+
+                            AgentRegistryError e ->
+                                { statusCode = 500, message = AgentRegistry.errorToString e }
+                in
+                GrenTask.succeed (ApiError { statusCode = statusCode, code = "REGISTRY_ERROR", message = message })
+            )
+        |> GrenTask.perform toMsg
+
+
+
 -- RESPONSE SENDING
 
 
@@ -1345,6 +1615,29 @@ sendBinaryResponse response result =
                 |> Response.setHeader "Content-Type" "application/json"
                 |> Response.setBody errorBody
                 |> Response.send
+
+
+
+{-| Internal error type for combined registry operations.
+-}
+type CombinedRegistryError
+    = AgentRegistryError AgentRegistry.Error
+    | ProviderRegistryError ProviderRegistry.Error
+
+
+{-| Add a field to an existing JSON object Value.
+
+Works by decoding the object into key-value pairs, adding the new field,
+and re-encoding.
+-}
+addJsonField : String -> Encode.Value -> Encode.Value -> Encode.Value
+addJsonField key value jsonObject =
+    when Decode.decodeValue (Decode.keyValuePairs Decode.value) jsonObject is
+        Ok pairs ->
+            Encode.object (Array.pushLast { key = key, value = value } pairs)
+
+        Err _ ->
+            jsonObject
 
 
 

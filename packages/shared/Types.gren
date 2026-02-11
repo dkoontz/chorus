@@ -15,6 +15,9 @@ module Types exposing
     , QueuedMessage
     , Queue
     , AgentConfig(..)
+    , ProviderType(..)
+    , ProviderConfig
+    , AgentProvider(..)
     -- Encoders
     , encodeTask
     , encodeStatus
@@ -29,6 +32,9 @@ module Types exposing
     , encodeCompletionReport
     , encodeAgentConfig
     , encodePlanningQuestion
+    , encodeProviderType
+    , encodeProviderConfig
+    , encodeAgentProvider
     -- Decoders
     , taskDecoder
     , statusDecoder
@@ -42,6 +48,9 @@ module Types exposing
     , completionReportDecoder
     , agentConfigDecoder
     , planningQuestionDecoder
+    , providerTypeDecoder
+    , providerConfigDecoder
+    , agentProviderDecoder
     -- Accessors
     , taskId
     , taskDescription
@@ -258,7 +267,55 @@ and instructions. User-defined agents have the full provider/model/tools config.
 -}
 type AgentConfig
     = InternalAgent { name : String, instructions : String }
-    | UserDefinedAgent { name : String, instructions : String, allowedTools : Array String, provider : String, model : Maybe String }
+    | UserDefinedAgent { name : String, instructions : String, allowedTools : Array String, provider : AgentProvider, model : Maybe String }
+
+
+{-| How an agent references its provider.
+
+NotConfigured means the agent has no provider assigned and cannot be used for tasks.
+ProviderRef carries the name of a configured provider.
+-}
+type AgentProvider
+    = NotConfigured
+    | ProviderRef String
+
+
+{-| Provider variant type. Represents the different kinds of LLM providers.
+
+OpenAiCompatible carries API-specific configuration fields.
+ClaudeCode and OpenCode are CLI-based providers with no extra config.
+
+Research note on OpenAI-compatible services:
+- OpenRouter (https://openrouter.ai/api/v1): Fully compatible with OpenAI Chat Completions
+  API format. Uses standard Authorization: Bearer header. Supports /v1/chat/completions
+  with the same request/response schema. No protocol differences.
+- Ollama (http://localhost:11434/v1): Provides an OpenAI-compatible endpoint at /v1.
+  Supports /v1/chat/completions with the same schema. API key is optional (local service).
+  No special parameters required.
+- LM Studio (http://localhost:1234/v1): Fully OpenAI-compatible. Supports
+  /v1/chat/completions with standard request/response format. API key is optional
+  (local service). No protocol differences.
+
+All three services are implemented as presets of the openai-compat provider type,
+pre-filling the apiBaseUrl field.
+-}
+type ProviderType
+    = OpenAiCompatible
+        { apiBaseUrl : String
+        , apiKey : String
+        , defaultModel : String
+        }
+    | ClaudeCode
+    | OpenCode
+
+
+{-| A named provider configuration. The name is the unique identifier,
+used as the filename and reference key.
+-}
+type alias ProviderConfig =
+    { name : String
+    , providerType : ProviderType
+    }
 
 
 
@@ -1081,7 +1138,7 @@ encodeAgentConfig config =
                     , { key = "name", value = Encode.string r.name }
                     , { key = "instructions", value = Encode.string r.instructions }
                     , { key = "allowedTools", value = Encode.array Encode.string r.allowedTools }
-                    , { key = "provider", value = Encode.string r.provider }
+                    , { key = "provider", value = encodeAgentProvider r.provider }
                     ]
 
                 modelField =
@@ -1123,12 +1180,134 @@ agentConfigDecoder =
                             (Decode.field "name" Decode.string)
                             (Decode.field "instructions" Decode.string)
                             (Decode.field "allowedTools" (Decode.array Decode.string))
-                            (Decode.field "provider" Decode.string)
+                            (Decode.field "provider" agentProviderDecoder)
                             (Decode.maybe (Decode.field "model" Decode.string))
 
                     _ ->
                         Decode.fail ("Unknown agent config type: " ++ agentType)
             )
+
+
+
+-- PROVIDER TYPE JSON
+
+
+{-| Encode an AgentProvider to JSON.
+
+NotConfigured encodes as the string "not-configured".
+ProviderRef encodes as the provider name string.
+-}
+encodeAgentProvider : AgentProvider -> Encode.Value
+encodeAgentProvider provider =
+    when provider is
+        NotConfigured ->
+            Encode.string "not-configured"
+
+        ProviderRef name ->
+            Encode.string name
+
+
+{-| Decode an AgentProvider from JSON.
+
+"not-configured" decodes as NotConfigured.
+Any other string decodes as ProviderRef with that string.
+-}
+agentProviderDecoder : Decoder AgentProvider
+agentProviderDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\str ->
+                when str is
+                    "not-configured" ->
+                        Decode.succeed NotConfigured
+
+                    _ ->
+                        Decode.succeed (ProviderRef str)
+            )
+
+
+{-| Encode a ProviderType to JSON.
+
+Uses a "type" discriminator field with variant-specific fields at the same level.
+-}
+encodeProviderType : ProviderType -> Encode.Value
+encodeProviderType providerType =
+    when providerType is
+        OpenAiCompatible config ->
+            Encode.object
+                [ { key = "type", value = Encode.string "openai-compat" }
+                , { key = "apiBaseUrl", value = Encode.string config.apiBaseUrl }
+                , { key = "apiKey", value = Encode.string config.apiKey }
+                , { key = "defaultModel", value = Encode.string config.defaultModel }
+                ]
+
+        ClaudeCode ->
+            Encode.object
+                [ { key = "type", value = Encode.string "claude-code" }
+                ]
+
+        OpenCode ->
+            Encode.object
+                [ { key = "type", value = Encode.string "opencode" }
+                ]
+
+
+{-| Decode a ProviderType from JSON.
+
+Matches on the "type" discriminator field.
+-}
+providerTypeDecoder : Decoder ProviderType
+providerTypeDecoder =
+    Decode.field "type" Decode.string
+        |> Decode.andThen
+            (\typeStr ->
+                when typeStr is
+                    "openai-compat" ->
+                        Decode.map3
+                            (\apiBaseUrl apiKey defaultModel ->
+                                OpenAiCompatible
+                                    { apiBaseUrl = apiBaseUrl
+                                    , apiKey = apiKey
+                                    , defaultModel = defaultModel
+                                    }
+                            )
+                            (Decode.field "apiBaseUrl" Decode.string)
+                            (Decode.field "apiKey" Decode.string)
+                            (Decode.field "defaultModel" Decode.string)
+
+                    "claude-code" ->
+                        Decode.succeed ClaudeCode
+
+                    "opencode" ->
+                        Decode.succeed OpenCode
+
+                    _ ->
+                        Decode.fail ("Unknown provider type: " ++ typeStr)
+            )
+
+
+{-| Encode a ProviderConfig to JSON.
+-}
+encodeProviderConfig : ProviderConfig -> Encode.Value
+encodeProviderConfig config =
+    Encode.object
+        [ { key = "name", value = Encode.string config.name }
+        , { key = "providerType", value = encodeProviderType config.providerType }
+        ]
+
+
+{-| Decode a ProviderConfig from JSON.
+-}
+providerConfigDecoder : Decoder ProviderConfig
+providerConfigDecoder =
+    Decode.map2
+        (\name providerType ->
+            { name = name
+            , providerType = providerType
+            }
+        )
+        (Decode.field "name" Decode.string)
+        (Decode.field "providerType" providerTypeDecoder)
 
 
 

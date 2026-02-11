@@ -1,4 +1,4 @@
-module Provider.OpenAiCompat exposing
+module Provider.OpenAiCompatible exposing
     ( provider
     , Config
     )

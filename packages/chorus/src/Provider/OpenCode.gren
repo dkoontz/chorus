@@ -1,6 +1,8 @@
 module Provider.OpenCode exposing
     ( provider
     , Config
+    , CliArgs
+    , buildShellCommand
     )
 
 {-| OpenCode provider implementation.

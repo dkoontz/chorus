@@ -31,13 +31,14 @@ import Logging exposing (LogLevel(..))
 import Node
 import Provider exposing (ProviderKind(..))
 import Provider.ClaudeCode as ClaudeCode
-import Provider.OpenAiCompat as OpenAiCompat
+import Provider.OpenAiCompatible as OpenAiCompatible
 import Provider.OpenCode as OpenCode
+import Provider.Registry as ProviderRegistry
 import Stream
 import Task as GrenTask
 import Task.Registry as Registry
-import Types exposing (AgentConfig(..), TaskStatus(..), SourceInfo)
-import Web.Api as Api
+import Types exposing (AgentConfig(..), AgentProvider(..), ProviderType(..), TaskStatus(..), SourceInfo)
+import Web.Api as Api exposing (indexedArrayToDict)
 import Web.Router as Router
 import Web.Server as Server
 import Web.Static as Static
@@ -65,6 +66,7 @@ type alias Model =
     , server : Maybe HttpServer.Server
     , registry : Maybe Registry.Registry
     , agentRegistry : Maybe AgentRegistry.AgentRegistry
+    , providerRegistry : Maybe ProviderRegistry.ProviderRegistry
     , activeExecutors : Dict String ExecutorState
     , providerConfig : ClaudeCode.Config
     , filesystemPermission : FileSystem.Permission
@@ -117,6 +119,7 @@ type Msg
     = GotServer (Result Server.Error HttpServer.Server)
     | GotRegistry (Result Registry.Error Registry.Registry)
     | GotAgentRegistry (Result AgentRegistry.Error AgentRegistry.AgentRegistry)
+    | GotProviderRegistry (Result ProviderRegistry.Error ProviderRegistry.ProviderRegistry)
     | GotRequest { request : HttpServer.Request, response : Response }
     | GotStaticFile { id : Int, response : Response, result : Static.StaticFileResult }
     | GotApiResult { response : Response, result : Api.ApiResult }
@@ -170,6 +173,7 @@ init env =
                                     , server = Nothing
                                     , registry = Nothing
                                     , agentRegistry = Nothing
+                                    , providerRegistry = Nothing
                                     , activeExecutors = Dict.empty
                                     , providerConfig = providerCfg
                                     , filesystemPermission = filesystemPermission
@@ -206,6 +210,12 @@ init env =
                                             }
                                             |> GrenTask.attempt GotAgentRegistry
 
+                                        , -- Initialize the provider registry
+                                          ProviderRegistry.init filesystemPermission
+                                            { providersRoot = config.providersRoot
+                                            }
+                                            |> GrenTask.attempt GotProviderRegistry
+
                                         , -- Log startup
                                           Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.serverPort) NoOp
                                         ]
@@ -225,43 +235,140 @@ Dispatches based on the agent's `provider` field. Supports:
 
 Returns Nothing if the provider name is not recognized or the agent is internal.
 -}
-makeProvider : Model -> Types.AgentConfig -> Maybe (Provider.Provider Msg)
-makeProvider model agentConfig =
+makeProvider : Model -> Types.AgentConfig -> Maybe Types.ProviderConfig -> Maybe (Provider.Provider Msg)
+makeProvider model agentConfig maybeProviderConfig =
     when agentConfig is
         InternalAgent _ ->
             Nothing
 
         UserDefinedAgent r ->
             when r.provider is
-                "claude-code" ->
-                    Just (ClaudeCode.provider model.providerConfig)
-
-                "opencode" ->
-                    Just
-                        (OpenCode.provider
-                            { childProcessPermission = model.childProcessPermission
-                            , filesystemPermission = model.filesystemPermission
-                            , chorusToolsPath = model.config.chorusToolsPath
-                            , baseUrl = "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
-                            }
-                        )
-
-                "openai-compat" ->
-                    Just
-                        (OpenAiCompat.provider
-                            { httpClientPermission = model.httpClientPermission
-                            , filesystemPermission = model.filesystemPermission
-                            , secureContext = model.secureContext
-                            , apiBaseUrl = model.config.apiBaseUrl
-                            , apiKey = model.config.apiKey
-                            , model = Maybe.withDefault model.config.defaultModel r.model
-                            , conversationsDir = model.config.workspacesRoot ++ "/conversations"
-                            }
-                        )
-
-                _ ->
+                NotConfigured ->
                     Nothing
 
+                ProviderRef _ ->
+                    when maybeProviderConfig is
+                        Nothing ->
+                            Nothing
+
+                        Just providerConfig ->
+                            when providerConfig.providerType is
+                                Types.ClaudeCode ->
+                                    Just (ClaudeCode.provider model.providerConfig)
+
+                                Types.OpenCode ->
+                                    Just
+                                        (OpenCode.provider
+                                            { childProcessPermission = model.childProcessPermission
+                                            , filesystemPermission = model.filesystemPermission
+                                            , chorusToolsPath = model.config.chorusToolsPath
+                                            , baseUrl = "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
+                                            }
+                                        )
+
+                                Types.OpenAiCompatible config ->
+                                    Just
+                                        (OpenAiCompatible.provider
+                                            { httpClientPermission = model.httpClientPermission
+                                            , filesystemPermission = model.filesystemPermission
+                                            , secureContext = model.secureContext
+                                            , apiBaseUrl = config.apiBaseUrl
+                                            , apiKey = config.apiKey
+                                            , model = Maybe.withDefault config.defaultModel r.model
+                                            , conversationsDir = model.config.workspacesRoot ++ "/conversations"
+                                            }
+                                        )
+
+
+
+{-| Build a shell command for the given provider type.
+
+Dispatches to the correct CLI command builder based on the provider type.
+Returns Err for API providers since they require a different execution path.
+-}
+buildShellCommandForProvider :
+    Model
+    -> Types.ProviderConfig
+    -> Types.AgentConfig
+    -> { systemPrompt : Maybe String, workspaceRoot : String, message : String, taskId : Maybe String }
+    -> Result String String
+buildShellCommandForProvider model providerConfig agentConfig args =
+    let
+        baseUrl =
+            "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
+
+        allowedTools =
+            when agentConfig is
+                UserDefinedAgent r ->
+                    when r.allowedTools is
+                        [] ->
+                            Nothing
+
+                        tools ->
+                            Just (String.join " " tools)
+
+                InternalAgent _ ->
+                    Nothing
+    in
+    when providerConfig.providerType is
+        Types.ClaudeCode ->
+            Ok
+                (ClaudeCode.buildShellCommand
+                    { systemPrompt = args.systemPrompt
+                    , resumeSessionId = Nothing
+                    , workspaceRoot = args.workspaceRoot
+                    , chorusToolsPath = model.config.chorusToolsPath
+                    , message = args.message
+                    , allowedTools = allowedTools
+                    , taskId = args.taskId
+                    , baseUrl = Just baseUrl
+                    }
+                )
+
+        Types.OpenCode ->
+            Ok
+                (OpenCode.buildShellCommand
+                    { sessionId = Nothing
+                    , workspaceRoot = args.workspaceRoot
+                    , message = args.message
+                    , chorusToolsPath = model.config.chorusToolsPath
+                    , taskId = args.taskId
+                    , baseUrl = Just baseUrl
+                    }
+                )
+
+        Types.OpenAiCompatible _ ->
+            Err ("Provider '" ++ providerConfig.name ++ "' is an OpenAI-compatible API provider. API-based agent execution through handoff is not yet implemented. Use a CLI provider (Claude Code or OpenCode) instead.")
+
+
+
+{-| Resolve a provider config for a given agent, returning an async Task.
+
+Looks up the agent's provider reference in the provider registry.
+Returns an error if the agent has no provider configured or the provider is not found.
+-}
+resolveProviderConfig : Model -> Types.AgentConfig -> GrenTask.Task String Types.ProviderConfig
+resolveProviderConfig model agentConfig =
+    when agentConfig is
+        InternalAgent r ->
+            GrenTask.fail ("Cannot resolve provider for internal agent: " ++ r.name)
+
+        UserDefinedAgent r ->
+            when r.provider is
+                NotConfigured ->
+                    GrenTask.fail ("Agent '" ++ r.name ++ "' has no provider configured")
+
+                ProviderRef providerName ->
+                    when model.providerRegistry is
+                        Nothing ->
+                            GrenTask.fail "Provider registry not available"
+
+                        Just providerReg ->
+                            ProviderRegistry.getProvider providerReg providerName
+                                |> GrenTask.mapError
+                                    (\err ->
+                                        "Agent '" ++ r.name ++ "' references provider '" ++ providerName ++ "' which does not exist"
+                                    )
 
 
 -- UPDATE
@@ -317,6 +424,18 @@ update msg model =
                 Err err ->
                     { model = model
                     , command = Logging.logError model.logger ("Agent registry error: " ++ AgentRegistry.errorToString err) NoOp
+                    }
+
+        GotProviderRegistry result ->
+            when result is
+                Ok providerReg ->
+                    { model = { model | providerRegistry = Just providerReg }
+                    , command = Logging.logInfo model.logger "Provider registry initialized" NoOp
+                    }
+
+                Err err ->
+                    { model = model
+                    , command = Logging.logError model.logger ("Provider registry error: " ++ ProviderRegistry.errorToString err) NoOp
                     }
 
         GotToolAgentLookup { taskId, requestBody, response, result } ->
@@ -381,7 +500,8 @@ update msg model =
                         , command = sendBadRequest response ("Cannot hand off to internal agent: " ++ Types.agentConfigName agentConfig)
                         }
                     else
-                    -- Agent found. Update the task first, then spawn the agent.
+                    -- Agent found and provider validated (validation done in StartHandoff handler).
+                    -- Update the task first, then spawn the agent.
                     -- The HTTP response is sent via GotApiResult from requestStartHandoff.
                     -- The agent spawn happens via GotHandoffRecorded when the task update succeeds.
                     when model.registry is
@@ -428,7 +548,7 @@ update msg model =
                     }
 
                 Api.ApiSuccess _ ->
-                    -- Task updated successfully. Use inline instructions directly.
+                    -- Task updated successfully. Resolve the provider and spawn the agent.
                     let
                         agentName =
                             Types.agentConfigName agentConfig
@@ -461,20 +581,6 @@ update msg model =
                             , completionReportReceived = False
                             }
 
-                        cliArgs =
-                            { systemPrompt = systemPrompt
-                            , resumeSessionId = Nothing
-                            , workspaceRoot = workspaceRoot
-                            , chorusToolsPath = model.config.chorusToolsPath
-                            , message = prompt
-                            , allowedTools = Nothing
-                            , taskId = Just (Id.taskIdToString taskId)
-                            , baseUrl = Just model.providerConfig.baseUrl
-                            }
-
-                        shellCommand =
-                            ClaudeCode.buildShellCommand cliArgs
-
                         options =
                             { shell = ChildProcess.NoShell
                             , workingDirectory = ChildProcess.InheritWorkingDirectory
@@ -482,51 +588,76 @@ update msg model =
                             , maximumBytesWrittenToStreams = 10 * 1024 * 1024
                             , runDuration = ChildProcess.Milliseconds 600000
                             }
+
+                        spawnCmd =
+                            resolveProviderConfig model agentConfig
+                                |> GrenTask.andThen
+                                    (\providerConfig ->
+                                        let
+                                            shellCommand =
+                                                buildShellCommandForProvider model providerConfig agentConfig
+                                                    { systemPrompt = systemPrompt
+                                                    , workspaceRoot = workspaceRoot
+                                                    , message = prompt
+                                                    , taskId = Just (Id.taskIdToString taskId)
+                                                    }
+                                        in
+                                        when shellCommand is
+                                            Err errMsg ->
+                                                GrenTask.fail errMsg
+
+                                            Ok cmd ->
+                                                ChildProcess.run model.childProcessPermission "bash" [ "-c", cmd ] options
+                                                    |> GrenTask.map
+                                                        (\cliResult ->
+                                                            let
+                                                                output =
+                                                                    cliResult.stdout
+                                                                        |> Bytes.toString
+                                                                        |> Maybe.withDefault ""
+
+                                                                -- Extract the result text from CLI JSON output
+                                                                resultText =
+                                                                    when Decode.decodeString (Decode.field "result" Decode.string) output is
+                                                                        Ok text ->
+                                                                            text
+
+                                                                        Err _ ->
+                                                                            output
+                                                            in
+                                                            Ok resultText
+                                                        )
+                                                    |> GrenTask.onError
+                                                        (\runError ->
+                                                            let
+                                                                errMsg =
+                                                                    when runError is
+                                                                        ChildProcess.InitError { errorCode } ->
+                                                                            "Failed to start agent CLI: " ++ errorCode
+
+                                                                        ChildProcess.ProgramError { exitCode, stderr } ->
+                                                                            let
+                                                                                stderrStr =
+                                                                                    stderr
+                                                                                        |> Bytes.toString
+                                                                                        |> Maybe.withDefault ""
+                                                                            in
+                                                                            "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                                                            in
+                                                            GrenTask.succeed (Err errMsg)
+                                                        )
+                                    )
+                                |> GrenTask.onError
+                                    (\errMsg ->
+                                        GrenTask.succeed (Err errMsg)
+                                    )
+                                |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
                     in
                     { model = { model | activeExecutors = Dict.set (Id.taskIdToString taskId) executorState model.activeExecutors }
                     , command =
                         Cmd.batch
                             [ sendResponseCmd
-                            , ChildProcess.run model.childProcessPermission "bash" [ "-c", shellCommand ] options
-                                |> GrenTask.map
-                                    (\cliResult ->
-                                        let
-                                            output =
-                                                cliResult.stdout
-                                                    |> Bytes.toString
-                                                    |> Maybe.withDefault ""
-
-                                            -- Extract the result text from CLI JSON output
-                                            resultText =
-                                                when Decode.decodeString (Decode.field "result" Decode.string) output is
-                                                    Ok text ->
-                                                        text
-
-                                                    Err _ ->
-                                                        output
-                                        in
-                                        Ok resultText
-                                    )
-                                |> GrenTask.onError
-                                    (\runError ->
-                                        let
-                                            errMsg =
-                                                when runError is
-                                                    ChildProcess.InitError { errorCode } ->
-                                                        "Failed to start agent CLI: " ++ errorCode
-
-                                                    ChildProcess.ProgramError { exitCode, stderr } ->
-                                                        let
-                                                            stderrStr =
-                                                                stderr
-                                                                    |> Bytes.toString
-                                                                    |> Maybe.withDefault ""
-                                                        in
-                                                        "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
-                                        in
-                                        GrenTask.succeed (Err errMsg)
-                                    )
-                                |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
+                            , spawnCmd
                             , Logging.logInfo model.logger ("Spawned agent " ++ agentName ++ " for task " ++ Id.taskIdToString taskId) NoOp
                             ]
                     }
@@ -1172,8 +1303,33 @@ handleRoute model route request response =
                                             sendBadRequest response "Agent registry not initialized"
 
                                         Just agentReg ->
-                                            -- Look up the agent first; only update the task if the agent exists
+                                            -- Look up the agent, then validate its provider exists
                                             AgentRegistry.getAgent agentReg params.agentName
+                                                |> GrenTask.andThen
+                                                    (\agentConfig ->
+                                                        -- Validate provider exists for user-defined agents
+                                                        when agentConfig is
+                                                            UserDefinedAgent r ->
+                                                                when r.provider is
+                                                                    NotConfigured ->
+                                                                        GrenTask.fail (AgentRegistry.FileSystemError ("Agent '" ++ params.agentName ++ "' has no provider configured"))
+
+                                                                    ProviderRef providerName ->
+                                                                        when model.providerRegistry is
+                                                                            Nothing ->
+                                                                                GrenTask.fail (AgentRegistry.FileSystemError "Provider registry not available")
+
+                                                                            Just providerReg ->
+                                                                                ProviderRegistry.getProvider providerReg providerName
+                                                                                    |> GrenTask.map (\_ -> agentConfig)
+                                                                                    |> GrenTask.onError
+                                                                                        (\_ ->
+                                                                                            GrenTask.fail (AgentRegistry.FileSystemError ("Agent '" ++ params.agentName ++ "' references provider '" ++ providerName ++ "' which does not exist"))
+                                                                                        )
+
+                                                            InternalAgent _ ->
+                                                                GrenTask.succeed agentConfig
+                                                    )
                                                 |> GrenTask.attempt
                                                     (\result ->
                                                         GotAgentLookup
@@ -1196,12 +1352,12 @@ handleRoute model route request response =
                                     sendBadRequest response errMsg
 
                         Router.ListAgents ->
-                            when model.agentRegistry is
-                                Nothing ->
-                                    sendServiceUnavailable response
+                            when { agentReg = model.agentRegistry, providerReg = model.providerRegistry } is
+                                { agentReg = Just ar, providerReg = Just pr } ->
+                                    Api.requestAgents ar pr toMsg
 
-                                Just agentReg ->
-                                    Api.requestAgents agentReg toMsg
+                                _ ->
+                                    sendServiceUnavailable response
 
                         Router.GetAgent agentName ->
                             when model.agentRegistry is
@@ -1244,6 +1400,56 @@ handleRoute model route request response =
 
                                 Just agentReg ->
                                     Api.requestDeleteAgent agentReg agentName toMsg
+
+                        Router.ListProviders ->
+                            when model.providerRegistry is
+                                Nothing ->
+                                    sendServiceUnavailable response
+
+                                Just providerReg ->
+                                    Api.requestProviders providerReg toMsg
+
+                        Router.GetProvider providerName ->
+                            when model.providerRegistry is
+                                Nothing ->
+                                    sendServiceUnavailable response
+
+                                Just providerReg ->
+                                    Api.requestProvider providerReg providerName toMsg
+
+                        Router.CreateProvider ->
+                            when model.providerRegistry is
+                                Nothing ->
+                                    sendServiceUnavailable response
+
+                                Just providerReg ->
+                                    when parseProviderBody request is
+                                        Ok providerConfig ->
+                                            Api.requestCreateProvider providerReg providerConfig toMsg
+
+                                        Err errMsg ->
+                                            sendBadRequest response errMsg
+
+                        Router.UpdateProvider providerName ->
+                            when model.providerRegistry is
+                                Nothing ->
+                                    sendServiceUnavailable response
+
+                                Just providerReg ->
+                                    when parseProviderBody request is
+                                        Ok providerConfig ->
+                                            Api.requestUpdateProvider providerReg providerName providerConfig toMsg
+
+                                        Err errMsg ->
+                                            sendBadRequest response errMsg
+
+                        Router.DeleteProvider providerName ->
+                            when { providerReg = model.providerRegistry, agentReg = model.agentRegistry } is
+                                { providerReg = Just pr, agentReg = Just ar } ->
+                                    Api.requestDeleteProvider pr ar providerName toMsg
+
+                                _ ->
+                                    sendServiceUnavailable response
 
                         Router.NotFound ->
                             sendNotFound response
@@ -1560,6 +1766,18 @@ parseAgentBody request =
             Err "Invalid JSON body for agent config"
 
 
+{-| Parse the body for POST /api/providers or PUT /api/providers/:name.
+-}
+parseProviderBody : HttpServer.Request -> Result String Types.ProviderConfig
+parseProviderBody request =
+    when HttpServer.bodyFromJson Types.providerConfigDecoder request is
+        Ok providerConfig ->
+            Ok providerConfig
+
+        Err _ ->
+            Err "Invalid JSON body for provider config"
+
+
 -- SUBSCRIPTIONS
 
 
@@ -1803,21 +2021,6 @@ questionsResultDecoder =
 
 -- HELPERS
 
-
-{-| Convert an Array of strings into a Dict with numbered keys.
-    `indexedArrayToDict "requirement_" ["A", "B"]` produces
-    `Dict.fromArray [{ key = "requirement_1", value = "A" }, { key = "requirement_2", value = "B" }]`
--}
-indexedArrayToDict : String -> Array String -> Dict String String
-indexedArrayToDict prefix items =
-    items
-        |> Array.indexedMap
-            (\i v ->
-                { key = prefix ++ String.fromInt (i + 1)
-                , value = v
-                }
-            )
-        |> Array.foldl (\entry d -> Dict.set entry.key entry.value d) Dict.empty
 
 
 {-| Get a SecureContext for cryptographic operations.

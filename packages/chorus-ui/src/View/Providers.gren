@@ -1,0 +1,383 @@
+module View.Providers exposing
+    ( view
+    , ProviderForm
+    , emptyProviderForm
+    , providerConfigToForm
+    , formToProviderConfig
+    , baseUrlForPreset
+    )
+
+{-| Provider management view for listing, creating, editing, and deleting providers.
+-}
+
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Html.Events exposing (onClick, onInput, onSubmit)
+import Json.Decode
+import Types exposing (ProviderConfig, ProviderType(..))
+
+
+{-| Form state for creating or editing a provider.
+-}
+type alias ProviderForm =
+    { name : String
+    , providerType : String
+    , preset : String
+    , apiBaseUrl : String
+    , apiKey : String
+    , defaultModel : String
+    , isEditing : Bool
+    }
+
+
+{-| Empty form for creating a new provider.
+-}
+emptyProviderForm : ProviderForm
+emptyProviderForm =
+    { name = ""
+    , providerType = "claude-code"
+    , preset = "custom"
+    , apiBaseUrl = ""
+    , apiKey = ""
+    , defaultModel = ""
+    , isEditing = False
+    }
+
+
+{-| Build a ProviderConfig from a ProviderForm.
+-}
+formToProviderConfig : ProviderForm -> ProviderConfig
+formToProviderConfig form =
+    { name = form.name
+    , providerType =
+        when form.providerType is
+            "openai-compat" ->
+                OpenAiCompatible
+                    { apiBaseUrl = form.apiBaseUrl
+                    , apiKey = form.apiKey
+                    , defaultModel = form.defaultModel
+                    }
+
+            "opencode" ->
+                OpenCode
+
+            _ ->
+                ClaudeCode
+    }
+
+
+{-| Build a ProviderForm from an existing ProviderConfig for editing.
+-}
+providerConfigToForm : ProviderConfig -> ProviderForm
+providerConfigToForm config =
+    let
+        { typeStr, apiBaseUrl, apiKey, defaultModel } =
+            when config.providerType is
+                OpenAiCompatible fields ->
+                    { typeStr = "openai-compat"
+                    , apiBaseUrl = fields.apiBaseUrl
+                    , apiKey = fields.apiKey
+                    , defaultModel = fields.defaultModel
+                    }
+
+                ClaudeCode ->
+                    { typeStr = "claude-code"
+                    , apiBaseUrl = ""
+                    , apiKey = ""
+                    , defaultModel = ""
+                    }
+
+                OpenCode ->
+                    { typeStr = "opencode"
+                    , apiBaseUrl = ""
+                    , apiKey = ""
+                    , defaultModel = ""
+                    }
+
+        preset =
+            presetFromBaseUrl apiBaseUrl
+    in
+    { name = config.name
+    , providerType = typeStr
+    , preset = preset
+    , apiBaseUrl = apiBaseUrl
+    , apiKey = apiKey
+    , defaultModel = defaultModel
+    , isEditing = True
+    }
+
+
+{-| Infer the preset name from an API base URL.
+
+OpenAI-compatible services that are supported as presets:
+- OpenRouter (https://openrouter.ai/api/v1) - OpenAI-compatible, requires API key
+- Ollama (http://localhost:11434/v1) - OpenAI-compatible, local, no API key needed
+- LM Studio (http://localhost:1234/v1) - OpenAI-compatible, local, no API key needed
+-}
+presetFromBaseUrl : String -> String
+presetFromBaseUrl url =
+    if String.contains "openrouter.ai" url then
+        "openrouter"
+    else if String.contains "localhost:11434" url then
+        "ollama"
+    else if String.contains "localhost:1234" url then
+        "lmstudio"
+    else
+        "custom"
+
+
+{-| Get the default API base URL for a preset.
+-}
+baseUrlForPreset : String -> String
+baseUrlForPreset preset =
+    when preset is
+        "openrouter" ->
+            "https://openrouter.ai/api/v1"
+
+        "ollama" ->
+            "http://localhost:11434/v1"
+
+        "lmstudio" ->
+            "http://localhost:1234/v1"
+
+        _ ->
+            ""
+
+
+type alias Props msg =
+    { providers : Array ProviderConfig
+    , loading : Bool
+    , providerForm : Maybe ProviderForm
+    , onOpenCreateForm : msg
+    , onOpenEditForm : ProviderConfig -> msg
+    , onCloseForm : msg
+    , onUpdateName : String -> msg
+    , onUpdateProviderType : String -> msg
+    , onUpdatePreset : String -> msg
+    , onUpdateApiBaseUrl : String -> msg
+    , onUpdateApiKey : String -> msg
+    , onUpdateDefaultModel : String -> msg
+    , onSaveProvider : msg
+    , onDeleteProvider : String -> msg
+    , onConfirmDeleteProvider : String -> msg
+    , onNoOp : msg
+    }
+
+
+view : Props msg -> Html msg
+view props =
+    div [ class "providers-page" ]
+        [ viewProvidersHeader props
+        , viewProvidersList props
+        , viewProviderFormModal props
+        ]
+
+
+viewProvidersHeader : Props msg -> Html msg
+viewProvidersHeader props =
+    div [ class "providers-header" ]
+        [ h2 [] [ text "Providers" ]
+        , button [ class "btn btn-primary", onClick props.onOpenCreateForm ]
+            [ text "+ New Provider" ]
+        ]
+
+
+viewProvidersList : Props msg -> Html msg
+viewProvidersList props =
+    if props.loading && Array.isEmpty props.providers then
+        div [ class "loading" ] [ text "Loading providers..." ]
+    else if Array.isEmpty props.providers then
+        div [ class "empty-state" ]
+            [ p [] [ text "No providers configured yet." ]
+            , p [] [ text "Create a provider to get started." ]
+            ]
+    else
+        div [ class "providers-list" ]
+            (Array.map (viewProviderCard props) props.providers)
+
+
+viewProviderCard : Props msg -> ProviderConfig -> Html msg
+viewProviderCard props provider =
+    let
+        { typeLabel, details } =
+            when provider.providerType is
+                OpenAiCompatible fields ->
+                    { typeLabel = "OpenAI Compatible"
+                    , details =
+                        [ dt [] [ text "API Base URL" ]
+                        , dd [ class "monospace" ] [ text fields.apiBaseUrl ]
+                        , dt [] [ text "API Key" ]
+                        , dd [ class "monospace" ] [ text (maskApiKey fields.apiKey) ]
+                        , dt [] [ text "Default Model" ]
+                        , dd [ class "monospace" ] [ text fields.defaultModel ]
+                        ]
+                    }
+
+                ClaudeCode ->
+                    { typeLabel = "Claude Code (CLI)"
+                    , details = []
+                    }
+
+                OpenCode ->
+                    { typeLabel = "OpenCode (CLI)"
+                    , details = []
+                    }
+    in
+    div [ class "provider-card card" ]
+        [ div [ class "provider-card-header" ]
+            [ h3 [ class "provider-card-name" ] [ text provider.name ]
+            , div [ class "provider-card-actions" ]
+                [ button
+                    [ class "btn btn-small btn-secondary"
+                    , onClick (props.onOpenEditForm provider)
+                    ]
+                    [ text "Edit" ]
+                , button
+                    [ class "btn btn-small btn-danger"
+                    , onClick (props.onConfirmDeleteProvider provider.name)
+                    ]
+                    [ text "Delete" ]
+                ]
+            ]
+        , dl [ class "info-list" ]
+            ([ dt [] [ text "Type" ]
+             , dd [ class "monospace" ] [ text typeLabel ]
+             ]
+                ++ details
+            )
+        ]
+
+
+{-| Mask an API key, showing only the first 4 and last 4 characters.
+-}
+maskApiKey : String -> String
+maskApiKey key =
+    if String.unitLength key <= 12 then
+        String.repeat (String.unitLength key) "*"
+    else
+        String.takeFirst 4 key ++ "..." ++ String.takeLast 4 key
+
+
+viewProviderFormModal : Props msg -> Html msg
+viewProviderFormModal props =
+    when props.providerForm is
+        Nothing ->
+            text ""
+
+        Just form ->
+            div [ class "modal-overlay", onClick props.onCloseForm ]
+                [ div
+                    [ class "modal modal-wide"
+                    , Html.Events.stopPropagationOn "click"
+                        (Json.Decode.succeed
+                            { message = props.onNoOp
+                            , stopPropagation = True
+                            }
+                        )
+                    ]
+                    [ h2 []
+                        [ text
+                            (if form.isEditing then
+                                "Edit Provider"
+                             else
+                                "Create Provider"
+                            )
+                        ]
+                    , Html.form [ onSubmit props.onSaveProvider ]
+                        [ div [ class "form-group" ]
+                            [ label [ for "provider-name" ] [ text "Name" ]
+                            , input
+                                [ id "provider-name"
+                                , type_ "text"
+                                , value form.name
+                                , onInput props.onUpdateName
+                                , placeholder "e.g. my-openrouter"
+                                , disabled form.isEditing
+                                , autofocus (not form.isEditing)
+                                ]
+                                []
+                            ]
+                        , div [ class "form-group" ]
+                            [ label [ for "provider-type" ] [ text "Type" ]
+                            , select
+                                [ id "provider-type"
+                                , onInput props.onUpdateProviderType
+                                , disabled form.isEditing
+                                ]
+                                [ option [ value "claude-code", selected (form.providerType == "claude-code") ] [ text "Claude Code (CLI)" ]
+                                , option [ value "opencode", selected (form.providerType == "opencode") ] [ text "OpenCode (CLI)" ]
+                                , option [ value "openai-compat", selected (form.providerType == "openai-compat") ] [ text "OpenAI Compatible (API)" ]
+                                ]
+                            ]
+                        , if form.providerType == "openai-compat" then
+                            div []
+                                [ div [ class "form-group" ]
+                                    [ label [ for "provider-preset" ] [ text "Preset" ]
+                                    , select
+                                        [ id "provider-preset"
+                                        , onInput props.onUpdatePreset
+                                        ]
+                                        [ option [ value "custom", selected (form.preset == "custom") ] [ text "Custom" ]
+                                        , option [ value "openrouter", selected (form.preset == "openrouter") ] [ text "OpenRouter" ]
+                                        , option [ value "ollama", selected (form.preset == "ollama") ] [ text "Ollama" ]
+                                        , option [ value "lmstudio", selected (form.preset == "lmstudio") ] [ text "LM Studio" ]
+                                        ]
+                                    ]
+                                , div [ class "form-group" ]
+                                    [ label [ for "provider-api-base-url" ] [ text "API Base URL" ]
+                                    , input
+                                        [ id "provider-api-base-url"
+                                        , type_ "text"
+                                        , value form.apiBaseUrl
+                                        , onInput props.onUpdateApiBaseUrl
+                                        , placeholder "e.g. https://openrouter.ai/api/v1"
+                                        ]
+                                        []
+                                    ]
+                                , div [ class "form-group" ]
+                                    [ label [ for "provider-api-key" ] [ text "API Key" ]
+                                    , input
+                                        [ id "provider-api-key"
+                                        , type_ "password"
+                                        , value form.apiKey
+                                        , onInput props.onUpdateApiKey
+                                        , placeholder "sk-..."
+                                        ]
+                                        []
+                                    ]
+                                , div [ class "form-group" ]
+                                    [ label [ for "provider-default-model" ] [ text "Default Model" ]
+                                    , input
+                                        [ id "provider-default-model"
+                                        , type_ "text"
+                                        , value form.defaultModel
+                                        , onInput props.onUpdateDefaultModel
+                                        , placeholder "e.g. openai/gpt-4o"
+                                        ]
+                                        []
+                                    ]
+                                ]
+                          else
+                            text ""
+                        , div [ class "form-actions" ]
+                            [ button
+                                [ type_ "button"
+                                , class "btn btn-secondary"
+                                , onClick props.onCloseForm
+                                ]
+                                [ text "Cancel" ]
+                            , button
+                                [ type_ "submit"
+                                , class "btn btn-primary"
+                                ]
+                                [ text
+                                    (if form.isEditing then
+                                        "Update"
+                                     else
+                                        "Create"
+                                    )
+                                ]
+                            ]
+                        ]
+                    ]
+                ]

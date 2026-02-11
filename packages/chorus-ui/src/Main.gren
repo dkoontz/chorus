@@ -27,9 +27,10 @@ import Json.Decode
 import Set exposing (Set)
 import Task
 import Time
-import Types exposing (AgentConfig(..), Task(..), TaskStatus(..))
+import Types exposing (AgentConfig(..), AgentProvider(..), ProviderConfig, Task(..), TaskStatus(..))
 import Url exposing (Url)
 import View.Agents as Agents exposing (AgentForm)
+import View.Providers as Providers exposing (ProviderForm)
 import View.Board as Board
 import View.History as History
 import View.TaskDetail as TaskDetail exposing (PlanningSection(..), PlanningEditState)
@@ -69,6 +70,9 @@ type alias Model =
     , timeZone : Time.Zone
     , agents : Array AgentConfig
     , agentForm : Maybe AgentForm
+    , providers : Array ProviderConfig
+    , providerForm : Maybe ProviderForm
+    , confirmingDeleteProvider : Maybe String
     , startingAgent : Maybe String
     , draftAnswers : Array String
     , expandedEvents : Set Int
@@ -79,6 +83,7 @@ type Page
     = BoardPage
     | TaskDetailPage String
     | AgentsPage
+    | ProvidersPage
     | NotFoundPage
 
 
@@ -148,6 +153,22 @@ type Msg
     | UpdateAgentModel String
     | SaveAgent
     | DeleteAgent String
+      -- Provider CRUD
+    | GotProviders (Result Http.Error (Array ProviderConfig))
+    | GotProviderSaved (Result Http.Error ProviderConfig)
+    | GotProviderDeleted { name : String, result : Result Http.Error {} }
+    | OpenProviderCreateForm
+    | OpenProviderEditForm ProviderConfig
+    | CloseProviderForm
+    | UpdateProviderName String
+    | UpdateProviderType String
+    | UpdateProviderApiBaseUrl String
+    | UpdateProviderApiKey String
+    | UpdateProviderPreset String
+    | UpdateProviderDefaultModel String
+    | SaveProvider
+    | DeleteProvider String
+    | ConfirmDeleteProvider String
     | SelectStartAgent String
     | StartTask String
     | HandoffStarted (Result Http.Error Types.Task)
@@ -183,6 +204,9 @@ init _ url key =
             , timeZone = Time.utc
             , agents = []
             , agentForm = Nothing
+            , providers = []
+            , providerForm = Nothing
+            , confirmingDeleteProvider = Nothing
             , startingAgent = Nothing
             , draftAnswers = []
             , expandedEvents = Set.empty
@@ -208,6 +232,9 @@ urlToPage url =
 
         "/agents" ->
             AgentsPage
+
+        "/providers" ->
+            ProvidersPage
 
         _ ->
             if String.startsWith "/tasks/" url.path then
@@ -238,7 +265,13 @@ loadPageData page =
                 ]
 
         AgentsPage ->
-            Api.getAgents GotAgents
+            Cmd.batch
+                [ Api.getAgents GotAgents
+                , Api.getProviders GotProviders
+                ]
+
+        ProvidersPage ->
+            Api.getProviders GotProviders
 
         NotFoundPage ->
             Cmd.none
@@ -277,6 +310,8 @@ update msg model =
                     , loading = True
                     , editingPlanning = Nothing
                     , agentForm = Nothing
+                    , providerForm = Nothing
+                    , confirmingDeleteProvider = Nothing
                     , startingAgent = Nothing
                     , draftAnswers = []
                     , expandedEvents = Set.empty
@@ -408,7 +443,13 @@ update msg model =
                             ]
 
                     AgentsPage ->
-                        Api.getAgents GotAgents
+                        Cmd.batch
+                            [ Api.getAgents GotAgents
+                            , Api.getProviders GotProviders
+                            ]
+
+                    ProvidersPage ->
+                        Api.getProviders GotProviders
 
                     NotFoundPage ->
                         Cmd.none
@@ -788,7 +829,13 @@ update msg model =
                             { name = r.name
                             , instructions = r.instructions
                             , allowedTools = String.join ", " r.allowedTools
-                            , provider = r.provider
+                            , provider =
+                                when r.provider is
+                                    NotConfigured ->
+                                        ""
+
+                                    ProviderRef pName ->
+                                        pName
                             , model = Maybe.withDefault "" r.model
                             , isEditing = True
                             }
@@ -868,6 +915,12 @@ update msg model =
                         }
                     else
                         let
+                            agentProvider =
+                                if String.isEmpty (String.trim form.provider) then
+                                    NotConfigured
+                                else
+                                    ProviderRef (String.trim form.provider)
+
                             config =
                                 UserDefinedAgent
                                     { name = form.name
@@ -877,7 +930,7 @@ update msg model =
                                             |> String.split ","
                                             |> Array.map String.trim
                                             |> Array.keepIf (\s -> not (String.isEmpty s))
-                                    , provider = form.provider
+                                    , provider = agentProvider
                                     , model =
                                         if String.isEmpty (String.trim form.model) then
                                             Nothing
@@ -902,6 +955,186 @@ update msg model =
         DeleteAgent name ->
             { model = model
             , command = Api.deleteAgent name (\result -> GotAgentDeleted { name = name, result = result })
+            }
+
+        -- Provider CRUD
+
+        GotProviders result ->
+            when result is
+                Ok providersList ->
+                    { model = { model | providers = providersList, loading = False, error = Nothing }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | loading = False, error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
+        GotProviderSaved result ->
+            when result is
+                Ok savedProvider ->
+                    let
+                        updatedProviders =
+                            if Array.any (\p -> p.name == savedProvider.name) model.providers then
+                                Array.map
+                                    (\p ->
+                                        if p.name == savedProvider.name then
+                                            savedProvider
+                                        else
+                                            p
+                                    )
+                                    model.providers
+                            else
+                                Array.pushLast savedProvider model.providers
+                    in
+                    { model =
+                        { model
+                            | providers = updatedProviders
+                            , providerForm = Nothing
+                            , error = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
+        GotProviderDeleted { name, result } ->
+            when result is
+                Ok _ ->
+                    { model =
+                        { model
+                            | providers = Array.keepIf (\p -> p.name /= name) model.providers
+                            , error = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
+        OpenProviderCreateForm ->
+            { model = { model | providerForm = Just Providers.emptyProviderForm }
+            , command = Cmd.none
+            }
+
+        OpenProviderEditForm provider ->
+            { model = { model | providerForm = Just (Providers.providerConfigToForm provider) }
+            , command = Cmd.none
+            }
+
+        CloseProviderForm ->
+            { model = { model | providerForm = Nothing }
+            , command = Cmd.none
+            }
+
+        UpdateProviderName name ->
+            { model =
+                { model
+                    | providerForm =
+                        Maybe.map (\f -> { f | name = name }) model.providerForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateProviderType providerType ->
+            { model =
+                { model
+                    | providerForm =
+                        Maybe.map (\f -> { f | providerType = providerType }) model.providerForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateProviderApiBaseUrl apiBaseUrl ->
+            { model =
+                { model
+                    | providerForm =
+                        Maybe.map (\f -> { f | apiBaseUrl = apiBaseUrl }) model.providerForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateProviderApiKey apiKey ->
+            { model =
+                { model
+                    | providerForm =
+                        Maybe.map (\f -> { f | apiKey = apiKey }) model.providerForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateProviderPreset preset ->
+            { model =
+                { model
+                    | providerForm =
+                        Maybe.map
+                            (\f ->
+                                { f
+                                    | preset = preset
+                                    , apiBaseUrl = Providers.baseUrlForPreset preset
+                                }
+                            )
+                            model.providerForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateProviderDefaultModel defaultModel ->
+            { model =
+                { model
+                    | providerForm =
+                        Maybe.map (\f -> { f | defaultModel = defaultModel }) model.providerForm
+                }
+            , command = Cmd.none
+            }
+
+        SaveProvider ->
+            when model.providerForm is
+                Just form ->
+                    if String.isEmpty (String.trim form.name) then
+                        { model = { model | error = Just "Provider name is required" }
+                        , command = Cmd.none
+                        }
+                    else
+                        let
+                            config =
+                                Providers.formToProviderConfig form
+                        in
+                        if form.isEditing then
+                            { model = model
+                            , command = Api.updateProvider form.name config GotProviderSaved
+                            }
+                        else
+                            { model = model
+                            , command = Api.createProvider config GotProviderSaved
+                            }
+
+                Nothing ->
+                    { model = model
+                    , command = Cmd.none
+                    }
+
+        DeleteProvider name ->
+            { model = { model | confirmingDeleteProvider = Nothing }
+            , command = Api.deleteProvider name (\result -> GotProviderDeleted { name = name, result = result })
+            }
+
+        ConfirmDeleteProvider name ->
+            { model =
+                { model
+                    | confirmingDeleteProvider =
+                        if String.isEmpty name then
+                            Nothing
+                        else
+                            Just name
+                }
+            , command = Cmd.none
             }
 
         SelectStartAgent agentName ->
@@ -1045,6 +1278,11 @@ viewHeader model =
                     , classList [ { class = "active", enabled = model.page == AgentsPage } ]
                     ]
                     [ text "Agents" ]
+                , a
+                    [ href "/providers"
+                    , classList [ { class = "active", enabled = model.page == ProvidersPage } ]
+                    ]
+                    [ text "Providers" ]
                 ]
             , button [ class "btn btn-primary", onClick OpenCreateForm ]
                 [ text "+ New Task" ]
@@ -1119,6 +1357,7 @@ viewMain model =
             AgentsPage ->
                 Agents.view
                     { agents = Array.keepIf (\a -> not (Types.isInternalAgent a)) model.agents
+                    , providers = model.providers
                     , loading = model.loading
                     , agentForm = model.agentForm
                     , onOpenCreateForm = OpenAgentCreateForm
@@ -1133,6 +1372,29 @@ viewMain model =
                     , onDeleteAgent = DeleteAgent
                     , onNoOp = NoOp
                     }
+
+            ProvidersPage ->
+                div []
+                    [ Providers.view
+                        { providers = model.providers
+                        , loading = model.loading
+                        , providerForm = model.providerForm
+                        , onOpenCreateForm = OpenProviderCreateForm
+                        , onOpenEditForm = OpenProviderEditForm
+                        , onCloseForm = CloseProviderForm
+                        , onUpdateName = UpdateProviderName
+                        , onUpdateProviderType = UpdateProviderType
+                        , onUpdatePreset = UpdateProviderPreset
+                        , onUpdateApiBaseUrl = UpdateProviderApiBaseUrl
+                        , onUpdateApiKey = UpdateProviderApiKey
+                        , onUpdateDefaultModel = UpdateProviderDefaultModel
+                        , onSaveProvider = SaveProvider
+                        , onDeleteProvider = DeleteProvider
+                        , onConfirmDeleteProvider = ConfirmDeleteProvider
+                        , onNoOp = NoOp
+                        }
+                    , viewDeleteProviderConfirmation model
+                    ]
 
             NotFoundPage ->
                 div [ class "not-found" ]
@@ -1184,6 +1446,59 @@ viewCreateModal model =
     else
         text ""
 
+
+
+viewDeleteProviderConfirmation : Model -> Html Msg
+viewDeleteProviderConfirmation model =
+    when model.confirmingDeleteProvider is
+        Nothing ->
+            text ""
+
+        Just providerName ->
+            let
+                affectedAgents =
+                    model.agents
+                        |> Array.keepIf
+                            (\agent ->
+                                when agent is
+                                    UserDefinedAgent r ->
+                                        r.provider == ProviderRef providerName
+
+                                    InternalAgent _ ->
+                                        False
+                            )
+                        |> Array.map Types.agentConfigName
+            in
+            div [ class "modal-overlay", onClick (ConfirmDeleteProvider "") ]
+                [ div
+                    [ class "modal"
+                    , Html.Events.stopPropagationOn "click"
+                        (Json.Decode.succeed { message = NoOp, stopPropagation = True })
+                    ]
+                    [ h2 [] [ text "Delete Provider" ]
+                    , p [] [ text ("Are you sure you want to delete the provider \"" ++ providerName ++ "\"?") ]
+                    , if Array.isEmpty affectedAgents then
+                        text ""
+                      else
+                        div [ class "warning-box" ]
+                            [ p [] [ text "The following agents use this provider and will be set to \"Not Configured\":" ]
+                            , ul []
+                                (Array.map (\name -> li [] [ text name ]) affectedAgents)
+                            ]
+                    , div [ class "form-actions" ]
+                        [ button
+                            [ class "btn btn-secondary"
+                            , onClick (ConfirmDeleteProvider "")
+                            ]
+                            [ text "Cancel" ]
+                        , button
+                            [ class "btn btn-danger"
+                            , onClick (DeleteProvider providerName)
+                            ]
+                            [ text "Delete" ]
+                        ]
+                    ]
+                ]
 
 
 -- HELPERS
