@@ -12,6 +12,7 @@
     "build:all": "npm run build:dist",
     "start": "scripts/agent/start.sh",
     "stop": "scripts/agent/stop.sh",
+    "kill": "pkill -x chorus",
     "restart": "scripts/agent/restart.sh",
     "status": "scripts/agent/status.sh",
     "logs": "scripts/agent/logs.sh",
