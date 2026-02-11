@@ -105,7 +105,7 @@ type alias PendingResponse =
 
 type alias Config =
     { host : String
-    , port_ : Int
+    , serverPort : Int
     , registryRoot : String
     , workspacesRoot : String
     , staticRoot : String
@@ -128,7 +128,7 @@ type Status
 defaultConfig : Config
 defaultConfig =
     { host = "0.0.0.0"
-    , port_ = 8080
+    , serverPort = 8080
     , registryRoot = "./data/registry"
     , workspacesRoot = "./data/workspaces"
     , staticRoot = "./static"
@@ -162,10 +162,10 @@ configFromEnv envVars config =
             Dict.get "CHORUS_HOST" envVars
                 |> Maybe.withDefault config.host
 
-        port_ =
+        serverPort =
             Dict.get "CHORUS_PORT" envVars
                 |> Maybe.andThen String.toInt
-                |> Maybe.withDefault config.port_
+                |> Maybe.withDefault config.serverPort
 
         dataDir =
             Dict.get "CHORUS_DATA_DIR" envVars
@@ -185,7 +185,7 @@ configFromEnv envVars config =
                 |> Maybe.withDefault (dataDir ++ "/uploads")
     in
     { host = host
-    , port_ = port_
+    , serverPort = serverPort
     , registryRoot = dataDir ++ "/registry"
     , workspacesRoot = dataDir ++ "/workspaces"
     , staticRoot = staticRoot
@@ -245,7 +245,7 @@ init env =
                                 providerCfg =
                                     { childProcessPermission = cpPermission
                                     , chorusToolsPath = config.chorusToolsPath
-                                    , baseUrl = "http://" ++ config.host ++ ":" ++ String.fromInt config.port_
+                                    , baseUrl = "http://" ++ config.host ++ ":" ++ String.fromInt config.serverPort
                                     }
 
                                 model =
@@ -272,7 +272,7 @@ init env =
                                         [ -- Initialize the HTTP server
                                           Server.createServer httpPermission
                                             { host = config.host
-                                            , port_ = config.port_
+                                            , port_ = config.serverPort
                                             }
                                             |> GrenTask.attempt GotServer
 
@@ -290,7 +290,7 @@ init env =
                                             |> GrenTask.attempt GotAgentRegistry
 
                                         , -- Log startup
-                                          Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.port_) NoOp
+                                          Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.serverPort) NoOp
                                         ]
                                 }
 
@@ -320,7 +320,7 @@ makeProvider model agentConfig =
                     { childProcessPermission = model.cpPermission
                     , fsPermission = model.fsPermission
                     , chorusToolsPath = model.config.chorusToolsPath
-                    , baseUrl = "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.port_
+                    , baseUrl = "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
                     }
                 )
 
@@ -359,7 +359,7 @@ update msg model =
                     let
                         serverConfig =
                             { host = model.config.host
-                            , port_ = model.config.port_
+                            , port_ = model.config.serverPort
                             }
 
                         errMsg =

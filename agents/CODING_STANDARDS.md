@@ -233,6 +233,51 @@ updatedUser =
         |> updateLastSeen now
 ```
 
+## Use Descriptive Field Names Instead of Underscore Suffixes
+
+Do not use underscore-suffixed field names (e.g., `port_`, `type_`) in application-defined records. These suffixes exist in the Gren ecosystem to avoid keyword conflicts in library code, but application code should use descriptive names that convey meaning.
+
+### Why?
+
+- **Readability**: `serverPort` communicates intent; `port_` communicates "I couldn't use the name I wanted"
+- **Consistency**: Underscore suffixes leak an implementation detail (keyword avoidance) into the domain model
+- **Clarity at the boundary**: When a descriptive name is mapped to `port_` at a library call site, it is obvious where application logic ends and library requirements begin
+
+### Bad: Underscore suffix in an internal record
+
+```gren
+-- BAD: port_ is used because `port` is a keyword, but this record
+-- is our own configuration — we can choose any name
+type alias Config =
+    { host : String
+    , port_ : Int
+    }
+```
+
+### Good: Descriptive name mapped to the library field at the boundary
+
+```gren
+-- GOOD: Internal config uses a descriptive name
+type alias Config =
+    { host : String
+    , serverPort : Int
+    }
+
+-- Map to the library-required field name only at the call site
+Server.createServer permission
+    { host = config.host
+    , port_ = config.serverPort
+    }
+```
+
+### When underscore suffixes are acceptable
+
+Underscore-suffixed field names are fine when the record is directly consumed by an external library that requires that exact name. For example, `Web.Server.Config` uses `port_` because `HttpServer.createServer` from `gren-lang/node` expects it. The rule applies to records we define for our own use.
+
+### The rule
+
+If you define a record type for application use, choose a descriptive field name. Reserve underscore-suffixed names for records that must match an external library API. Map between the two at the boundary.
+
 ## Fail on Malformed or Missing Data
 
 Never silently substitute a default value or partially interpret data when the expected value is missing or malformed. Missing or invalid data must produce an explicit error so that the caller can detect and handle the problem. Hard-coded fallbacks hide bugs and make failures difficult to trace.
@@ -304,7 +349,7 @@ parseConfig raw =
         raw
             |> extractField "host"
             |> Maybe.withDefault "localhost"
-    , port_ =
+    , serverPort =
         raw
             |> extractField "port"
             |> Maybe.andThen String.toInt
@@ -346,7 +391,7 @@ parseConfig raw =
                                 )
                     )
     in
-    Result.map2 (\host port_ -> { host = host, port_ = port_ }) hostResult portResult
+    Result.map2 (\host serverPort -> { host = host, serverPort = serverPort }) hostResult portResult
 ```
 
 ### When defaults are acceptable
