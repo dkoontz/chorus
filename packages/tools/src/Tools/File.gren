@@ -54,7 +54,7 @@ import Tools.Validation as Validation
     exposing
         ( ValidPath
         , ValidationError
-        , WorkspaceRoot
+        , AllowedDirectories
         )
 
 
@@ -124,11 +124,14 @@ validationErrorToString error =
         Validation.EmptyPath ->
             "Path cannot be empty"
 
-        Validation.AbsolutePathNotAllowed { path } ->
-            "Absolute paths are not allowed: " ++ path
+        Validation.PathOutsideAllowedDirectories { path } ->
+            "Path is outside all allowed directories: " ++ path
 
         Validation.PathTraversalAttempt { path, reason } ->
             "Invalid path '" ++ path ++ "': " ++ reason
+
+        Validation.NoAllowedDirectories ->
+            "No allowed directories configured"
 
 
 
@@ -159,11 +162,11 @@ Returns line-numbered content within the specified range.
 -}
 read :
     FileSystem.Permission
-    -> WorkspaceRoot
+    -> AllowedDirectories
     -> ReadInput
     -> Task FileError ReadOutput
-read filesystemPermission workspaceRoot input =
-    when Validation.validatePath workspaceRoot input.path is
+read filesystemPermission allowedDirs input =
+    when Validation.validatePath allowedDirs input.path is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
 
@@ -231,11 +234,11 @@ processReadContent input bytes =
 -}
 create :
     FileSystem.Permission
-    -> WorkspaceRoot
+    -> AllowedDirectories
     -> WriteInput
     -> Task FileError WriteOutput
-create filesystemPermission workspaceRoot input =
-    when Validation.validatePath workspaceRoot input.path is
+create filesystemPermission allowedDirs input =
+    when Validation.validatePath allowedDirs input.path is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
 
@@ -307,11 +310,11 @@ Fails if the file does not exist. Use `create` for new files.
 -}
 write :
     FileSystem.Permission
-    -> WorkspaceRoot
+    -> AllowedDirectories
     -> WriteInput
     -> Task FileError WriteOutput
-write filesystemPermission workspaceRoot input =
-    when Validation.validatePath workspaceRoot input.path is
+write filesystemPermission allowedDirs input =
+    when Validation.validatePath allowedDirs input.path is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
 
@@ -397,11 +400,11 @@ string is not found or appears more than once.
 -}
 patch :
     FileSystem.Permission
-    -> WorkspaceRoot
+    -> AllowedDirectories
     -> PatchInput
     -> Task FileError PatchOutput
-patch filesystemPermission workspaceRoot input =
-    when Validation.validatePath workspaceRoot input.path is
+patch filesystemPermission allowedDirs input =
+    when Validation.validatePath allowedDirs input.path is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
 
@@ -541,11 +544,11 @@ type alias DeleteOutput =
 -}
 delete :
     FileSystem.Permission
-    -> WorkspaceRoot
+    -> AllowedDirectories
     -> DeleteInput
     -> Task FileError DeleteOutput
-delete filesystemPermission workspaceRoot input =
-    when Validation.validatePath workspaceRoot input.path is
+delete filesystemPermission allowedDirs input =
+    when Validation.validatePath allowedDirs input.path is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
 
@@ -606,15 +609,15 @@ type alias ListOutput =
 list :
     FileSystem.Permission
     -> ChildProcess.Permission
-    -> WorkspaceRoot
+    -> AllowedDirectories
     -> ListInput
     -> Task FileError ListOutput
-list filesystemPermission childProcessPermission workspaceRoot input =
+list filesystemPermission childProcessPermission allowedDirs input =
     let
         pathStr =
             Maybe.withDefault "." input.path
     in
-    when Validation.validatePath workspaceRoot pathStr is
+    when Validation.validatePath allowedDirs pathStr is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
 
@@ -630,7 +633,7 @@ list filesystemPermission childProcessPermission workspaceRoot input =
 
                 Just pattern ->
                     -- Use find command for glob patterns
-                    listWithPattern childProcessPermission workspaceRoot validPath pattern
+                    listWithPattern childProcessPermission allowedDirs validPath pattern
 
 
 listDirectorySimple : FileSystem.Permission -> Path -> Task FileError ListOutput
@@ -670,11 +673,11 @@ listDirectorySimple filesystemPermission path =
 
 listWithPattern :
     ChildProcess.Permission
-    -> WorkspaceRoot
+    -> AllowedDirectories
     -> ValidPath
     -> String
     -> Task FileError ListOutput
-listWithPattern childProcessPermission workspaceRoot validPath pattern =
+listWithPattern childProcessPermission allowedDirs validPath pattern =
     let
         searchPath =
             Validation.toString validPath
@@ -688,9 +691,16 @@ listWithPattern childProcessPermission workspaceRoot validPath pattern =
             , "f"
             ]
 
+        -- Use the first allowed directory as working directory
+        workingDir =
+            Validation.allowedDirectoryPaths allowedDirs
+                |> Array.first
+                |> Maybe.map Path.toPosixString
+                |> Maybe.withDefault "."
+
         options =
             { shell = ChildProcess.NoShell
-            , workingDirectory = ChildProcess.SetWorkingDirectory (Path.toPosixString (Validation.workspaceRootPath workspaceRoot))
+            , workingDirectory = ChildProcess.SetWorkingDirectory workingDir
             , environmentVariables = ChildProcess.InheritEnvironmentVariables
             , maximumBytesWrittenToStreams = 1024 * 1024
             , runDuration = ChildProcess.Milliseconds 30000
@@ -762,10 +772,10 @@ Falls back to a basic grep if ripgrep is not available.
 -}
 search :
     ChildProcess.Permission
-    -> WorkspaceRoot
+    -> AllowedDirectories
     -> SearchInput
     -> Task FileError SearchOutput
-search childProcessPermission workspaceRoot input =
+search childProcessPermission allowedDirs input =
     let
         searchPath =
             Maybe.withDefault "." input.path
@@ -773,12 +783,12 @@ search childProcessPermission workspaceRoot input =
         maxResults =
             Maybe.withDefault 100 input.maxResults
     in
-    when Validation.validatePath workspaceRoot searchPath is
+    when Validation.validatePath allowedDirs searchPath is
         Err validationError ->
             Task.fail (ValidationFailed validationError)
 
         Ok validPath ->
-            searchWithRipgrep childProcessPermission workspaceRoot validPath input maxResults
+            searchWithRipgrep childProcessPermission allowedDirs validPath input maxResults
                 |> Task.onError
                     (\error ->
                         -- Only fall back to grep if ripgrep is not available
@@ -786,7 +796,7 @@ search childProcessPermission workspaceRoot input =
                         when error is
                             SearchFailed { reason } ->
                                 if String.contains "not available" reason then
-                                    searchWithGrep childProcessPermission workspaceRoot validPath input maxResults
+                                    searchWithGrep childProcessPermission allowedDirs validPath input maxResults
                                 else
                                     Task.fail error
 
@@ -797,12 +807,12 @@ search childProcessPermission workspaceRoot input =
 
 searchWithRipgrep :
     ChildProcess.Permission
-    -> WorkspaceRoot
+    -> AllowedDirectories
     -> ValidPath
     -> SearchInput
     -> Int
     -> Task FileError SearchOutput
-searchWithRipgrep childProcessPermission workspaceRoot validPath input maxResults =
+searchWithRipgrep childProcessPermission allowedDirs validPath input maxResults =
     let
         searchPath =
             Validation.toString validPath
@@ -846,9 +856,16 @@ searchWithRipgrep childProcessPermission workspaceRoot validPath input maxResult
                 , [ input.pattern, searchPath ]
                 ]
 
+        -- Use the first allowed directory as working directory
+        workingDir =
+            Validation.allowedDirectoryPaths allowedDirs
+                |> Array.first
+                |> Maybe.map Path.toPosixString
+                |> Maybe.withDefault "."
+
         options =
             { shell = ChildProcess.NoShell
-            , workingDirectory = ChildProcess.SetWorkingDirectory (Path.toPosixString (Validation.workspaceRootPath workspaceRoot))
+            , workingDirectory = ChildProcess.SetWorkingDirectory workingDir
             , environmentVariables = ChildProcess.InheritEnvironmentVariables
             , maximumBytesWrittenToStreams = 1024 * 1024
             , runDuration = ChildProcess.Milliseconds 60000
@@ -861,12 +878,12 @@ searchWithRipgrep childProcessPermission workspaceRoot validPath input maxResult
 
 searchWithGrep :
     ChildProcess.Permission
-    -> WorkspaceRoot
+    -> AllowedDirectories
     -> ValidPath
     -> SearchInput
     -> Int
     -> Task FileError SearchOutput
-searchWithGrep childProcessPermission workspaceRoot validPath input maxResults =
+searchWithGrep childProcessPermission allowedDirs validPath input maxResults =
     let
         searchPath =
             Validation.toString validPath
@@ -890,9 +907,16 @@ searchWithGrep childProcessPermission workspaceRoot validPath input maxResults =
                 , [ input.pattern, searchPath ]
                 ]
 
+        -- Use the first allowed directory as working directory
+        workingDir =
+            Validation.allowedDirectoryPaths allowedDirs
+                |> Array.first
+                |> Maybe.map Path.toPosixString
+                |> Maybe.withDefault "."
+
         options =
             { shell = ChildProcess.NoShell
-            , workingDirectory = ChildProcess.SetWorkingDirectory (Path.toPosixString (Validation.workspaceRootPath workspaceRoot))
+            , workingDirectory = ChildProcess.SetWorkingDirectory workingDir
             , environmentVariables = ChildProcess.InheritEnvironmentVariables
             , maximumBytesWrittenToStreams = 1024 * 1024
             , runDuration = ChildProcess.Milliseconds 60000

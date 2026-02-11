@@ -47,6 +47,10 @@ type Route
     | CreateProvider                           -- POST /api/providers
     | UpdateProvider String                    -- PUT /api/providers/:name
     | DeleteProvider String                    -- DELETE /api/providers/:name
+    | GetConfig                                -- GET /api/config
+    | UpdateConfig                             -- PUT /api/config
+    | SelectConfig                             -- POST /api/config/select
+    | CreateConfig                             -- POST /api/config/create
     | StaticFile String                        -- GET /* (for frontend assets)
     | NotFound
 
@@ -177,6 +181,18 @@ parseRoute method path =
 
         { method = DELETE, segments = [ "api", "providers", providerName ] } ->
             DeleteProvider providerName
+
+        { method = GET, segments = [ "api", "config" ] } ->
+            GetConfig
+
+        { method = PUT, segments = [ "api", "config" ] } ->
+            UpdateConfig
+
+        { method = POST, segments = [ "api", "config", "select" ] } ->
+            SelectConfig
+
+        { method = POST, segments = [ "api", "config", "create" ] } ->
+            CreateConfig
 
         -- Static files (anything not matching /api/*)
         { method = GET, segments = segs } ->
@@ -367,6 +383,18 @@ routeToString route =
 
         DeleteProvider name ->
             "DeleteProvider(" ++ name ++ ")"
+
+        GetConfig ->
+            "GetConfig"
+
+        UpdateConfig ->
+            "UpdateConfig"
+
+        SelectConfig ->
+            "SelectConfig"
+
+        CreateConfig ->
+            "CreateConfig"
 
         StaticFile path ->
             "StaticFile(" ++ path ++ ")"

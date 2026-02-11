@@ -1,0 +1,201 @@
+module View.SystemSettings exposing (view, SettingsForm, workspaceConfigToForm)
+
+{-| System Settings view for editing workspace config fields.
+-}
+
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Html.Events exposing (onClick, onInput, onSubmit)
+import Types exposing (AgentProvider(..), ProviderConfig, WorkspaceConfig)
+
+
+{-| Form state for editing system settings.
+-}
+type alias SettingsForm =
+    { dataDirectory : String
+    , agentsDirectory : String
+    , allowedAgentDirectories : Array String
+    , initialAgentDirectory : String
+    , systemAgentProvider : String
+    }
+
+
+{-| Build a SettingsForm from a WorkspaceConfig.
+-}
+workspaceConfigToForm : WorkspaceConfig -> SettingsForm
+workspaceConfigToForm wc =
+    { dataDirectory = wc.dataDirectory
+    , agentsDirectory = wc.agentsDirectory
+    , allowedAgentDirectories = wc.allowedAgentDirectories
+    , initialAgentDirectory = wc.initialAgentDirectory
+    , systemAgentProvider =
+        when wc.systemAgentProvider is
+            NotConfigured ->
+                ""
+
+            ProviderRef name ->
+                name
+    }
+
+
+{-| Configuration for the System Settings view.
+-}
+type alias Config msg =
+    { settingsForm : Maybe SettingsForm
+    , providers : Array ProviderConfig
+    , loading : Bool
+    , validationError : Maybe String
+    , onUpdateDataDirectory : String -> msg
+    , onUpdateAgentsDirectory : String -> msg
+    , onUpdateAllowedDir : { index : Int, value : String } -> msg
+    , onAddAllowedDir : msg
+    , onRemoveAllowedDir : Int -> msg
+    , onUpdateInitialAgentDirectory : String -> msg
+    , onUpdateSystemAgentProvider : String -> msg
+    , onSaveSettings : msg
+    }
+
+
+{-| Render the System Settings tab.
+-}
+view : Config msg -> Html msg
+view config =
+    div [ class "settings-page" ]
+        [ h2 [] [ text "System Settings" ]
+        , when config.settingsForm is
+            Just form ->
+                viewSettingsForm config form
+
+            Nothing ->
+                div [ class "empty-state" ]
+                    [ p [] [ text "No workspace is loaded. Open or create a workspace first." ] ]
+        ]
+
+
+viewSettingsForm : Config msg -> SettingsForm -> Html msg
+viewSettingsForm config form =
+    Html.form [ onSubmit config.onSaveSettings ]
+        [ when config.validationError is
+            Just errMsg ->
+                div [ class "settings-validation-error" ]
+                    [ text errMsg ]
+
+            Nothing ->
+                text ""
+        , div [ class "form-group" ]
+            [ label [ for "settings-data-dir" ] [ text "Data Directory" ]
+            , p [ class "section-help" ]
+                [ text "Where task registry data, uploads, and provider configs are stored." ]
+            , input
+                [ id "settings-data-dir"
+                , type_ "text"
+                , value form.dataDirectory
+                , onInput config.onUpdateDataDirectory
+                , placeholder "/path/to/data"
+                ]
+                []
+            ]
+        , div [ class "form-group" ]
+            [ label [ for "settings-agents-dir" ] [ text "Agents Directory" ]
+            , p [ class "section-help" ]
+                [ text "Where agent configuration files are stored." ]
+            , input
+                [ id "settings-agents-dir"
+                , type_ "text"
+                , value form.agentsDirectory
+                , onInput config.onUpdateAgentsDirectory
+                , placeholder "/path/to/agents"
+                ]
+                []
+            ]
+        , div [ class "form-group" ]
+            [ label [] [ text "Allowed Agent Directories" ]
+            , p [ class "section-help" ]
+                [ text "Directories that agents are allowed to read and write files in." ]
+            , viewAllowedDirs config form.allowedAgentDirectories
+            ]
+        , div [ class "form-group" ]
+            [ label [ for "settings-initial-dir" ] [ text "Initial Agent Directory" ]
+            , p [ class "section-help" ]
+                [ text "The starting working directory for agents. Must be one of the allowed agent directories." ]
+            , input
+                [ id "settings-initial-dir"
+                , type_ "text"
+                , value form.initialAgentDirectory
+                , onInput config.onUpdateInitialAgentDirectory
+                , placeholder "/path/to/agent_workspace"
+                ]
+                []
+            ]
+        , div [ class "form-group" ]
+            [ label [ for "settings-system-provider" ] [ text "System Agent Provider" ]
+            , p [ class "section-help" ]
+                [ text "The provider used by built-in agents (e.g., task planner). Select from configured providers." ]
+            , select
+                [ id "settings-system-provider"
+                , onInput config.onUpdateSystemAgentProvider
+                ]
+                (Array.flatten
+                    [ [ option [ value "", selected (form.systemAgentProvider == "") ] [ text "-- Not Configured --" ] ]
+                    , Array.map
+                        (\provider ->
+                            option
+                                [ value provider.name
+                                , selected (form.systemAgentProvider == provider.name)
+                                ]
+                                [ text provider.name ]
+                        )
+                        config.providers
+                    ]
+                )
+            ]
+        , div [ class "form-actions" ]
+            [ button
+                [ type_ "submit"
+                , class "btn btn-primary"
+                , disabled config.loading
+                ]
+                [ text
+                    (if config.loading then
+                        "Saving..."
+                     else
+                        "Save Settings"
+                    )
+                ]
+            ]
+        ]
+
+
+viewAllowedDirs : Config msg -> Array String -> Html msg
+viewAllowedDirs config dirs =
+    div [ class "allowed-dirs-list" ]
+        (Array.pushLast
+            (button
+                [ type_ "button"
+                , class "btn btn-small btn-secondary"
+                , onClick config.onAddAllowedDir
+                ]
+                [ text "+ Add Directory" ]
+            )
+            (Array.indexedMap (viewAllowedDirItem config) dirs)
+        )
+
+
+viewAllowedDirItem : Config msg -> Int -> String -> Html msg
+viewAllowedDirItem config index dir =
+    div [ class "allowed-dir-item" ]
+        [ input
+            [ type_ "text"
+            , class "form-input"
+            , value dir
+            , onInput (\val -> config.onUpdateAllowedDir { index = index, value = val })
+            , placeholder "/path/to/allowed/directory"
+            ]
+            []
+        , button
+            [ type_ "button"
+            , class "btn btn-small btn-danger"
+            , onClick (config.onRemoveAllowedDir index)
+            ]
+            [ text "Remove" ]
+        ]

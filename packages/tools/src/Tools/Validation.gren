@@ -1,18 +1,18 @@
 module Tools.Validation exposing
     ( ValidPath
     , ValidationError(..)
-    , WorkspaceRoot
-    , makeWorkspaceRoot
+    , AllowedDirectories
+    , makeAllowedDirectories
     , validatePath
     , toPath
     , toString
-    , workspaceRootPath
+    , allowedDirectoryPaths
     )
 
 {-| Path validation for sandboxed file operations.
 
 All file operations must go through path validation to ensure:
-- Paths stay within the workspace directory
+- Paths stay within the allowed directories
 - Path traversal attacks are prevented
 - Paths are normalized before use
 
@@ -21,7 +21,7 @@ All file operations must go through path validation to ensure:
 import FileSystem.Path as Path exposing (Path)
 
 
-{-| A validated path that is guaranteed to be within the workspace.
+{-| A validated path that is guaranteed to be within the allowed directories.
 The constructor is not exported, so validated paths can only be
 created through the validatePath function.
 -}
@@ -29,70 +29,112 @@ type ValidPath
     = ValidPath Path
 
 
-{-| The workspace root directory. All operations are scoped to this directory.
+{-| A set of allowed directories for file operations.
+All operations are scoped to these directories.
 -}
-type WorkspaceRoot
-    = WorkspaceRoot Path
+type AllowedDirectories
+    = AllowedDirectories (Array Path)
 
 
 {-| Errors that can occur during path validation.
 -}
 type ValidationError
     = PathTraversalAttempt { path : String, reason : String }
-    | AbsolutePathNotAllowed { path : String }
+    | PathOutsideAllowedDirectories { path : String }
     | EmptyPath
+    | NoAllowedDirectories
 
 
-{-| Create a workspace root from a path string.
+{-| Create allowed directories from an array of path strings.
 -}
-makeWorkspaceRoot : String -> WorkspaceRoot
-makeWorkspaceRoot pathStr =
-    WorkspaceRoot (Path.fromPosixString pathStr)
+makeAllowedDirectories : Array String -> AllowedDirectories
+makeAllowedDirectories pathStrs =
+    AllowedDirectories (Array.map Path.fromPosixString pathStrs)
 
 
-{-| Get the Path for a workspace root.
+{-| Get the Paths for the allowed directories.
 -}
-workspaceRootPath : WorkspaceRoot -> Path
-workspaceRootPath (WorkspaceRoot path) =
-    path
+allowedDirectoryPaths : AllowedDirectories -> Array Path
+allowedDirectoryPaths (AllowedDirectories paths) =
+    paths
 
 
-{-| Validate a path string, ensuring it stays within the workspace.
+{-| Validate a path string, ensuring it stays within the allowed directories.
 
 This function:
 1. Rejects empty paths
-2. Rejects absolute paths (those starting with /)
-3. Rejects paths containing ".." components
-4. Normalizes the path
+2. Rejects paths containing ".." components
+3. Checks that at least one allowed directory exists
+4. For absolute paths: validates the path falls within any allowed directory
+5. For relative paths: resolves against the first allowed directory
+
+A path is valid if it resolves within any one of the allowed directories.
 
 Returns a ValidPath that can be used with file operations.
 -}
-validatePath : WorkspaceRoot -> String -> Result ValidationError ValidPath
-validatePath (WorkspaceRoot workspaceRoot) pathStr =
+validatePath : AllowedDirectories -> String -> Result ValidationError ValidPath
+validatePath (AllowedDirectories directories) pathStr =
     let
         trimmed =
             String.trim pathStr
     in
     if String.isEmpty trimmed then
         Err EmptyPath
-    else if String.startsWith "/" trimmed then
-        Err (AbsolutePathNotAllowed { path = trimmed })
     else if containsTraversal trimmed then
         Err
             (PathTraversalAttempt
                 { path = trimmed
-                , reason = "Path contains '..' which could escape the workspace"
+                , reason = "Path contains '..' which could escape the allowed directories"
                 }
             )
+    else if Array.isEmpty directories then
+        Err NoAllowedDirectories
+    else if String.startsWith "/" trimmed then
+        -- Absolute path: check if it falls within any allowed directory
+        if isWithinAnyDirectory directories trimmed then
+            Ok (ValidPath (Path.fromPosixString trimmed))
+        else
+            Err (PathOutsideAllowedDirectories { path = trimmed })
     else
-        let
-            relativePath =
-                Path.fromPosixString trimmed
+        -- Relative path: resolve against the first allowed directory
+        when Array.first directories is
+            Just firstDir ->
+                let
+                    relativePath =
+                        Path.fromPosixString trimmed
 
-            fullPath =
-                Path.append relativePath workspaceRoot
-        in
-        Ok (ValidPath fullPath)
+                    fullPath =
+                        Path.append relativePath firstDir
+                in
+                Ok (ValidPath fullPath)
+
+            Nothing ->
+                -- Unreachable: we already checked Array.isEmpty above
+                Err NoAllowedDirectories
+
+
+{-| Check if an absolute path falls within any of the allowed directories.
+
+An absolute path is within a directory if it starts with the directory path
+followed by a path separator (or is exactly the directory path).
+-}
+isWithinAnyDirectory : Array Path -> String -> Bool
+isWithinAnyDirectory directories absolutePath =
+    Array.any
+        (\dir ->
+            let
+                dirStr =
+                    Path.toPosixString dir
+
+                dirWithSlash =
+                    if String.endsWith "/" dirStr then
+                        dirStr
+                    else
+                        dirStr ++ "/"
+            in
+            absolutePath == dirStr || String.startsWith dirWithSlash absolutePath
+        )
+        directories
 
 
 {-| Check if a path contains traversal patterns.
@@ -128,8 +170,11 @@ validationErrorToString error =
         EmptyPath ->
             "Path cannot be empty"
 
-        AbsolutePathNotAllowed { path } ->
-            "Absolute paths are not allowed: " ++ path
+        PathOutsideAllowedDirectories { path } ->
+            "Path is outside all allowed directories: " ++ path
 
         PathTraversalAttempt { path, reason } ->
             "Invalid path '" ++ path ++ "': " ++ reason
+
+        NoAllowedDirectories ->
+            "No allowed directories configured"

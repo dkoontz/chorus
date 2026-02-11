@@ -37,7 +37,7 @@ import Provider.Registry as ProviderRegistry
 import Stream
 import Task as GrenTask
 import Task.Registry as Registry
-import Types exposing (AgentConfig(..), AgentProvider(..), ProviderType(..), TaskStatus(..), SourceInfo)
+import Types exposing (AgentConfig(..), AgentProvider(..), ProviderType(..), TaskStatus(..), SourceInfo, WorkspaceConfig)
 import Web.Api as Api exposing (indexedArrayToDict)
 import Web.Router as Router
 import Web.Server as Server
@@ -68,12 +68,13 @@ type alias Model =
     , agentRegistry : Maybe AgentRegistry.AgentRegistry
     , providerRegistry : Maybe ProviderRegistry.ProviderRegistry
     , activeExecutors : Dict String ExecutorState
-    , providerConfig : ClaudeCode.Config
     , filesystemPermission : FileSystem.Permission
     , childProcessPermission : ChildProcess.Permission
     , httpClientPermission : HttpClient.Permission
     , secureContext : SecureContext
     , config : Config
+    , workspaceConfig : Maybe WorkspaceConfig
+    , workspaceConfigPath : Maybe String
     , status : Status
     , pendingResponses : Array PendingResponse
     , logger : Logging.Logger
@@ -134,6 +135,7 @@ type Msg
     | GotPlannerComplete { taskId : TaskId, result : Result String String }
     | GotAnswersSubmitted { response : Response, taskId : TaskId, enrichedPrompt : String, result : Api.ApiResult }
     | GotToolGrant { taskId : TaskId, addTools : Array String, removeTools : Array String, response : Response }
+    | GotConfigLoaded { response : Maybe Response, result : Result String { config : WorkspaceConfig, configPath : String } }
     | NoOp
 
 
@@ -162,12 +164,6 @@ init env =
                                 logger =
                                     Logging.makeLogger env.stdout config.logLevel
 
-                                providerCfg =
-                                    { childProcessPermission = childProcessPermission
-                                    , chorusToolsPath = config.chorusToolsPath
-                                    , baseUrl = "http://" ++ config.host ++ ":" ++ String.fromInt config.serverPort
-                                    }
-
                                 model =
                                     { env = env
                                     , server = Nothing
@@ -175,16 +171,30 @@ init env =
                                     , agentRegistry = Nothing
                                     , providerRegistry = Nothing
                                     , activeExecutors = Dict.empty
-                                    , providerConfig = providerCfg
                                     , filesystemPermission = filesystemPermission
                                     , childProcessPermission = childProcessPermission
                                     , httpClientPermission = httpClientPermission
                                     , secureContext = secureContext
                                     , config = config
+                                    , workspaceConfig = Nothing
+                                    , workspaceConfigPath = Nothing
                                     , status = Initializing
                                     , pendingResponses = []
                                     , logger = logger
                                     }
+
+                                -- If CHORUS_CONFIG is set, auto-load that config file
+                                configCmd =
+                                    when config.chorusConfigPath is
+                                        Just configPath ->
+                                            loadWorkspaceConfig filesystemPermission configPath
+                                                |> GrenTask.perform
+                                                    (\result ->
+                                                        GotConfigLoaded { response = Nothing, result = result }
+                                                    )
+
+                                        Nothing ->
+                                            Cmd.none
                             in
                             Node.startProgram
                                 { model = model
@@ -197,24 +207,8 @@ init env =
                                             }
                                             |> GrenTask.attempt GotServer
 
-                                        , -- Initialize the task registry
-                                          Registry.init filesystemPermission secureContext
-                                            { registryRoot = config.registryRoot
-                                            , workspacesRoot = config.workspacesRoot
-                                            }
-                                            |> GrenTask.attempt GotRegistry
-
-                                        , -- Initialize the agent registry
-                                          AgentRegistry.init filesystemPermission
-                                            { agentsRoot = config.agentsRoot
-                                            }
-                                            |> GrenTask.attempt GotAgentRegistry
-
-                                        , -- Initialize the provider registry
-                                          ProviderRegistry.init filesystemPermission
-                                            { providersRoot = config.providersRoot
-                                            }
-                                            |> GrenTask.attempt GotProviderRegistry
+                                        , -- Auto-load config if CHORUS_CONFIG is set
+                                          configCmd
 
                                         , -- Log startup
                                           Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.serverPort) NoOp
@@ -252,9 +246,19 @@ makeProvider model agentConfig maybeProviderConfig =
                             Nothing
 
                         Just providerConfig ->
+                            let
+                                baseUrl =
+                                    "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
+                            in
                             when providerConfig.providerType is
                                 Types.ClaudeCode ->
-                                    Just (ClaudeCode.provider model.providerConfig)
+                                    Just
+                                        (ClaudeCode.provider
+                                            { childProcessPermission = model.childProcessPermission
+                                            , chorusToolsPath = model.config.chorusToolsPath
+                                            , baseUrl = baseUrl
+                                            }
+                                        )
 
                                 Types.OpenCode ->
                                     Just
@@ -262,11 +266,20 @@ makeProvider model agentConfig maybeProviderConfig =
                                             { childProcessPermission = model.childProcessPermission
                                             , filesystemPermission = model.filesystemPermission
                                             , chorusToolsPath = model.config.chorusToolsPath
-                                            , baseUrl = "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
+                                            , baseUrl = baseUrl
                                             }
                                         )
 
                                 Types.OpenAiCompatible config ->
+                                    let
+                                        conversationsDir =
+                                            when model.workspaceConfig is
+                                                Just wc ->
+                                                    wc.dataDirectory ++ "/conversations"
+
+                                                Nothing ->
+                                                    "./conversations"
+                                    in
                                     Just
                                         (OpenAiCompatible.provider
                                             { httpClientPermission = model.httpClientPermission
@@ -275,7 +288,7 @@ makeProvider model agentConfig maybeProviderConfig =
                                             , apiBaseUrl = config.apiBaseUrl
                                             , apiKey = config.apiKey
                                             , model = Maybe.withDefault config.defaultModel r.model
-                                            , conversationsDir = model.config.workspacesRoot ++ "/conversations"
+                                            , conversationsDir = conversationsDir
                                             }
                                         )
 
@@ -290,7 +303,7 @@ buildShellCommandForProvider :
     Model
     -> Types.ProviderConfig
     -> Types.AgentConfig
-    -> { systemPrompt : Maybe String, workspaceRoot : String, message : String, taskId : Maybe String }
+    -> { systemPrompt : Maybe String, initialDirectory : String, message : String, taskId : Maybe String }
     -> Result String String
 buildShellCommandForProvider model providerConfig agentConfig args =
     let
@@ -316,7 +329,7 @@ buildShellCommandForProvider model providerConfig agentConfig args =
                 (ClaudeCode.buildShellCommand
                     { systemPrompt = args.systemPrompt
                     , resumeSessionId = Nothing
-                    , workspaceRoot = args.workspaceRoot
+                    , workspaceRoot = args.initialDirectory
                     , chorusToolsPath = model.config.chorusToolsPath
                     , message = args.message
                     , allowedTools = allowedTools
@@ -329,7 +342,7 @@ buildShellCommandForProvider model providerConfig agentConfig args =
             Ok
                 (OpenCode.buildShellCommand
                     { sessionId = Nothing
-                    , workspaceRoot = args.workspaceRoot
+                    , workspaceRoot = args.initialDirectory
                     , message = args.message
                     , chorusToolsPath = model.config.chorusToolsPath
                     , taskId = args.taskId
@@ -462,16 +475,32 @@ update msg model =
                                         InternalAgent _ ->
                                             []
 
+                                allowedDirs =
+                                    when model.workspaceConfig is
+                                        Just wc ->
+                                            wc.allowedAgentDirectories
+
+                                        Nothing ->
+                                            []
+
+                                registryRoot =
+                                    when model.workspaceConfig is
+                                        Just wc ->
+                                            wc.dataDirectory ++ "/registry"
+
+                                        Nothing ->
+                                            "./data/registry"
+
                                 toolCtx =
                                     { filesystemPermission = model.filesystemPermission
                                     , childProcessPermission = model.childProcessPermission
-                                    , workspaceRoot = model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
+                                    , allowedDirectories = allowedDirs
                                     , allowedTools = allowedTools
                                     , apiContext =
                                         { registry = reg
                                         , filesystemPermission = model.filesystemPermission
                                         , secureContext = model.secureContext
-                                        , registryRoot = Path.fromPosixString model.config.registryRoot
+                                        , registryRoot = Path.fromPosixString registryRoot
                                         }
                                     , taskId = taskId
                                     }
@@ -516,7 +545,7 @@ update msg model =
                                     { registry = registry
                                     , filesystemPermission = model.filesystemPermission
                                     , secureContext = model.secureContext
-                                    , registryRoot = Path.fromPosixString model.config.registryRoot
+                                    , registryRoot = registryRootPath model
                                     }
 
                                 toMsg =
@@ -570,8 +599,8 @@ update msg model =
                             else
                                 Just (agentInstructions ++ completionReportInstruction)
 
-                        workspaceRoot =
-                            model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
+                        initialDirectory =
+                            initialAgentDir model
 
                         executorState =
                             { taskId = taskId
@@ -597,7 +626,7 @@ update msg model =
                                             shellCommand =
                                                 buildShellCommandForProvider model providerConfig agentConfig
                                                     { systemPrompt = systemPrompt
-                                                    , workspaceRoot = workspaceRoot
+                                                    , initialDirectory = initialDirectory
                                                     , message = prompt
                                                     , taskId = Just (Id.taskIdToString taskId)
                                                     }
@@ -694,7 +723,7 @@ update msg model =
                                 { registry = registry
                                 , filesystemPermission = model.filesystemPermission
                                 , secureContext = model.secureContext
-                                , registryRoot = Path.fromPosixString model.config.registryRoot
+                                , registryRoot = registryRootPath model
                                 }
 
                             rawOutput =
@@ -729,7 +758,7 @@ update msg model =
                                         { registry = registry
                                         , filesystemPermission = model.filesystemPermission
                                         , secureContext = model.secureContext
-                                        , registryRoot = Path.fromPosixString model.config.registryRoot
+                                        , registryRoot = registryRootPath model
                                         }
                                 in
                                 { model = updatedModel
@@ -754,7 +783,7 @@ update msg model =
                                         { registry = registry
                                         , filesystemPermission = model.filesystemPermission
                                         , secureContext = model.secureContext
-                                        , registryRoot = Path.fromPosixString model.config.registryRoot
+                                        , registryRoot = registryRootPath model
                                         }
                                 in
                                 { model = updatedModel
@@ -924,7 +953,7 @@ update msg model =
                             { registry = registry
                             , filesystemPermission = model.filesystemPermission
                             , secureContext = model.secureContext
-                            , registryRoot = Path.fromPosixString model.config.registryRoot
+                            , registryRoot = registryRootPath model
                             }
                     in
                     when result is
@@ -1106,6 +1135,98 @@ update msg model =
                             ]
                     }
 
+        GotConfigLoaded { response, result } ->
+            when result is
+                Err errMsg ->
+                    let
+                        responseCmd =
+                            when response is
+                                Just resp ->
+                                    sendBadRequest resp errMsg
+
+                                Nothing ->
+                                    Cmd.none
+                    in
+                    { model = model
+                    , command =
+                        Cmd.batch
+                            [ responseCmd
+                            , Logging.logError model.logger ("Config load failed: " ++ errMsg) NoOp
+                            ]
+                    }
+
+                Ok { config, configPath } ->
+                    let
+                        -- Derive registry paths from workspace config
+                        registryRoot =
+                            config.dataDirectory ++ "/registry"
+
+                        providersRoot =
+                            config.dataDirectory ++ "/providers"
+
+                        uploadDirPath =
+                            config.dataDirectory ++ "/uploads"
+
+                        -- Initialize all registries
+                        initRegistryCmd =
+                            Registry.init model.filesystemPermission model.secureContext
+                                { registryRoot = registryRoot }
+                                |> GrenTask.attempt GotRegistry
+
+                        initAgentRegistryCmd =
+                            AgentRegistry.init model.filesystemPermission
+                                { agentsRoot = config.agentsDirectory }
+                                |> GrenTask.attempt GotAgentRegistry
+
+                        initProviderRegistryCmd =
+                            ProviderRegistry.init model.filesystemPermission
+                                { providersRoot = providersRoot }
+                                |> GrenTask.attempt GotProviderRegistry
+
+                        -- Ensure upload directory exists
+                        ensureUploadDirCmd =
+                            FileSystem.makeDirectory model.filesystemPermission { recursive = True } (Path.fromPosixString uploadDirPath)
+                                |> GrenTask.map (\_ -> {})
+                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                |> GrenTask.perform (\_ -> NoOp)
+
+                        -- Send success response if there is one
+                        responseCmd =
+                            when response is
+                                Just resp ->
+                                    let
+                                        body =
+                                            Encode.object
+                                                [ { key = "data", value = Types.encodeWorkspaceConfig config }
+                                                , { key = "configPath", value = Encode.string configPath }
+                                                ]
+                                                |> Encode.encode 0
+                                    in
+                                    resp
+                                        |> Response.setStatus 200
+                                        |> Response.setHeader "Content-Type" "application/json"
+                                        |> Response.setBody body
+                                        |> Response.send
+
+                                Nothing ->
+                                    Cmd.none
+                    in
+                    { model =
+                        { model
+                            | workspaceConfig = Just config
+                            , workspaceConfigPath = Just configPath
+                        }
+                    , command =
+                        Cmd.batch
+                            [ initRegistryCmd
+                            , initAgentRegistryCmd
+                            , initProviderRegistryCmd
+                            , ensureUploadDirCmd
+                            , responseCmd
+                            , Logging.logInfo model.logger ("Workspace config loaded from: " ++ configPath) NoOp
+                            ]
+                    }
+
         NoOp ->
             { model = model
             , command = Cmd.none
@@ -1125,8 +1246,21 @@ handleRoute model route request response =
                 filePath
                 (\staticResult -> GotStaticFile { id = 0, response = response, result = staticResult })
 
+        -- Config routes work without registry (they set up the workspace)
+        Router.GetConfig ->
+            handleGetConfig model response
+
+        Router.UpdateConfig ->
+            handleUpdateConfig model request response
+
+        Router.SelectConfig ->
+            handleSelectConfig model request response
+
+        Router.CreateConfig ->
+            handleCreateConfig model request response
+
         _ ->
-            -- API routes need registry
+            -- All other API routes need registry
             when model.registry is
                 Nothing ->
                     sendServiceUnavailable response
@@ -1137,7 +1271,7 @@ handleRoute model route request response =
                             { registry = registry
                             , filesystemPermission = model.filesystemPermission
                             , secureContext = model.secureContext
-                            , registryRoot = Path.fromPosixString model.config.registryRoot
+                            , registryRoot = registryRootPath model
                             }
 
                         toMsg =
@@ -1212,17 +1346,17 @@ handleRoute model route request response =
                                     sendBadRequest response errMsg
 
                         Router.UploadAttachment { taskId, filename } ->
-                            Api.requestUploadAttachment ctx taskId filename request.body model.config.uploadDir toMsg
+                            Api.requestUploadAttachment ctx taskId filename request.body (uploadDir model) toMsg
 
                         Router.DownloadAttachment { taskId, filename } ->
                             let
                                 toBinaryMsg =
                                     \binaryResult -> GotBinaryResult { response = response, result = binaryResult }
                             in
-                            Api.requestDownloadAttachment ctx taskId filename model.config.uploadDir toBinaryMsg
+                            Api.requestDownloadAttachment ctx taskId filename (uploadDir model) toBinaryMsg
 
                         Router.DeleteAttachment { taskId, filename } ->
-                            Api.requestDeleteAttachment ctx taskId filename model.config.uploadDir toMsg
+                            Api.requestDeleteAttachment ctx taskId filename (uploadDir model) toMsg
 
                         Router.ExecuteTool taskId ->
                             when model.agentRegistry is
@@ -1456,6 +1590,19 @@ handleRoute model route request response =
 
                         Router.StaticFile _ ->
                             -- Already handled above, but needed for exhaustive match
+                            sendNotFound response
+
+                        -- Config routes are handled in the outer when branch
+                        Router.GetConfig ->
+                            sendNotFound response
+
+                        Router.UpdateConfig ->
+                            sendNotFound response
+
+                        Router.SelectConfig ->
+                            sendNotFound response
+
+                        Router.CreateConfig ->
                             sendNotFound response
 
 
@@ -1804,117 +1951,141 @@ type PlannerOutput
 
 
 {-| Spawn the task-validator agent for a newly created task.
+
+Uses the system agent provider from workspace config instead of
+hardcoded ClaudeCode.
 -}
 dispatchPlanner : Model -> AgentRegistry.AgentRegistry -> TaskId -> String -> Cmd Msg
 dispatchPlanner model agentReg taskId description =
-    AgentRegistry.getAgent agentReg "task-validator"
-        |> GrenTask.andThen
-            (\agentConfig ->
-                -- Set task status to Planning and record planning_started event
-                when model.registry is
-                    Nothing ->
-                        GrenTask.succeed agentConfig
+    -- First check if system agent provider is configured
+    when model.workspaceConfig is
+        Nothing ->
+            GrenTask.succeed (Err "No workspace config loaded - cannot run system agent")
+                |> GrenTask.perform (\r -> GotPlannerComplete { taskId = taskId, result = r })
 
-                    Just registry ->
-                        Registry.updateStatus registry taskId Types.Planning
-                            |> GrenTask.andThen
-                                (\_ ->
-                                    Registry.recordEvent registry taskId
-                                        { eventType = "planning_started"
-                                        , data =
-                                            Dict.empty
-                                                |> Dict.set "description" description
-                                        }
-                                        |> GrenTask.map (\_ -> agentConfig)
-                                )
-                            |> GrenTask.onError (\_ -> GrenTask.succeed agentConfig)
-            )
-        |> GrenTask.andThen
-            (\agentConfig ->
-                let
-                    agentInstructions =
-                        when agentConfig is
-                            InternalAgent r ->
-                                r.instructions
+        Just wc ->
+            when wc.systemAgentProvider is
+                NotConfigured ->
+                    GrenTask.succeed (Err "System agent provider is not configured. Please configure it in System Settings.")
+                        |> GrenTask.perform (\r -> GotPlannerComplete { taskId = taskId, result = r })
 
-                            UserDefinedAgent r ->
-                                r.instructions
+                ProviderRef providerName ->
+                    AgentRegistry.getAgent agentReg "task-validator"
+                        |> GrenTask.mapError AgentRegistry.errorToString
+                        |> GrenTask.andThen
+                            (\agentConfig ->
+                                -- Set task status to Planning and record planning_started event
+                                when model.registry is
+                                    Nothing ->
+                                        GrenTask.succeed agentConfig
 
-                    systemPrompt =
-                        if String.isEmpty agentInstructions then
-                            Nothing
-                        else
-                            Just agentInstructions
+                                    Just registry ->
+                                        Registry.updateStatus registry taskId Types.Planning
+                                            |> GrenTask.andThen
+                                                (\_ ->
+                                                    Registry.recordEvent registry taskId
+                                                        { eventType = "planning_started"
+                                                        , data =
+                                                            Dict.empty
+                                                                |> Dict.set "description" description
+                                                        }
+                                                        |> GrenTask.map (\_ -> agentConfig)
+                                                )
+                                            |> GrenTask.onError (\_ -> GrenTask.succeed agentConfig)
+                            )
+                        |> GrenTask.andThen
+                            (\agentConfig ->
+                                -- Resolve the system agent provider
+                                when model.providerRegistry is
+                                    Nothing ->
+                                        GrenTask.fail "Provider registry not available"
 
-                    workspaceRoot =
-                        model.config.workspacesRoot ++ "/" ++ Id.taskIdToString taskId
+                                    Just providerReg ->
+                                        ProviderRegistry.getProvider providerReg providerName
+                                            |> GrenTask.mapError (\_ -> "System agent provider '" ++ providerName ++ "' not found in provider registry")
+                                            |> GrenTask.andThen
+                                                (\providerConfig ->
+                                                    let
+                                                        agentInstructions =
+                                                            when agentConfig is
+                                                                InternalAgent r ->
+                                                                    r.instructions
 
-                    cliArgs =
-                        { systemPrompt = systemPrompt
-                        , resumeSessionId = Nothing
-                        , workspaceRoot = workspaceRoot
-                        , chorusToolsPath = model.config.chorusToolsPath
-                        , message = description
-                        , allowedTools = Nothing
-                        , taskId = Just (Id.taskIdToString taskId)
-                        , baseUrl = Just model.providerConfig.baseUrl
-                        }
+                                                                UserDefinedAgent r ->
+                                                                    r.instructions
 
-                    shellCommand =
-                        ClaudeCode.buildShellCommand cliArgs
+                                                        systemPrompt =
+                                                            if String.isEmpty agentInstructions then
+                                                                Nothing
+                                                            else
+                                                                Just agentInstructions
 
-                    options =
-                        { shell = ChildProcess.NoShell
-                        , workingDirectory = ChildProcess.InheritWorkingDirectory
-                        , environmentVariables = ChildProcess.InheritEnvironmentVariables
-                        , maximumBytesWrittenToStreams = 10 * 1024 * 1024
-                        , runDuration = ChildProcess.Milliseconds 300000
-                        }
-                in
-                ChildProcess.run model.childProcessPermission "bash" [ "-c", shellCommand ] options
-                    |> GrenTask.map
-                        (\cliResult ->
-                            let
-                                output =
-                                    cliResult.stdout
-                                        |> Bytes.toString
-                                        |> Maybe.withDefault ""
+                                                        shellCommandResult =
+                                                            buildShellCommandForProvider model providerConfig agentConfig
+                                                                { systemPrompt = systemPrompt
+                                                                , initialDirectory = initialAgentDir model
+                                                                , message = description
+                                                                , taskId = Just (Id.taskIdToString taskId)
+                                                                }
 
-                                resultText =
-                                    when Decode.decodeString (Decode.field "result" Decode.string) output is
-                                        Ok text ->
-                                            text
+                                                        options =
+                                                            { shell = ChildProcess.NoShell
+                                                            , workingDirectory = ChildProcess.InheritWorkingDirectory
+                                                            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+                                                            , maximumBytesWrittenToStreams = 10 * 1024 * 1024
+                                                            , runDuration = ChildProcess.Milliseconds 300000
+                                                            }
+                                                    in
+                                                    when shellCommandResult is
+                                                        Err errMsg ->
+                                                            GrenTask.fail errMsg
 
-                                        Err _ ->
-                                            output
-                            in
-                            Ok resultText
-                        )
-                    |> GrenTask.onError
-                        (\runError ->
-                            let
-                                errMsg =
-                                    when runError is
-                                        ChildProcess.InitError { errorCode } ->
-                                            "Failed to start planner CLI: " ++ errorCode
+                                                        Ok shellCommand ->
+                                                            ChildProcess.run model.childProcessPermission "bash" [ "-c", shellCommand ] options
+                                                                |> GrenTask.map
+                                                                    (\cliResult ->
+                                                                        let
+                                                                            output =
+                                                                                cliResult.stdout
+                                                                                    |> Bytes.toString
+                                                                                    |> Maybe.withDefault ""
 
-                                        ChildProcess.ProgramError { exitCode, stderr } ->
-                                            let
-                                                stderrStr =
-                                                    stderr
-                                                        |> Bytes.toString
-                                                        |> Maybe.withDefault ""
-                                            in
-                                            "Planner CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
-                            in
-                            GrenTask.succeed (Err errMsg)
-                        )
-            )
-        |> GrenTask.onError
-            (\_ ->
-                GrenTask.succeed (Err "task-validator agent not found")
-            )
-        |> GrenTask.perform (\r -> GotPlannerComplete { taskId = taskId, result = r })
+                                                                            resultText =
+                                                                                when Decode.decodeString (Decode.field "result" Decode.string) output is
+                                                                                    Ok text ->
+                                                                                        text
+
+                                                                                    Err _ ->
+                                                                                        output
+                                                                        in
+                                                                        Ok resultText
+                                                                    )
+                                                                |> GrenTask.onError
+                                                                    (\runError ->
+                                                                        let
+                                                                            errMsg =
+                                                                                when runError is
+                                                                                    ChildProcess.InitError { errorCode } ->
+                                                                                        "Failed to start planner CLI: " ++ errorCode
+
+                                                                                    ChildProcess.ProgramError { exitCode, stderr } ->
+                                                                                        let
+                                                                                            stderrStr =
+                                                                                                stderr
+                                                                                                    |> Bytes.toString
+                                                                                                    |> Maybe.withDefault ""
+                                                                                        in
+                                                                                        "Planner CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                                                                        in
+                                                                        GrenTask.succeed (Err errMsg)
+                                                                    )
+                                                )
+                            )
+                        |> GrenTask.onError
+                            (\errMsg ->
+                                GrenTask.succeed (Err errMsg)
+                            )
+                        |> GrenTask.perform (\r -> GotPlannerComplete { taskId = taskId, result = r })
 
 
 {-| Parse planner output. Extracts JSON from a code fence in the output.
@@ -2019,8 +2190,254 @@ questionsResultDecoder =
 
 
 
--- HELPERS
+-- WORKSPACE CONFIG
 
+
+{-| Derive the registry root path from workspace config.
+
+This function is only called in code paths where a workspace config is loaded
+(guarded by model.registry being Just), so the Nothing branch is unreachable.
+-}
+registryRootPath : Model -> Path
+registryRootPath model =
+    when model.workspaceConfig is
+        Just workspaceConfig ->
+            Path.fromPosixString (workspaceConfig.dataDirectory ++ "/registry")
+
+        Nothing ->
+            Debug.todo "registryRootPath called without a loaded workspace config"
+
+
+{-| Derive the upload directory from workspace config.
+
+This function is only called in code paths where a workspace config is loaded
+(guarded by model.registry being Just), so the Nothing branch is unreachable.
+-}
+uploadDir : Model -> String
+uploadDir model =
+    when model.workspaceConfig is
+        Just workspaceConfig ->
+            workspaceConfig.dataDirectory ++ "/uploads"
+
+        Nothing ->
+            Debug.todo "uploadDir called without a loaded workspace config"
+
+
+{-| Get the initial agent directory from workspace config.
+
+This function is only called in code paths where a workspace config is loaded
+(guarded by model.registry being Just), so the Nothing branch is unreachable.
+-}
+initialAgentDir : Model -> String
+initialAgentDir model =
+    when model.workspaceConfig is
+        Just workspaceConfig ->
+            workspaceConfig.initialAgentDirectory
+
+        Nothing ->
+            Debug.todo "initialAgentDir called without a loaded workspace config"
+
+
+{-| Load a workspace config from a filesystem path.
+
+Reads and decodes the `chorus.json` file at the given path.
+Returns the decoded config and the path it was loaded from.
+-}
+loadWorkspaceConfig : FileSystem.Permission -> String -> GrenTask.Task Never (Result String { config : WorkspaceConfig, configPath : String })
+loadWorkspaceConfig filesystemPermission configPath =
+    let
+        path =
+            Path.fromPosixString configPath
+    in
+    FileSystem.readFile filesystemPermission path
+        |> GrenTask.mapError (\e -> FileSystem.errorToString e)
+        |> GrenTask.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        GrenTask.fail "Could not decode config file as UTF-8"
+
+                    Just content ->
+                        when Decode.decodeString Types.workspaceConfigDecoder content is
+                            Ok config ->
+                                GrenTask.succeed { config = config, configPath = configPath }
+
+                            Err err ->
+                                GrenTask.fail ("Invalid config JSON: " ++ Decode.errorToString err)
+            )
+        |> GrenTask.map Ok
+        |> GrenTask.onError (\err -> GrenTask.succeed (Err err))
+
+
+{-| Save a workspace config to a filesystem path.
+-}
+saveWorkspaceConfig : FileSystem.Permission -> String -> WorkspaceConfig -> GrenTask.Task Never (Result String {})
+saveWorkspaceConfig filesystemPermission configPath wsConfig =
+    let
+        path =
+            Path.fromPosixString configPath
+
+        json =
+            Types.encodeWorkspaceConfig wsConfig
+                |> Encode.encode 2
+
+        bytes =
+            Bytes.fromString json
+    in
+    FileSystem.writeFile filesystemPermission bytes path
+        |> GrenTask.map (\_ -> Ok {})
+        |> GrenTask.onError (\err -> GrenTask.succeed (Err (FileSystem.errorToString err)))
+
+
+{-| Create a new workspace config with defaults relative to the given directory.
+-}
+createWorkspaceConfig : FileSystem.Permission -> String -> GrenTask.Task Never (Result String { config : WorkspaceConfig, configPath : String })
+createWorkspaceConfig filesystemPermission dirPath =
+    let
+        configPath =
+            dirPath ++ "/chorus.json"
+
+        wsConfig =
+            { dataDirectory = dirPath ++ "/data"
+            , agentsDirectory = dirPath ++ "/agents"
+            , allowedAgentDirectories = [ dirPath ++ "/agent_workspace" ]
+            , initialAgentDirectory = dirPath ++ "/agent_workspace"
+            , systemAgentProvider = NotConfigured
+            }
+
+        json =
+            Types.encodeWorkspaceConfig wsConfig
+                |> Encode.encode 2
+
+        bytes =
+            Bytes.fromString json
+
+        configFilePath =
+            Path.fromPosixString configPath
+
+        -- Ensure directories exist (propagate errors instead of swallowing)
+        ensureDir p =
+            FileSystem.makeDirectory filesystemPermission { recursive = True } (Path.fromPosixString p)
+                |> GrenTask.map (\_ -> {})
+                |> GrenTask.mapError (\err -> FileSystem.errorToString err)
+    in
+    ensureDir dirPath
+        |> GrenTask.andThen (\_ -> ensureDir wsConfig.dataDirectory)
+        |> GrenTask.andThen (\_ -> ensureDir wsConfig.agentsDirectory)
+        |> GrenTask.andThen (\_ -> ensureDir wsConfig.initialAgentDirectory)
+        |> GrenTask.andThen
+            (\_ ->
+                FileSystem.writeFile filesystemPermission bytes configFilePath
+                    |> GrenTask.mapError (\err -> FileSystem.errorToString err)
+                    |> GrenTask.map (\_ -> Ok { config = wsConfig, configPath = configPath })
+            )
+        |> GrenTask.onError (\err -> GrenTask.succeed (Err err))
+
+
+
+-- CONFIG API HANDLERS
+
+
+{-| Handle GET /api/config.
+-}
+handleGetConfig : Model -> Response -> Cmd Msg
+handleGetConfig model response =
+    when model.workspaceConfig is
+        Nothing ->
+            response
+                |> Response.setStatus 404
+                |> Response.setHeader "Content-Type" "application/json"
+                |> Response.setBody "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"No workspace config loaded\"}}"
+                |> Response.send
+
+        Just config ->
+            let
+                body =
+                    Encode.object
+                        [ { key = "data", value = Types.encodeWorkspaceConfig config }
+                        , { key = "configPath", value = Encode.string (Maybe.withDefault "" model.workspaceConfigPath) }
+                        ]
+                        |> Encode.encode 0
+            in
+            response
+                |> Response.setStatus 200
+                |> Response.setHeader "Content-Type" "application/json"
+                |> Response.setBody body
+                |> Response.send
+
+
+{-| Handle PUT /api/config.
+
+Validates that initialAgentDirectory is one of the allowedAgentDirectories
+before saving, as required by the acceptance criteria.
+-}
+handleUpdateConfig : Model -> HttpServer.Request -> Response -> Cmd Msg
+handleUpdateConfig model request response =
+    when { workspaceConfig = model.workspaceConfig, configPath = model.workspaceConfigPath } is
+        { workspaceConfig = Just _, configPath = Just currentConfigPath } ->
+            when HttpServer.bodyFromJson Types.workspaceConfigDecoder request is
+                Err _ ->
+                    sendBadRequest response "Invalid JSON body for config update"
+
+                Ok newConfig ->
+                    if not (Array.any (\dir -> dir == newConfig.initialAgentDirectory) newConfig.allowedAgentDirectories) then
+                        sendBadRequest response "initialAgentDirectory must be one of the allowedAgentDirectories"
+                    else
+                        saveWorkspaceConfig model.filesystemPermission currentConfigPath newConfig
+                            |> GrenTask.perform
+                                (\result ->
+                                    when result is
+                                        Ok _ ->
+                                            GotConfigLoaded
+                                                { response = Just response
+                                                , result = Ok { config = newConfig, configPath = currentConfigPath }
+                                                }
+
+                                        Err errMsg ->
+                                            GotApiResult
+                                                { response = response
+                                                , result = Api.ApiError { statusCode = 500, code = "WRITE_ERROR", message = errMsg }
+                                                }
+                                )
+
+        _ ->
+            sendBadRequest response "No workspace config loaded"
+
+
+{-| Handle POST /api/config/select.
+-}
+handleSelectConfig : Model -> HttpServer.Request -> Response -> Cmd Msg
+handleSelectConfig model request response =
+    when HttpServer.bodyFromJson (Decode.field "path" Decode.string) request is
+        Err _ ->
+            sendBadRequest response "Invalid JSON body: requires 'path' field"
+
+        Ok configPath ->
+            loadWorkspaceConfig model.filesystemPermission configPath
+                |> GrenTask.perform
+                    (\result ->
+                        GotConfigLoaded { response = Just response, result = result }
+                    )
+
+
+{-| Handle POST /api/config/create.
+-}
+handleCreateConfig : Model -> HttpServer.Request -> Response -> Cmd Msg
+handleCreateConfig model request response =
+    when HttpServer.bodyFromJson (Decode.field "path" Decode.string) request is
+        Err _ ->
+            sendBadRequest response "Invalid JSON body: requires 'path' field (directory)"
+
+        Ok dirPath ->
+            createWorkspaceConfig model.filesystemPermission dirPath
+                |> GrenTask.perform
+                    (\result ->
+                        GotConfigLoaded { response = Just response, result = result }
+                    )
+
+
+
+-- HELPERS
 
 
 {-| Get a SecureContext for cryptographic operations.

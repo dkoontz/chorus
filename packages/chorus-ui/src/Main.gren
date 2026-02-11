@@ -27,13 +27,14 @@ import Json.Decode
 import Set exposing (Set)
 import Task
 import Time
-import Types exposing (AgentConfig(..), AgentProvider(..), ProviderConfig, Task(..), TaskStatus(..))
+import Types exposing (AgentConfig(..), AgentProvider(..), ProviderConfig, Task(..), TaskStatus(..), WorkspaceConfig)
 import Url exposing (Url)
 import View.Agents as Agents exposing (AgentForm)
 import View.Providers as Providers exposing (ProviderForm)
 import View.Board as Board
-import View.History as History
+import View.SystemSettings as SystemSettings exposing (SettingsForm)
 import View.TaskDetail as TaskDetail exposing (PlanningSection(..), PlanningEditState)
+import View.Workspaces as Workspaces
 
 
 -- MAIN
@@ -76,6 +77,12 @@ type alias Model =
     , startingAgent : Maybe String
     , draftAnswers : Array String
     , expandedEvents : Set Int
+    , workspaceConfig : Maybe WorkspaceConfig
+    , workspaceConfigPath : Maybe String
+    , openPath : String
+    , createPath : String
+    , settingsForm : Maybe SettingsForm
+    , settingsValidationError : Maybe String
     }
 
 
@@ -84,6 +91,8 @@ type Page
     | TaskDetailPage String
     | AgentsPage
     | ProvidersPage
+    | WorkspacesPage
+    | SystemSettingsPage
     | NotFoundPage
 
 
@@ -176,6 +185,22 @@ type Msg
     | SubmitAnswers String
     | AnswersSubmitted (Result Http.Error Types.Task)
     | ToggleEventExpanded Int
+      -- Workspace config
+    | GotConfig (Result Http.Error Api.ConfigResponse)
+    | UpdateOpenPath String
+    | UpdateCreatePath String
+    | SelectConfig
+    | CreateConfig
+      -- System settings
+    | UpdateSettingsDataDirectory String
+    | UpdateSettingsAgentsDirectory String
+    | UpdateSettingsAllowedDir { index : Int, value : String }
+    | AddSettingsAllowedDir
+    | RemoveSettingsAllowedDir Int
+    | UpdateSettingsInitialAgentDirectory String
+    | UpdateSettingsSystemAgentProvider String
+    | SaveSettings
+    | SettingsSaved (Result Http.Error Api.ConfigResponse)
     | NoOp
 
 
@@ -186,12 +211,9 @@ type Msg
 init : {} -> Url -> Nav.Key -> { model : Model, command : Cmd Msg }
 init _ url key =
     let
-        page =
-            urlToPage url
-
         model =
             { key = key
-            , page = page
+            , page = WorkspacesPage
             , tasks = []
             , selectedTask = Nothing
             , taskHistory = Nothing
@@ -210,12 +232,18 @@ init _ url key =
             , startingAgent = Nothing
             , draftAnswers = []
             , expandedEvents = Set.empty
+            , workspaceConfig = Nothing
+            , workspaceConfigPath = Nothing
+            , openPath = ""
+            , createPath = ""
+            , settingsForm = Nothing
+            , settingsValidationError = Nothing
             }
     in
     { model = model
     , command =
         Cmd.batch
-            [ loadPageData page
+            [ Api.getConfig GotConfig
             , Task.perform GotZone Time.here
             ]
     }
@@ -235,6 +263,12 @@ urlToPage url =
 
         "/providers" ->
             ProvidersPage
+
+        "/workspaces" ->
+            WorkspacesPage
+
+        "/settings" ->
+            SystemSettingsPage
 
         _ ->
             if String.startsWith "/tasks/" url.path then
@@ -273,6 +307,15 @@ loadPageData page =
         ProvidersPage ->
             Api.getProviders GotProviders
 
+        WorkspacesPage ->
+            Api.getConfig GotConfig
+
+        SystemSettingsPage ->
+            Cmd.batch
+                [ Api.getConfig GotConfig
+                , Api.getProviders GotProviders
+                ]
+
         NotFoundPage ->
             Cmd.none
 
@@ -298,8 +341,14 @@ update msg model =
 
         UrlChanged url ->
             let
-                page =
+                requestedPage =
                     urlToPage url
+
+                page =
+                    if model.workspaceConfig == Nothing && requiresConfig requestedPage then
+                        WorkspacesPage
+                    else
+                        requestedPage
             in
             { model =
                 { model
@@ -315,6 +364,12 @@ update msg model =
                     , startingAgent = Nothing
                     , draftAnswers = []
                     , expandedEvents = Set.empty
+                    , settingsForm =
+                        if page == SystemSettingsPage then
+                            Maybe.map SystemSettings.workspaceConfigToForm model.workspaceConfig
+                        else
+                            model.settingsForm
+                    , settingsValidationError = Nothing
                 }
             , command = loadPageData page
             }
@@ -449,6 +504,12 @@ update msg model =
                             ]
 
                     ProvidersPage ->
+                        Api.getProviders GotProviders
+
+                    WorkspacesPage ->
+                        Cmd.none
+
+                    SystemSettingsPage ->
                         Api.getProviders GotProviders
 
                     NotFoundPage ->
@@ -1229,6 +1290,223 @@ update msg model =
             , command = Cmd.none
             }
 
+        -- Workspace config
+
+        GotConfig result ->
+            when result is
+                Ok configResponse ->
+                    let
+                        wc =
+                            configResponse.config
+
+                        newModel =
+                            { model
+                                | workspaceConfig = Just wc
+                                , workspaceConfigPath = Just configResponse.configPath
+                                , loading = False
+                                , error = Nothing
+                                , settingsForm = Just (SystemSettings.workspaceConfigToForm wc)
+                            }
+                    in
+                    if model.workspaceConfig == Nothing && model.page == WorkspacesPage then
+                        -- First config load from init or workspace selection: navigate to Board
+                        { model = { newModel | page = BoardPage }
+                        , command = loadPageData BoardPage
+                        }
+                    else
+                        { model = newModel
+                        , command = Cmd.none
+                        }
+
+                Err _ ->
+                    -- No config loaded (404 or error) - stay on WorkspacesPage
+                    { model = { model | loading = False, page = WorkspacesPage }
+                    , command = Cmd.none
+                    }
+
+        UpdateOpenPath path ->
+            { model = { model | openPath = path }
+            , command = Cmd.none
+            }
+
+        UpdateCreatePath path ->
+            { model = { model | createPath = path }
+            , command = Cmd.none
+            }
+
+        SelectConfig ->
+            if String.isEmpty (String.trim model.openPath) then
+                { model = { model | error = Just "Please enter a path to a chorus.json file" }
+                , command = Cmd.none
+                }
+            else
+                { model = { model | loading = True }
+                , command = Api.selectConfig (String.trim model.openPath) GotConfig
+                }
+
+        CreateConfig ->
+            if String.isEmpty (String.trim model.createPath) then
+                { model = { model | error = Just "Please enter a directory path" }
+                , command = Cmd.none
+                }
+            else
+                { model = { model | loading = True }
+                , command = Api.createConfig (String.trim model.createPath) GotConfig
+                }
+
+        -- System settings
+
+        UpdateSettingsDataDirectory val ->
+            { model =
+                { model
+                    | settingsForm =
+                        Maybe.map (\f -> { f | dataDirectory = val }) model.settingsForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateSettingsAgentsDirectory val ->
+            { model =
+                { model
+                    | settingsForm =
+                        Maybe.map (\f -> { f | agentsDirectory = val }) model.settingsForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateSettingsAllowedDir { index, value } ->
+            { model =
+                { model
+                    | settingsForm =
+                        Maybe.map
+                            (\f ->
+                                { f
+                                    | allowedAgentDirectories =
+                                        Array.set index value f.allowedAgentDirectories
+                                }
+                            )
+                            model.settingsForm
+                }
+            , command = Cmd.none
+            }
+
+        AddSettingsAllowedDir ->
+            { model =
+                { model
+                    | settingsForm =
+                        Maybe.map
+                            (\f ->
+                                { f
+                                    | allowedAgentDirectories =
+                                        Array.pushLast "" f.allowedAgentDirectories
+                                }
+                            )
+                            model.settingsForm
+                }
+            , command = Cmd.none
+            }
+
+        RemoveSettingsAllowedDir index ->
+            { model =
+                { model
+                    | settingsForm =
+                        Maybe.map
+                            (\f ->
+                                { f
+                                    | allowedAgentDirectories =
+                                        f.allowedAgentDirectories
+                                            |> Array.indexedMap (\i item -> { index = i, item = item })
+                                            |> Array.keepIf (\entry -> entry.index /= index)
+                                            |> Array.map .item
+                                }
+                            )
+                            model.settingsForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateSettingsInitialAgentDirectory val ->
+            { model =
+                { model
+                    | settingsForm =
+                        Maybe.map (\f -> { f | initialAgentDirectory = val }) model.settingsForm
+                }
+            , command = Cmd.none
+            }
+
+        UpdateSettingsSystemAgentProvider val ->
+            { model =
+                { model
+                    | settingsForm =
+                        Maybe.map (\f -> { f | systemAgentProvider = val }) model.settingsForm
+                }
+            , command = Cmd.none
+            }
+
+        SaveSettings ->
+            when model.settingsForm is
+                Just form ->
+                    let
+                        initialDirInAllowed =
+                            Array.any (\d -> d == form.initialAgentDirectory) form.allowedAgentDirectories
+                    in
+                    if not initialDirInAllowed then
+                        { model =
+                            { model
+                                | settingsValidationError =
+                                    Just "Initial agent directory must be one of the allowed agent directories."
+                            }
+                        , command = Cmd.none
+                        }
+                    else
+                        let
+                            provider =
+                                if String.isEmpty (String.trim form.systemAgentProvider) then
+                                    NotConfigured
+                                else
+                                    ProviderRef (String.trim form.systemAgentProvider)
+
+                            wc =
+                                { dataDirectory = form.dataDirectory
+                                , agentsDirectory = form.agentsDirectory
+                                , allowedAgentDirectories = form.allowedAgentDirectories
+                                , initialAgentDirectory = form.initialAgentDirectory
+                                , systemAgentProvider = provider
+                                }
+                        in
+                        { model = { model | loading = True, settingsValidationError = Nothing }
+                        , command = Api.updateConfig wc SettingsSaved
+                        }
+
+                Nothing ->
+                    { model = model
+                    , command = Cmd.none
+                    }
+
+        SettingsSaved result ->
+            when result is
+                Ok configResponse ->
+                    let
+                        wc =
+                            configResponse.config
+                    in
+                    { model =
+                        { model
+                            | workspaceConfig = Just wc
+                            , workspaceConfigPath = Just configResponse.configPath
+                            , settingsForm = Just (SystemSettings.workspaceConfigToForm wc)
+                            , loading = False
+                            , error = Nothing
+                            , settingsValidationError = Nothing
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = { model | loading = False, error = Just (httpErrorToString err) }
+                    , command = Cmd.none
+                    }
+
         NoOp ->
             { model = model
             , command = Cmd.none
@@ -1264,28 +1542,38 @@ view model =
 
 viewHeader : Model -> Html Msg
 viewHeader model =
+    let
+        configLoaded =
+            model.workspaceConfig /= Nothing
+
+        navLink url label isActive isEnabled =
+            if isEnabled then
+                a
+                    [ href url
+                    , classList [ { class = "active", enabled = isActive } ]
+                    ]
+                    [ text label ]
+            else
+                span
+                    [ class "nav-disabled"
+                    ]
+                    [ text label ]
+    in
     header [ class "header" ]
         [ div [ class "header-content" ]
             [ h1 [] [ text "Chorus" ]
             , nav [ class "nav" ]
-                [ a
-                    [ href "/"
-                    , classList [ { class = "active", enabled = model.page == BoardPage } ]
-                    ]
-                    [ text "Board" ]
-                , a
-                    [ href "/agents"
-                    , classList [ { class = "active", enabled = model.page == AgentsPage } ]
-                    ]
-                    [ text "Agents" ]
-                , a
-                    [ href "/providers"
-                    , classList [ { class = "active", enabled = model.page == ProvidersPage } ]
-                    ]
-                    [ text "Providers" ]
+                [ navLink "/workspaces" "Workspaces" (model.page == WorkspacesPage) True
+                , navLink "/" "Board" (model.page == BoardPage) configLoaded
+                , navLink "/agents" "Agents" (model.page == AgentsPage) configLoaded
+                , navLink "/providers" "Providers" (model.page == ProvidersPage) configLoaded
+                , navLink "/settings" "Settings" (model.page == SystemSettingsPage) configLoaded
                 ]
-            , button [ class "btn btn-primary", onClick OpenCreateForm ]
-                [ text "+ New Task" ]
+            , if configLoaded then
+                button [ class "btn btn-primary", onClick OpenCreateForm ]
+                    [ text "+ New Task" ]
+              else
+                text ""
             ]
         ]
 
@@ -1395,6 +1683,35 @@ viewMain model =
                         }
                     , viewDeleteProviderConfirmation model
                     ]
+
+            WorkspacesPage ->
+                Workspaces.view
+                    { workspaceConfig = model.workspaceConfig
+                    , workspaceConfigPath = model.workspaceConfigPath
+                    , openPath = model.openPath
+                    , createPath = model.createPath
+                    , loading = model.loading
+                    , onUpdateOpenPath = UpdateOpenPath
+                    , onUpdateCreatePath = UpdateCreatePath
+                    , onSelectConfig = SelectConfig
+                    , onCreateConfig = CreateConfig
+                    }
+
+            SystemSettingsPage ->
+                SystemSettings.view
+                    { settingsForm = model.settingsForm
+                    , providers = model.providers
+                    , loading = model.loading
+                    , validationError = model.settingsValidationError
+                    , onUpdateDataDirectory = UpdateSettingsDataDirectory
+                    , onUpdateAgentsDirectory = UpdateSettingsAgentsDirectory
+                    , onUpdateAllowedDir = UpdateSettingsAllowedDir
+                    , onAddAllowedDir = AddSettingsAllowedDir
+                    , onRemoveAllowedDir = RemoveSettingsAllowedDir
+                    , onUpdateInitialAgentDirectory = UpdateSettingsInitialAgentDirectory
+                    , onUpdateSystemAgentProvider = UpdateSettingsSystemAgentProvider
+                    , onSaveSettings = SaveSettings
+                    }
 
             NotFoundPage ->
                 div [ class "not-found" ]
@@ -1536,6 +1853,21 @@ buildAgentPrompt task =
                         ]
             in
             String.join "\n\n" sections
+
+
+{-| Does this page require a workspace config to be loaded?
+-}
+requiresConfig : Page -> Bool
+requiresConfig page =
+    when page is
+        WorkspacesPage ->
+            False
+
+        NotFoundPage ->
+            False
+
+        _ ->
+            True
 
 
 httpErrorToString : Http.Error -> String

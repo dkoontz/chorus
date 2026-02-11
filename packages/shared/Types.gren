@@ -18,6 +18,7 @@ module Types exposing
     , ProviderType(..)
     , ProviderConfig
     , AgentProvider(..)
+    , WorkspaceConfig
     -- Encoders
     , encodeTask
     , encodeStatus
@@ -35,6 +36,7 @@ module Types exposing
     , encodeProviderType
     , encodeProviderConfig
     , encodeAgentProvider
+    , encodeWorkspaceConfig
     -- Decoders
     , taskDecoder
     , statusDecoder
@@ -51,6 +53,7 @@ module Types exposing
     , providerTypeDecoder
     , providerConfigDecoder
     , agentProviderDecoder
+    , workspaceConfigDecoder
     -- Accessors
     , taskId
     , taskDescription
@@ -315,6 +318,21 @@ used as the filename and reference key.
 type alias ProviderConfig =
     { name : String
     , providerType : ProviderType
+    }
+
+
+{-| Workspace configuration stored in a `chorus.json` file.
+
+Contains all settings that define a workspace: where data is stored,
+where agents live, which directories agents can access, and which
+provider to use for internal/system agents.
+-}
+type alias WorkspaceConfig =
+    { dataDirectory : String
+    , agentsDirectory : String
+    , allowedAgentDirectories : Array String
+    , initialAgentDirectory : String
+    , systemAgentProvider : AgentProvider
     }
 
 
@@ -1308,6 +1326,43 @@ providerConfigDecoder =
         )
         (Decode.field "name" Decode.string)
         (Decode.field "providerType" providerTypeDecoder)
+
+
+
+-- WORKSPACE CONFIG JSON
+
+
+{-| Encode a WorkspaceConfig to JSON.
+-}
+encodeWorkspaceConfig : WorkspaceConfig -> Encode.Value
+encodeWorkspaceConfig config =
+    Encode.object
+        [ { key = "dataDirectory", value = Encode.string config.dataDirectory }
+        , { key = "agentsDirectory", value = Encode.string config.agentsDirectory }
+        , { key = "allowedAgentDirectories", value = Encode.array Encode.string config.allowedAgentDirectories }
+        , { key = "initialAgentDirectory", value = Encode.string config.initialAgentDirectory }
+        , { key = "systemAgentProvider", value = encodeAgentProvider config.systemAgentProvider }
+        ]
+
+
+{-| Decode a WorkspaceConfig from JSON.
+-}
+workspaceConfigDecoder : Decoder WorkspaceConfig
+workspaceConfigDecoder =
+    Decode.map5
+        (\dataDirectory agentsDirectory allowedAgentDirectories initialAgentDirectory systemAgentProvider ->
+            { dataDirectory = dataDirectory
+            , agentsDirectory = agentsDirectory
+            , allowedAgentDirectories = allowedAgentDirectories
+            , initialAgentDirectory = initialAgentDirectory
+            , systemAgentProvider = systemAgentProvider
+            }
+        )
+        (Decode.field "dataDirectory" Decode.string)
+        (Decode.field "agentsDirectory" Decode.string)
+        (Decode.field "allowedAgentDirectories" (Decode.array Decode.string))
+        (Decode.field "initialAgentDirectory" Decode.string)
+        (Decode.field "systemAgentProvider" agentProviderDecoder)
 
 
 

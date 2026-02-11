@@ -6,9 +6,13 @@ module Config exposing
 
 {-| Application configuration.
 
-Provides config types and constructors. Paths are resolved relative to a
-base directory (typically the binary's parent directory) so the application
-works correctly regardless of the current working directory.
+Provides config types and constructors. The Config type holds server-level
+settings (host, port, static files, tools path, log level). Workspace-level
+settings (data directory, agents directory, etc.) are stored in a separate
+`chorus.json` file and loaded at runtime via the workspace config system.
+
+The `CHORUS_CONFIG` environment variable can point to a `chorus.json` file
+to auto-load a workspace at startup (useful for headless/testing).
 
 -}
 
@@ -19,14 +23,10 @@ import Logging exposing (LogLevel(..))
 type alias Config =
     { host : String
     , serverPort : Int
-    , registryRoot : String
-    , workspacesRoot : String
     , staticRoot : String
-    , uploadDir : String
-    , agentsRoot : String
-    , providersRoot : String
     , chorusToolsPath : String
     , logLevel : LogLevel
+    , chorusConfigPath : Maybe String
     }
 
 
@@ -34,29 +34,26 @@ defaultConfig : Config
 defaultConfig =
     { host = "0.0.0.0"
     , serverPort = 8080
-    , registryRoot = "./data/registry"
-    , workspacesRoot = "./data/workspaces"
     , staticRoot = "./static"
-    , uploadDir = "./data/uploads"
-    , agentsRoot = "./data/agents"
-    , providersRoot = "./data/providers"
     , chorusToolsPath = "./tools/chorus-tools"
     , logLevel = LogInfo
+    , chorusConfigPath = Nothing
     }
 
 
 {-| Create configuration from environment variables.
 
     The `baseDir` parameter is the parent directory of the running binary,
-    used to resolve default paths for static files, data, and tools relative
+    used to resolve default paths for static files and tools relative
     to the binary location rather than the current working directory.
 
     Supported environment variables:
     - CHORUS_HOST: Server host (default: 0.0.0.0)
     - CHORUS_PORT: Server port (default: 8080)
-    - CHORUS_DATA_DIR: Base data directory (default: <baseDir>/data)
     - CHORUS_STATIC_DIR: Static files directory (default: <baseDir>/static)
+    - CHORUS_TOOLS_PATH: Path to chorus-tools binary (default: <baseDir>/tools/chorus-tools)
     - CHORUS_LOG_LEVEL: Log level - error, warn, info, debug (default: info)
+    - CHORUS_CONFIG: Path to a chorus.json file to auto-load at startup
 
 -}
 configFromEnv : String -> Dict String String -> Config -> Config
@@ -71,10 +68,6 @@ configFromEnv baseDir envVars config =
                 |> Maybe.andThen String.toInt
                 |> Maybe.withDefault config.serverPort
 
-        dataDir =
-            Dict.get "CHORUS_DATA_DIR" envVars
-                |> Maybe.withDefault (baseDir ++ "/data")
-
         staticRoot =
             Dict.get "CHORUS_STATIC_DIR" envVars
                 |> Maybe.withDefault (baseDir ++ "/static")
@@ -84,18 +77,13 @@ configFromEnv baseDir envVars config =
                 |> Maybe.andThen Logging.parseLogLevel
                 |> Maybe.withDefault config.logLevel
 
-        uploadDir =
-            Dict.get "CHORUS_UPLOAD_DIR" envVars
-                |> Maybe.withDefault (dataDir ++ "/uploads")
+        chorusConfigPath =
+            Dict.get "CHORUS_CONFIG" envVars
     in
     { host = host
     , serverPort = serverPort
-    , registryRoot = dataDir ++ "/registry"
-    , workspacesRoot = dataDir ++ "/workspaces"
     , staticRoot = staticRoot
-    , uploadDir = uploadDir
-    , agentsRoot = dataDir ++ "/agents"
-    , providersRoot = dataDir ++ "/providers"
     , chorusToolsPath = Dict.get "CHORUS_TOOLS_PATH" envVars |> Maybe.withDefault (baseDir ++ "/tools/chorus-tools")
     , logLevel = logLevel
+    , chorusConfigPath = chorusConfigPath
     }

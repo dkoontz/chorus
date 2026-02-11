@@ -46,7 +46,7 @@ import Web.Api as Api
 type alias ToolExecutionContext =
     { filesystemPermission : FileSystem.Permission
     , childProcessPermission : ChildProcess.Permission
-    , workspaceRoot : String
+    , allowedDirectories : Array String
     , allowedTools : Array String
     , apiContext : Api.ApiContext
     , taskId : TaskId
@@ -167,49 +167,49 @@ dispatchFileTool ctx requestBody toMsg =
 
         Ok toolRequest ->
             let
-                workspaceRoot =
-                    Validation.makeWorkspaceRoot ctx.workspaceRoot
+                allowedDirs =
+                    Validation.makeAllowedDirectories ctx.allowedDirectories
             in
             when toolRequest is
                 ReadRequest input ->
                     executeFileTask
-                        (File.read ctx.filesystemPermission workspaceRoot input)
+                        (File.read ctx.filesystemPermission allowedDirs input)
                         encodeReadOutput
                         toMsg
 
                 CreateRequest input ->
                     executeFileTask
-                        (File.create ctx.filesystemPermission workspaceRoot input)
+                        (File.create ctx.filesystemPermission allowedDirs input)
                         encodeWriteOutput
                         toMsg
 
                 WriteRequest input ->
                     executeFileTask
-                        (File.write ctx.filesystemPermission workspaceRoot input)
+                        (File.write ctx.filesystemPermission allowedDirs input)
                         encodeWriteOutput
                         toMsg
 
                 PatchRequest input ->
                     executeFileTask
-                        (File.patch ctx.filesystemPermission workspaceRoot input)
+                        (File.patch ctx.filesystemPermission allowedDirs input)
                         encodePatchOutput
                         toMsg
 
                 DeleteRequest input ->
                     executeFileTask
-                        (File.delete ctx.filesystemPermission workspaceRoot input)
+                        (File.delete ctx.filesystemPermission allowedDirs input)
                         encodeDeleteOutput
                         toMsg
 
                 ListRequest input ->
                     executeFileTask
-                        (File.list ctx.filesystemPermission ctx.childProcessPermission workspaceRoot input)
+                        (File.list ctx.filesystemPermission ctx.childProcessPermission allowedDirs input)
                         encodeListOutput
                         toMsg
 
                 SearchRequest input ->
                     executeFileTask
-                        (File.search ctx.childProcessPermission workspaceRoot input)
+                        (File.search ctx.childProcessPermission allowedDirs input)
                         encodeSearchOutput
                         toMsg
 

@@ -7,8 +7,8 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 LOG_FILE="/tmp/$(echo "$PROJECT_ROOT" | tr '/' '-').log"
 DATA_DIR="$PROJECT_ROOT/dist/data"
 
-# Create data directories if needed
-mkdir -p "$DATA_DIR/registry" "$DATA_DIR/workspaces" "$DATA_DIR/uploads"
+# Create data directory if needed
+mkdir -p "$DATA_DIR"
 
 # Truncate log file
 : > "$LOG_FILE"
@@ -21,7 +21,7 @@ echo $! > "$PROJECT_ROOT/dist/data/.pid"
 echo "Waiting for app to be ready..." >&2
 elapsed=0
 while [ $elapsed -lt 30 ]; do
-    if curl -sf http://localhost:8080/api/tasks > /dev/null 2>&1; then
+    if curl -so /dev/null http://localhost:8080/api/config 2>/dev/null; then
         echo "App ready on http://localhost:8080" >&2
         exit 0
     fi

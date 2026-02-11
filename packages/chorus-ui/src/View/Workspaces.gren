@@ -1,0 +1,129 @@
+module View.Workspaces exposing (view)
+
+{-| Workspaces view for selecting or creating a workspace config.
+-}
+
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Html.Events exposing (onClick, onInput, onSubmit)
+import Types exposing (WorkspaceConfig)
+
+
+{-| Configuration for the Workspaces view.
+-}
+type alias Config msg =
+    { workspaceConfig : Maybe WorkspaceConfig
+    , workspaceConfigPath : Maybe String
+    , openPath : String
+    , createPath : String
+    , loading : Bool
+    , onUpdateOpenPath : String -> msg
+    , onUpdateCreatePath : String -> msg
+    , onSelectConfig : msg
+    , onCreateConfig : msg
+    }
+
+
+{-| Render the Workspaces tab.
+-}
+view : Config msg -> Html msg
+view config =
+    div [ class "workspaces-page" ]
+        [ h2 [] [ text "Workspaces" ]
+        , when config.workspaceConfig is
+            Just wc ->
+                viewActiveWorkspace config wc
+
+            Nothing ->
+                viewNoWorkspace config
+        ]
+
+
+viewActiveWorkspace : Config msg -> WorkspaceConfig -> Html msg
+viewActiveWorkspace config wc =
+    div [ class "active-workspace" ]
+        [ div [ class "workspace-info" ]
+            [ h3 [] [ text "Active Workspace" ]
+            , div [ class "info-row" ]
+                [ span [ class "info-label" ] [ text "Config Path:" ]
+                , span [ class "info-value" ] [ text (Maybe.withDefault "" config.workspaceConfigPath) ]
+                ]
+            , div [ class "info-row" ]
+                [ span [ class "info-label" ] [ text "Data Directory:" ]
+                , span [ class "info-value" ] [ text wc.dataDirectory ]
+                ]
+            , div [ class "info-row" ]
+                [ span [ class "info-label" ] [ text "Agents Directory:" ]
+                , span [ class "info-value" ] [ text wc.agentsDirectory ]
+                ]
+            ]
+        , hr [] []
+        , viewOpenWorkspace config
+        , viewCreateWorkspace config
+        ]
+
+
+viewNoWorkspace : Config msg -> Html msg
+viewNoWorkspace config =
+    div [ class "no-workspace" ]
+        [ p [ class "workspace-notice" ]
+            [ text "No workspace is loaded. Open an existing workspace or create a new one to get started." ]
+        , div [ class "workspace-actions" ]
+            [ viewOpenWorkspace config
+            , viewCreateWorkspace config
+            ]
+        ]
+
+
+viewOpenWorkspace : Config msg -> Html msg
+viewOpenWorkspace config =
+    div [ class "workspace-section" ]
+        [ h3 [] [ text "Open Workspace" ]
+        , p [ class "section-help" ]
+            [ text "Enter the full path to an existing chorus.json file." ]
+        , Html.form [ onSubmit config.onSelectConfig ]
+            [ div [ class "form-row" ]
+                [ input
+                    [ type_ "text"
+                    , class "form-input"
+                    , placeholder "/path/to/chorus.json"
+                    , value config.openPath
+                    , onInput config.onUpdateOpenPath
+                    ]
+                    []
+                , button
+                    [ type_ "submit"
+                    , class "btn btn-primary"
+                    , disabled (String.isEmpty (String.trim config.openPath) || config.loading)
+                    ]
+                    [ text "Open" ]
+                ]
+            ]
+        ]
+
+
+viewCreateWorkspace : Config msg -> Html msg
+viewCreateWorkspace config =
+    div [ class "workspace-section" ]
+        [ h3 [] [ text "New Workspace" ]
+        , p [ class "section-help" ]
+            [ text "Enter a directory path where the workspace should be created." ]
+        , Html.form [ onSubmit config.onCreateConfig ]
+            [ div [ class "form-row" ]
+                [ input
+                    [ type_ "text"
+                    , class "form-input"
+                    , placeholder "/path/to/workspace/directory"
+                    , value config.createPath
+                    , onInput config.onUpdateCreatePath
+                    ]
+                    []
+                , button
+                    [ type_ "submit"
+                    , class "btn btn-primary"
+                    , disabled (String.isEmpty (String.trim config.createPath) || config.loading)
+                    ]
+                    [ text "Create" ]
+                ]
+            ]
+        ]

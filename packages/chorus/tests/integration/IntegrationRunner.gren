@@ -259,13 +259,9 @@ initRegistry ctx subdir =
         -- so we need Path.append childPath parentPath to get parent/child
         registryRoot =
             Path.append (Path.fromPosixString (subdir ++ "/registry")) ctx.tempDir
-
-        workspacesRoot =
-            Path.append (Path.fromPosixString (subdir ++ "/workspaces")) ctx.tempDir
     in
     Registry.init ctx.filesystemPermission ctx.secureContext
         { registryRoot = Path.toPosixString registryRoot
-        , workspacesRoot = Path.toPosixString workspacesRoot
         }
         |> GrenTask.mapError Registry.errorToString
 
@@ -315,13 +311,9 @@ testInitCreatesDirectories ctx subdir =
     let
         registryRoot =
             Path.append (Path.fromPosixString (subdir ++ "/registry")) ctx.tempDir
-
-        workspacesRoot =
-            Path.append (Path.fromPosixString (subdir ++ "/workspaces")) ctx.tempDir
     in
     initRegistry ctx subdir
         |> GrenTask.andThen (\_ -> assertFileExists ctx.filesystemPermission registryRoot)
-        |> GrenTask.andThen (\_ -> assertFileExists ctx.filesystemPermission workspacesRoot)
 
 
 testInitCreatesRegistryJson : Context -> String -> GrenTask.Task String {}

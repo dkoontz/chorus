@@ -53,7 +53,6 @@ type Registry
         { filesystemPermission : FileSystem.Permission
         , secureContext : SecureContext
         , registryRoot : Path
-        , workspacesRoot : Path
         }
 
 
@@ -121,26 +120,21 @@ setSessionId sid task =
 init :
     FileSystem.Permission
     -> SecureContext
-    -> { registryRoot : String, workspacesRoot : String }
+    -> { registryRoot : String }
     -> GrenTask.Task Error Registry
 init filesystemPermission secureContext config =
     let
         registryPath =
             Path.fromPosixString config.registryRoot
 
-        workspacesPath =
-            Path.fromPosixString config.workspacesRoot
-
         registry =
             Registry
                 { filesystemPermission = filesystemPermission
                 , secureContext = secureContext
                 , registryRoot = registryPath
-                , workspacesRoot = workspacesPath
                 }
     in
     ensureDirectoryExists filesystemPermission registryPath
-        |> GrenTask.andThen (\_ -> ensureDirectoryExists filesystemPermission workspacesPath)
         |> GrenTask.andThen (\_ -> ensureRegistryIndex filesystemPermission registryPath)
         |> GrenTask.map (\_ -> registry)
 
@@ -210,9 +204,6 @@ createTask (Registry config) { description, source } =
                             taskDir =
                                 Path.append (Path.fromPosixString newId) config.registryRoot
 
-                            workspaceDir =
-                                Path.append (Path.fromPosixString newId) config.workspacesRoot
-
                             task =
                                 DescriptionOnly
                                     { id = newTaskId
@@ -229,9 +220,7 @@ createTask (Registry config) { description, source } =
                         in
                         -- 2. Create task directory
                         ensureDirectoryExists config.filesystemPermission taskDir
-                            -- 3. Create workspace directory
-                            |> GrenTask.andThen (\_ -> ensureDirectoryExists config.filesystemPermission workspaceDir)
-                            -- 4. Write task.json
+                            -- 3. Write task.json
                             |> GrenTask.andThen
                                 (\_ ->
                                     let

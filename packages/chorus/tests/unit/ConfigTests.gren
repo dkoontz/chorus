@@ -13,16 +13,14 @@ tests : Array { name : String, run : Task.Task String {} }
 tests =
     [ testDefaultPathsUseCwd
     , testBaseDirAppliedToStaticRoot
-    , testBaseDirAppliedToDataDir
     , testBaseDirAppliedToToolsPath
     , testEnvVarOverridesStaticRoot
-    , testEnvVarOverridesDataDir
     , testEnvVarOverridesToolsPath
-    , testEnvVarOverridesUploadDir
     , testEnvVarOverridesHost
     , testEnvVarOverridesPort
     , testEnvVarOverridesLogLevel
-    , testDataDirSubpaths
+    , testChorusConfigEnvVar
+    , testChorusConfigDefault
     , testAbsoluteBaseDir
     ]
 
@@ -70,18 +68,6 @@ testBaseDirAppliedToStaticRoot =
     }
 
 
-testBaseDirAppliedToDataDir : { name : String, run : Task.Task String {} }
-testBaseDirAppliedToDataDir =
-    { name = "configFromEnv computes registryRoot relative to baseDir"
-    , run =
-        let
-            config =
-                Config.configFromEnv "/opt/app" Dict.empty Config.defaultConfig
-        in
-        expectEqual "/opt/app/data/registry" config.registryRoot
-    }
-
-
 testBaseDirAppliedToToolsPath : { name : String, run : Task.Task String {} }
 testBaseDirAppliedToToolsPath =
     { name = "configFromEnv computes chorusToolsPath relative to baseDir"
@@ -110,22 +96,6 @@ testEnvVarOverridesStaticRoot =
     }
 
 
-testEnvVarOverridesDataDir : { name : String, run : Task.Task String {} }
-testEnvVarOverridesDataDir =
-    { name = "CHORUS_DATA_DIR overrides baseDir-computed data paths"
-    , run =
-        let
-            envVars =
-                Dict.empty
-                    |> Dict.set "CHORUS_DATA_DIR" "/custom/data"
-
-            config =
-                Config.configFromEnv "/opt/app" envVars Config.defaultConfig
-        in
-        expectEqual "/custom/data/registry" config.registryRoot
-    }
-
-
 testEnvVarOverridesToolsPath : { name : String, run : Task.Task String {} }
 testEnvVarOverridesToolsPath =
     { name = "CHORUS_TOOLS_PATH overrides baseDir-computed tools path"
@@ -139,22 +109,6 @@ testEnvVarOverridesToolsPath =
                 Config.configFromEnv "/opt/app" envVars Config.defaultConfig
         in
         expectEqual "/custom/tools/chorus-tools" config.chorusToolsPath
-    }
-
-
-testEnvVarOverridesUploadDir : { name : String, run : Task.Task String {} }
-testEnvVarOverridesUploadDir =
-    { name = "CHORUS_UPLOAD_DIR overrides baseDir-computed upload path"
-    , run =
-        let
-            envVars =
-                Dict.empty
-                    |> Dict.set "CHORUS_UPLOAD_DIR" "/custom/uploads"
-
-            config =
-                Config.configFromEnv "/opt/app" envVars Config.defaultConfig
-        in
-        expectEqual "/custom/uploads" config.uploadDir
     }
 
 
@@ -206,28 +160,31 @@ testEnvVarOverridesLogLevel =
     }
 
 
-testDataDirSubpaths : { name : String, run : Task.Task String {} }
-testDataDirSubpaths =
-    { name = "All data subpaths use the same data directory"
+testChorusConfigEnvVar : { name : String, run : Task.Task String {} }
+testChorusConfigEnvVar =
+    { name = "CHORUS_CONFIG env var sets chorusConfigPath"
+    , run =
+        let
+            envVars =
+                Dict.empty
+                    |> Dict.set "CHORUS_CONFIG" "/path/to/chorus.json"
+
+            config =
+                Config.configFromEnv "." envVars Config.defaultConfig
+        in
+        expectEqual (Just "/path/to/chorus.json") config.chorusConfigPath
+    }
+
+
+testChorusConfigDefault : { name : String, run : Task.Task String {} }
+testChorusConfigDefault =
+    { name = "chorusConfigPath defaults to Nothing when CHORUS_CONFIG not set"
     , run =
         let
             config =
-                Config.configFromEnv "/opt/app" Dict.empty Config.defaultConfig
+                Config.configFromEnv "." Dict.empty Config.defaultConfig
         in
-        if config.registryRoot == "/opt/app/data/registry"
-            && config.workspacesRoot == "/opt/app/data/workspaces"
-            && config.uploadDir == "/opt/app/data/uploads"
-            && config.agentsRoot == "/opt/app/data/agents"
-        then
-            Task.succeed {}
-        else
-            Task.fail
-                ("Data subpaths not consistent:\n"
-                    ++ "  registryRoot: " ++ config.registryRoot ++ "\n"
-                    ++ "  workspacesRoot: " ++ config.workspacesRoot ++ "\n"
-                    ++ "  uploadDir: " ++ config.uploadDir ++ "\n"
-                    ++ "  agentsRoot: " ++ config.agentsRoot
-                )
+        expectEqual Nothing config.chorusConfigPath
     }
 
 
@@ -240,7 +197,6 @@ testAbsoluteBaseDir =
                 Config.configFromEnv "/usr/local/bin" Dict.empty Config.defaultConfig
         in
         if config.staticRoot == "/usr/local/bin/static"
-            && config.registryRoot == "/usr/local/bin/data/registry"
             && config.chorusToolsPath == "/usr/local/bin/tools/chorus-tools"
         then
             Task.succeed {}
@@ -248,7 +204,6 @@ testAbsoluteBaseDir =
             Task.fail
                 ("Expected absolute paths:\n"
                     ++ "  staticRoot: " ++ config.staticRoot ++ "\n"
-                    ++ "  registryRoot: " ++ config.registryRoot ++ "\n"
                     ++ "  chorusToolsPath: " ++ config.chorusToolsPath
                 )
     }

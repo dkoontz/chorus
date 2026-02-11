@@ -6,9 +6,10 @@ import Tools.Validation as Validation
     exposing
         ( ValidPath
         , ValidationError(..)
-        , WorkspaceRoot
-        , makeWorkspaceRoot
+        , AllowedDirectories
+        , makeAllowedDirectories
         , validatePath
+        , toString
         )
 
 
@@ -19,6 +20,8 @@ suite =
         , absolutePathTests
         , emptyPathTests
         , validPathTests
+        , multipleDirectoriesTests
+        , noAllowedDirectoriesTests
         ]
 
 
@@ -28,11 +31,11 @@ pathTraversalTests =
         [ test "rejects simple path traversal" <|
             \_ ->
                 let
-                    workspace =
-                        makeWorkspaceRoot "/var/chorus/workspaces"
+                    allowedDirs =
+                        makeAllowedDirectories [ "/var/chorus/workspaces" ]
 
                     result =
-                        validatePath workspace "../etc/passwd"
+                        validatePath allowedDirs "../etc/passwd"
                 in
                 when result is
                     Err (PathTraversalAttempt _) ->
@@ -43,11 +46,11 @@ pathTraversalTests =
         , test "rejects path traversal in middle" <|
             \_ ->
                 let
-                    workspace =
-                        makeWorkspaceRoot "/var/chorus/workspaces"
+                    allowedDirs =
+                        makeAllowedDirectories [ "/var/chorus/workspaces" ]
 
                     result =
-                        validatePath workspace "foo/../../../etc/passwd"
+                        validatePath allowedDirs "foo/../../../etc/passwd"
                 in
                 when result is
                     Err (PathTraversalAttempt _) ->
@@ -58,11 +61,11 @@ pathTraversalTests =
         , test "rejects multiple path traversals" <|
             \_ ->
                 let
-                    workspace =
-                        makeWorkspaceRoot "/var/chorus/workspaces"
+                    allowedDirs =
+                        makeAllowedDirectories [ "/var/chorus/workspaces" ]
 
                     result =
-                        validatePath workspace "../../../../../../etc/passwd"
+                        validatePath allowedDirs "../../../../../../etc/passwd"
                 in
                 when result is
                     Err (PathTraversalAttempt _) ->
@@ -75,37 +78,54 @@ pathTraversalTests =
 
 absolutePathTests : Test
 absolutePathTests =
-    describe "Absolute path prevention"
-        [ test "rejects absolute path starting with /" <|
+    describe "Absolute path handling"
+        [ test "rejects absolute path outside allowed directories" <|
             \_ ->
                 let
-                    workspace =
-                        makeWorkspaceRoot "/var/chorus/workspaces"
+                    allowedDirs =
+                        makeAllowedDirectories [ "/var/chorus/workspaces" ]
 
                     result =
-                        validatePath workspace "/etc/passwd"
+                        validatePath allowedDirs "/etc/passwd"
                 in
                 when result is
-                    Err (AbsolutePathNotAllowed _) ->
+                    Err (PathOutsideAllowedDirectories _) ->
                         Expect.pass
 
                     _ ->
-                        Expect.fail "Expected AbsolutePathNotAllowed error"
-        , test "rejects absolute path to workspace" <|
+                        Expect.fail "Expected PathOutsideAllowedDirectories error"
+        , test "accepts absolute path within allowed directory" <|
             \_ ->
                 let
-                    workspace =
-                        makeWorkspaceRoot "/var/chorus/workspaces"
+                    allowedDirs =
+                        makeAllowedDirectories [ "/var/chorus/workspaces" ]
 
                     result =
-                        validatePath workspace "/var/chorus/workspaces/file.txt"
+                        validatePath allowedDirs "/var/chorus/workspaces/file.txt"
                 in
                 when result is
-                    Err (AbsolutePathNotAllowed _) ->
+                    Ok validPath ->
+                        Expect.equal
+                            (Validation.toString validPath)
+                            "/var/chorus/workspaces/file.txt"
+
+                    Err err ->
+                        Expect.fail "Expected Ok but got error"
+        , test "rejects absolute path that is a prefix but not a subdirectory" <|
+            \_ ->
+                let
+                    allowedDirs =
+                        makeAllowedDirectories [ "/var/chorus/work" ]
+
+                    result =
+                        validatePath allowedDirs "/var/chorus/workspaces/file.txt"
+                in
+                when result is
+                    Err (PathOutsideAllowedDirectories _) ->
                         Expect.pass
 
                     _ ->
-                        Expect.fail "Expected AbsolutePathNotAllowed error"
+                        Expect.fail "Expected PathOutsideAllowedDirectories error"
         ]
 
 
@@ -115,11 +135,11 @@ emptyPathTests =
         [ test "rejects empty string" <|
             \_ ->
                 let
-                    workspace =
-                        makeWorkspaceRoot "/var/chorus/workspaces"
+                    allowedDirs =
+                        makeAllowedDirectories [ "/var/chorus/workspaces" ]
 
                     result =
-                        validatePath workspace ""
+                        validatePath allowedDirs ""
                 in
                 when result is
                     Err EmptyPath ->
@@ -130,11 +150,11 @@ emptyPathTests =
         , test "rejects whitespace-only string" <|
             \_ ->
                 let
-                    workspace =
-                        makeWorkspaceRoot "/var/chorus/workspaces"
+                    allowedDirs =
+                        makeAllowedDirectories [ "/var/chorus/workspaces" ]
 
                     result =
-                        validatePath workspace "   "
+                        validatePath allowedDirs "   "
                 in
                 when result is
                     Err EmptyPath ->
@@ -151,11 +171,11 @@ validPathTests =
         [ test "accepts simple filename" <|
             \_ ->
                 let
-                    workspace =
-                        makeWorkspaceRoot "/var/chorus/workspaces"
+                    allowedDirs =
+                        makeAllowedDirectories [ "/var/chorus/workspaces" ]
 
                     result =
-                        validatePath workspace "file.txt"
+                        validatePath allowedDirs "file.txt"
                 in
                 when result is
                     Ok validPath ->
@@ -168,11 +188,11 @@ validPathTests =
         , test "accepts nested path" <|
             \_ ->
                 let
-                    workspace =
-                        makeWorkspaceRoot "/var/chorus/workspaces"
+                    allowedDirs =
+                        makeAllowedDirectories [ "/var/chorus/workspaces" ]
 
                     result =
-                        validatePath workspace "src/main/file.txt"
+                        validatePath allowedDirs "src/main/file.txt"
                 in
                 when result is
                     Ok validPath ->
@@ -185,11 +205,11 @@ validPathTests =
         , test "accepts current directory reference" <|
             \_ ->
                 let
-                    workspace =
-                        makeWorkspaceRoot "/var/chorus/workspaces"
+                    allowedDirs =
+                        makeAllowedDirectories [ "/var/chorus/workspaces" ]
 
                     result =
-                        validatePath workspace "./file.txt"
+                        validatePath allowedDirs "./file.txt"
                 in
                 when result is
                     Ok _ ->
@@ -197,4 +217,127 @@ validPathTests =
 
                     Err err ->
                         Expect.fail "Expected Ok but got error"
+        ]
+
+
+multipleDirectoriesTests : Test
+multipleDirectoriesTests =
+    describe "Multiple allowed directories"
+        [ test "relative path resolves against first allowed directory" <|
+            \_ ->
+                let
+                    allowedDirs =
+                        makeAllowedDirectories [ "/workspace/a", "/workspace/b" ]
+
+                    result =
+                        validatePath allowedDirs "file.txt"
+                in
+                when result is
+                    Ok validPath ->
+                        Expect.equal
+                            (Validation.toString validPath)
+                            "/workspace/a/file.txt"
+
+                    Err _ ->
+                        Expect.fail "Expected Ok but got error"
+        , test "absolute path valid in first allowed directory passes" <|
+            \_ ->
+                let
+                    allowedDirs =
+                        makeAllowedDirectories [ "/workspace/a", "/workspace/b" ]
+
+                    result =
+                        validatePath allowedDirs "/workspace/a/file.txt"
+                in
+                when result is
+                    Ok validPath ->
+                        Expect.equal
+                            (Validation.toString validPath)
+                            "/workspace/a/file.txt"
+
+                    Err _ ->
+                        Expect.fail "Expected Ok but got error"
+        , test "absolute path valid in second allowed directory passes" <|
+            \_ ->
+                let
+                    allowedDirs =
+                        makeAllowedDirectories [ "/workspace/a", "/workspace/b" ]
+
+                    result =
+                        validatePath allowedDirs "/workspace/b/file.txt"
+                in
+                when result is
+                    Ok validPath ->
+                        Expect.equal
+                            (Validation.toString validPath)
+                            "/workspace/b/file.txt"
+
+                    Err _ ->
+                        Expect.fail "Expected Ok but got error"
+        , test "absolute path outside all allowed directories fails" <|
+            \_ ->
+                let
+                    allowedDirs =
+                        makeAllowedDirectories [ "/workspace/a", "/workspace/b" ]
+
+                    result =
+                        validatePath allowedDirs "/workspace/c/file.txt"
+                in
+                when result is
+                    Err (PathOutsideAllowedDirectories _) ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail "Expected PathOutsideAllowedDirectories error"
+        , test "path traversal rejected with multiple directories" <|
+            \_ ->
+                let
+                    allowedDirs =
+                        makeAllowedDirectories [ "/workspace/a", "/workspace/b" ]
+
+                    result =
+                        validatePath allowedDirs "../escape"
+                in
+                when result is
+                    Err (PathTraversalAttempt _) ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail "Expected PathTraversalAttempt error"
+        ]
+
+
+noAllowedDirectoriesTests : Test
+noAllowedDirectoriesTests =
+    describe "No allowed directories"
+        [ test "rejects relative path with empty allowed directories" <|
+            \_ ->
+                let
+                    allowedDirs =
+                        makeAllowedDirectories []
+
+                    result =
+                        validatePath allowedDirs "file.txt"
+                in
+                when result is
+                    Err NoAllowedDirectories ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail "Expected NoAllowedDirectories error"
+        , test "rejects absolute path with empty allowed directories" <|
+            \_ ->
+                let
+                    allowedDirs =
+                        makeAllowedDirectories []
+
+                    result =
+                        validatePath allowedDirs "/some/path/file.txt"
+                in
+                when result is
+                    Err NoAllowedDirectories ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail "Expected NoAllowedDirectories error"
         ]

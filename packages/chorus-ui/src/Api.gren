@@ -20,6 +20,11 @@ module Api exposing
     , createProvider
     , updateProvider
     , deleteProvider
+    , getConfig
+    , updateConfig
+    , selectConfig
+    , createConfig
+    , ConfigResponse
     , dataDecoder
     )
 
@@ -34,7 +39,7 @@ import Bytes exposing (Bytes)
 import Http
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
-import Types exposing (AgentConfig, History, ProviderConfig, Queue, SourceInfo, Task)
+import Types exposing (AgentConfig, History, ProviderConfig, Queue, SourceInfo, Task, WorkspaceConfig)
 
 
 
@@ -395,6 +400,83 @@ deleteProvider name toMsg =
         , expect = Http.expectJson toMsg (Decode.succeed {})
         , timeout = Nothing
         , tracker = Nothing
+        }
+
+
+
+-- CONFIG API
+
+
+{-| Response from config API endpoints.
+-}
+type alias ConfigResponse =
+    { config : WorkspaceConfig
+    , configPath : String
+    }
+
+
+configResponseDecoder : Decoder ConfigResponse
+configResponseDecoder =
+    Decode.map2
+        (\config configPath -> { config = config, configPath = configPath })
+        (Decode.field "data" Types.workspaceConfigDecoder)
+        (Decode.field "configPath" Decode.string)
+
+
+{-| Get the current workspace config.
+-}
+getConfig : (Result Http.Error ConfigResponse -> msg) -> Cmd msg
+getConfig toMsg =
+    Http.get
+        { url = "/api/config"
+        , expect = Http.expectJson toMsg configResponseDecoder
+        }
+
+
+{-| Update the current workspace config.
+-}
+updateConfig : WorkspaceConfig -> (Result Http.Error ConfigResponse -> msg) -> Cmd msg
+updateConfig config toMsg =
+    Http.request
+        { method = "PUT"
+        , headers = []
+        , url = "/api/config"
+        , body = Http.jsonBody (Types.encodeWorkspaceConfig config)
+        , expect = Http.expectJson toMsg configResponseDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+{-| Select (load) an existing workspace config file.
+-}
+selectConfig : String -> (Result Http.Error ConfigResponse -> msg) -> Cmd msg
+selectConfig path toMsg =
+    Http.post
+        { url = "/api/config/select"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ { key = "path", value = Encode.string path }
+                    ]
+                )
+        , expect = Http.expectJson toMsg configResponseDecoder
+        }
+
+
+{-| Create a new workspace config at the given directory.
+-}
+createConfig : String -> (Result Http.Error ConfigResponse -> msg) -> Cmd msg
+createConfig dirPath toMsg =
+    Http.post
+        { url = "/api/config/create"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ { key = "path", value = Encode.string dirPath }
+                    ]
+                )
+        , expect = Http.expectJson toMsg configResponseDecoder
         }
 
 
