@@ -1351,7 +1351,7 @@ update msg model =
                 Err err ->
                     let
                         errorMessage =
-                            configErrorToString err
+                            httpErrorToString err
                     in
                     { model =
                         { model
@@ -1960,21 +1960,8 @@ httpErrorToString error =
         Http.BadStatus status ->
             "Server error: " ++ String.fromInt status
 
-        Http.BadBody body ->
-            "Invalid response: " ++ body
-
-
-{-| Convert an Http.Error from a config endpoint to a user-facing string.
-For BadBody errors (which carry the server's error message extracted by
-expectConfigResponse), return the message directly without the "Invalid
-response: " prefix since the server is reporting a legitimate error, not
-sending a malformed response.
--}
-configErrorToString : Http.Error -> String
-configErrorToString error =
-    when error is
         Http.BadBody message ->
-            message
-
-        _ ->
-            httpErrorToString error
+            if String.startsWith "Invalid response: " message then
+                message
+            else
+                "Server error: " ++ message

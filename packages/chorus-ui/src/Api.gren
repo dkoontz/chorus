@@ -26,6 +26,7 @@ module Api exposing
     , createConfig
     , ConfigResponse
     , dataDecoder
+    , expectApiResponse
     )
 
 {-| HTTP client for the Chorus API.
@@ -61,7 +62,7 @@ getTasks maybeStatus toMsg =
     in
     Http.get
         { url = url
-        , expect = Http.expectJson toMsg (dataDecoder (Decode.array Types.taskDecoder))
+        , expect = expectApiResponse toMsg (dataDecoder (Decode.array Types.taskDecoder))
         }
 
 
@@ -71,7 +72,7 @@ getTask : String -> (Result Http.Error Task -> msg) -> Cmd msg
 getTask taskId toMsg =
     Http.get
         { url = "/api/tasks/" ++ taskId
-        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.taskDecoder)
         }
 
 
@@ -91,7 +92,7 @@ createTask { description, source } toMsg =
                     , { key = "source", value = Types.encodeSourceInfo source }
                     ]
                 )
-        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.taskDecoder)
         }
 
 
@@ -124,7 +125,7 @@ updateTaskStatus taskId statusStr toMsg =
                     [ { key = "status", value = statusValue }
                     ]
                 )
-        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -166,7 +167,7 @@ updateTaskPlanning taskId params toMsg =
         , headers = []
         , url = "/api/tasks/" ++ taskId ++ "/planning"
         , body = Http.jsonBody (Encode.object fields)
-        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -188,7 +189,7 @@ submitAnswers taskId answers toMsg =
                     [ { key = "answers", value = Encode.array Encode.string answers }
                     ]
                 )
-        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.taskDecoder)
         }
 
 
@@ -209,7 +210,7 @@ startHandoff taskId params toMsg =
                     , { key = "prompt", value = Encode.string params.prompt }
                     ]
                 )
-        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.taskDecoder)
         }
 
 
@@ -219,7 +220,7 @@ getTaskHistory : String -> (Result Http.Error History -> msg) -> Cmd msg
 getTaskHistory taskId toMsg =
     Http.get
         { url = "/api/tasks/" ++ taskId ++ "/history"
-        , expect = Http.expectJson toMsg (dataDecoder Types.historyDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.historyDecoder)
         }
 
 
@@ -229,7 +230,7 @@ getTaskQueue : String -> (Result Http.Error Queue -> msg) -> Cmd msg
 getTaskQueue taskId toMsg =
     Http.get
         { url = "/api/tasks/" ++ taskId ++ "/queue"
-        , expect = Http.expectJson toMsg (dataDecoder Types.queueDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.queueDecoder)
         }
 
 
@@ -248,7 +249,7 @@ uploadAttachment taskId filename fileBytes contentType toMsg =
         , headers = []
         , url = "/api/tasks/" ++ taskId ++ "/attachments?filename=" ++ filename
         , body = Http.bytesBody contentType fileBytes
-        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -267,7 +268,7 @@ deleteAttachment taskId filename toMsg =
         , headers = []
         , url = "/api/tasks/" ++ taskId ++ "/attachments/" ++ filename
         , body = Http.emptyBody
-        , expect = Http.expectJson toMsg (dataDecoder Types.taskDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.taskDecoder)
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -283,7 +284,7 @@ getAgents : (Result Http.Error (Array AgentConfig) -> msg) -> Cmd msg
 getAgents toMsg =
     Http.get
         { url = "/api/agents"
-        , expect = Http.expectJson toMsg (dataDecoder (Decode.array Types.agentConfigDecoder))
+        , expect = expectApiResponse toMsg (dataDecoder (Decode.array Types.agentConfigDecoder))
         }
 
 
@@ -293,7 +294,7 @@ getAgent : String -> (Result Http.Error AgentConfig -> msg) -> Cmd msg
 getAgent name toMsg =
     Http.get
         { url = "/api/agents/" ++ name
-        , expect = Http.expectJson toMsg (dataDecoder Types.agentConfigDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.agentConfigDecoder)
         }
 
 
@@ -304,7 +305,7 @@ createAgent config toMsg =
     Http.post
         { url = "/api/agents"
         , body = Http.jsonBody (Types.encodeAgentConfig config)
-        , expect = Http.expectJson toMsg (dataDecoder Types.agentConfigDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.agentConfigDecoder)
         }
 
 
@@ -317,7 +318,7 @@ updateAgent name config toMsg =
         , headers = []
         , url = "/api/agents/" ++ name
         , body = Http.jsonBody (Types.encodeAgentConfig config)
-        , expect = Http.expectJson toMsg (dataDecoder Types.agentConfigDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.agentConfigDecoder)
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -332,7 +333,7 @@ deleteAgent name toMsg =
         , headers = []
         , url = "/api/agents/" ++ name
         , body = Http.emptyBody
-        , expect = Http.expectJson toMsg (Decode.succeed {})
+        , expect = expectApiResponse toMsg (Decode.succeed {})
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -348,7 +349,7 @@ getProviders : (Result Http.Error (Array ProviderConfig) -> msg) -> Cmd msg
 getProviders toMsg =
     Http.get
         { url = "/api/providers"
-        , expect = Http.expectJson toMsg (dataDecoder (Decode.array Types.providerConfigDecoder))
+        , expect = expectApiResponse toMsg (dataDecoder (Decode.array Types.providerConfigDecoder))
         }
 
 
@@ -358,7 +359,7 @@ getProvider : String -> (Result Http.Error ProviderConfig -> msg) -> Cmd msg
 getProvider name toMsg =
     Http.get
         { url = "/api/providers/" ++ name
-        , expect = Http.expectJson toMsg (dataDecoder Types.providerConfigDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.providerConfigDecoder)
         }
 
 
@@ -369,7 +370,7 @@ createProvider config toMsg =
     Http.post
         { url = "/api/providers"
         , body = Http.jsonBody (Types.encodeProviderConfig config)
-        , expect = Http.expectJson toMsg (dataDecoder Types.providerConfigDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.providerConfigDecoder)
         }
 
 
@@ -382,7 +383,7 @@ updateProvider name config toMsg =
         , headers = []
         , url = "/api/providers/" ++ name
         , body = Http.jsonBody (Types.encodeProviderConfig config)
-        , expect = Http.expectJson toMsg (dataDecoder Types.providerConfigDecoder)
+        , expect = expectApiResponse toMsg (dataDecoder Types.providerConfigDecoder)
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -397,7 +398,7 @@ deleteProvider name toMsg =
         , headers = []
         , url = "/api/providers/" ++ name
         , body = Http.emptyBody
-        , expect = Http.expectJson toMsg (Decode.succeed {})
+        , expect = expectApiResponse toMsg (Decode.succeed {})
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -431,11 +432,14 @@ errorMessageDecoder =
     Decode.field "error" (Decode.field "message" Decode.string)
 
 
-{-| Custom expect function for config endpoints that extracts error messages
-from the response body on failure, rather than losing them to BadStatus.
+{-| Custom expect function that extracts error messages from the response body
+on non-2xx status codes. On success, decodes the response body using the given
+decoder. On failure, attempts to extract the message from the server's standard
+error format: { "error": { "message": "..." } }. If extraction fails, falls
+back to the raw response body.
 -}
-expectConfigResponse : (Result Http.Error ConfigResponse -> msg) -> Http.Expect msg
-expectConfigResponse toMsg =
+expectApiResponse : (Result Http.Error a -> msg) -> Decoder a -> Http.Expect msg
+expectApiResponse toMsg decoder =
     Http.expectStringResponse toMsg <|
         \response ->
             when response is
@@ -461,12 +465,12 @@ expectConfigResponse toMsg =
                     Err (Http.BadBody errorMessage)
 
                 Http.GoodStatus_ { body } ->
-                    when Decode.decodeString configResponseDecoder body is
+                    when Decode.decodeString decoder body is
                         Ok value ->
                             Ok value
 
                         Err err ->
-                            Err (Http.BadBody (Decode.errorToString err))
+                            Err (Http.BadBody ("Invalid response: " ++ Decode.errorToString err))
 
 
 {-| Get the current workspace config.
@@ -475,7 +479,7 @@ getConfig : (Result Http.Error ConfigResponse -> msg) -> Cmd msg
 getConfig toMsg =
     Http.get
         { url = "/api/config"
-        , expect = expectConfigResponse toMsg
+        , expect = expectApiResponse toMsg configResponseDecoder
         }
 
 
@@ -488,7 +492,7 @@ updateConfig config toMsg =
         , headers = []
         , url = "/api/config"
         , body = Http.jsonBody (Types.encodeWorkspaceConfig config)
-        , expect = expectConfigResponse toMsg
+        , expect = expectApiResponse toMsg configResponseDecoder
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -506,7 +510,7 @@ selectConfig path toMsg =
                     [ { key = "path", value = Encode.string path }
                     ]
                 )
-        , expect = expectConfigResponse toMsg
+        , expect = expectApiResponse toMsg configResponseDecoder
         }
 
 
@@ -522,7 +526,7 @@ createConfig dirPath toMsg =
                     [ { key = "path", value = Encode.string dirPath }
                     ]
                 )
-        , expect = expectConfigResponse toMsg
+        , expect = expectApiResponse toMsg configResponseDecoder
         }
 
 
