@@ -1,0 +1,93 @@
+module Notification exposing
+    ( Notification
+    , Level(..)
+    , error
+    , success
+    , notificationId
+    , isExpired
+    , viewNotifications
+    )
+
+import Html exposing (..)
+import Html.Attributes exposing (..)
+import Html.Events exposing (onClick)
+import Time
+
+
+type Notification
+    = Notification
+        { notificationId : Int
+        , message : String
+        , level : Level
+        , createdAt : Time.Posix
+        }
+
+
+type Level
+    = Error
+    | Success
+
+
+error : Int -> String -> Notification
+error id message =
+    Notification
+        { notificationId = id
+        , message = message
+        , level = Error
+        , createdAt = Time.millisToPosix 0
+        }
+
+
+success : Int -> Time.Posix -> String -> Notification
+success id now message =
+    Notification
+        { notificationId = id
+        , message = message
+        , level = Success
+        , createdAt = now
+        }
+
+
+notificationId : Notification -> Int
+notificationId (Notification notification) =
+    notification.notificationId
+
+
+isExpired : Time.Posix -> Notification -> Bool
+isExpired now (Notification notification) =
+    when notification.level is
+        Error ->
+            False
+
+        Success ->
+            Time.posixToMillis now - Time.posixToMillis notification.createdAt > 5000
+
+
+viewNotifications : Array Notification -> (Int -> msg) -> Html msg
+viewNotifications notifications onDismiss =
+    if Array.isEmpty notifications then
+        text ""
+    else
+        div [ class "notification-stack" ]
+            (Array.map (viewNotification onDismiss) notifications)
+
+
+viewNotification : (Int -> msg) -> Notification -> Html msg
+viewNotification onDismiss (Notification notification) =
+    let
+        levelClass =
+            when notification.level is
+                Error ->
+                    "notification--error"
+
+                Success ->
+                    "notification--success"
+    in
+    div [ class ("notification " ++ levelClass) ]
+        [ span [ class "notification-message" ] [ text notification.message ]
+        , button
+            [ class "notification-close"
+            , onClick (onDismiss notification.notificationId)
+            ]
+            [ text "\u{00D7}" ]
+        ]

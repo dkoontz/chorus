@@ -35,6 +35,7 @@ import View.Board as Board
 import View.SystemSettings as SystemSettings exposing (SettingsForm)
 import View.TaskDetail as TaskDetail exposing (PlanningSection(..), PlanningEditState)
 import View.Workspaces as Workspaces
+import Notification exposing (Notification)
 import WorkspaceStatus exposing (WorkspaceStatus(..))
 
 
@@ -66,7 +67,8 @@ type alias Model =
     , taskQueue : Maybe Types.Queue
     , createForm : CreateTaskForm
     , loading : Bool
-    , error : Maybe String
+    , notifications : Array Notification
+    , nextNotificationId : Int
     , lastPoll : Time.Posix
     , editingPlanning : Maybe PlanningEditState
     , timeZone : Time.Zone
@@ -133,7 +135,7 @@ type Msg
     | SubmitCreateForm
     | UpdateTaskStatus { taskId : String, status : String }
     | RefreshTask String
-    | ClearError
+    | DismissNotification Int
     | FileSelected File
     | GotFileBytes { file : File, bytes : Bytes }
     | FileUploaded (Result Http.Error Types.Task)
@@ -220,7 +222,8 @@ init _ url key =
             , taskQueue = Nothing
             , createForm = emptyCreateForm
             , loading = True
-            , error = Nothing
+            , notifications = []
+            , nextNotificationId = 0
             , lastPoll = Time.millisToPosix 0
             , editingPlanning = Nothing
             , timeZone = Time.utc
@@ -378,12 +381,12 @@ update msg model =
         GotTasks result ->
             when result is
                 Ok tasks ->
-                    { model = { model | tasks = tasks, loading = False, error = Nothing }
+                    { model = { model | tasks = tasks, loading = False }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | loading = False, error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) { model | loading = False }
                     , command = Cmd.none
                     }
 
@@ -395,12 +398,12 @@ update msg model =
                             Types.taskQuestions task
                                 |> Array.map (\q -> Maybe.withDefault "" q.answer)
                     in
-                    { model = { model | selectedTask = Just task, loading = False, error = Nothing, draftAnswers = answers }
+                    { model = { model | selectedTask = Just task, loading = False, draftAnswers = answers }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | loading = False, error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) { model | loading = False }
                     , command = Cmd.none
                     }
 
@@ -434,16 +437,16 @@ update msg model =
             when result is
                 Ok task ->
                     { model =
-                        { model
-                            | tasks = Array.pushLast task model.tasks
-                            , createForm = emptyCreateForm
-                            , error = Nothing
-                        }
+                        addSuccessNotification "Task created"
+                            { model
+                                | tasks = Array.pushLast task model.tasks
+                                , createForm = emptyCreateForm
+                            }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) model
                     , command = Cmd.none
                     }
 
@@ -475,18 +478,22 @@ update msg model =
                         { model
                             | tasks = newTasks
                             , selectedTask = newSelected
-                            , error = Nothing
                         }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) model
                     , command = Cmd.none
                     }
 
         Poll now ->
-            { model = { model | lastPoll = now }
+            { model =
+                { model
+                    | lastPoll = now
+                    , notifications =
+                        Array.keepIf (\n -> not (Notification.isExpired now n)) model.notifications
+                }
             , command =
                 when model.page is
                     BoardPage ->
@@ -538,7 +545,7 @@ update msg model =
 
         SubmitCreateForm ->
             if String.isEmpty (String.trim model.createForm.description) then
-                { model = { model | error = Just "Task description is required" }
+                { model = addErrorNotification "Task description is required" model
                 , command = Cmd.none
                 }
             else
@@ -570,8 +577,12 @@ update msg model =
                     ]
             }
 
-        ClearError ->
-            { model = { model | error = Nothing }
+        DismissNotification id ->
+            { model =
+                { model
+                    | notifications =
+                        Array.keepIf (\n -> Notification.notificationId n /= id) model.notifications
+                }
             , command = Cmd.none
             }
 
@@ -599,16 +610,12 @@ update msg model =
         FileUploaded result ->
             when result is
                 Ok updatedTask ->
-                    { model =
-                        { model
-                            | selectedTask = Just updatedTask
-                            , error = Nothing
-                        }
+                    { model = { model | selectedTask = Just updatedTask }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) model
                     , command = Cmd.none
                     }
 
@@ -620,16 +627,12 @@ update msg model =
         AttachmentDeleted result ->
             when result is
                 Ok updatedTask ->
-                    { model =
-                        { model
-                            | selectedTask = Just updatedTask
-                            , error = Nothing
-                        }
+                    { model = { model | selectedTask = Just updatedTask }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) model
                     , command = Cmd.none
                     }
 
@@ -799,13 +802,12 @@ update msg model =
                         { model
                             | selectedTask = Just updatedTask
                             , editingPlanning = Nothing
-                            , error = Nothing
                         }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) model
                     , command = Cmd.none
                     }
 
@@ -818,13 +820,12 @@ update msg model =
         GotAgents result ->
             when result is
                 Ok agents ->
-                    { model = { model | agents = agents, loading = False, error = Nothing }
+                    { model = { model | agents = agents, loading = False }
                     , command = Cmd.none
                     }
 
-
                 Err err ->
-                    { model = { model | loading = False, error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) { model | loading = False }
                     , command = Cmd.none
                     }
 
@@ -849,16 +850,16 @@ update msg model =
                                 Array.pushLast savedAgent model.agents
                     in
                     { model =
-                        { model
-                            | agents = updatedAgents
-                            , agentForm = Nothing
-                            , error = Nothing
-                        }
+                        addSuccessNotification "Agent saved"
+                            { model
+                                | agents = updatedAgents
+                                , agentForm = Nothing
+                            }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) model
                     , command = Cmd.none
                     }
 
@@ -866,15 +867,15 @@ update msg model =
             when result is
                 Ok _ ->
                     { model =
-                        { model
-                            | agents = Array.keepIf (\a -> Types.agentConfigName a /= name) model.agents
-                            , error = Nothing
-                        }
+                        addSuccessNotification "Agent deleted"
+                            { model
+                                | agents = Array.keepIf (\a -> Types.agentConfigName a /= name) model.agents
+                            }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) model
                     , command = Cmd.none
                     }
 
@@ -972,7 +973,7 @@ update msg model =
             when model.agentForm is
                 Just form ->
                     if String.isEmpty (String.trim form.name) then
-                        { model = { model | error = Just "Agent name is required" }
+                        { model = addErrorNotification "Agent name is required" model
                         , command = Cmd.none
                         }
                     else
@@ -1024,12 +1025,12 @@ update msg model =
         GotProviders result ->
             when result is
                 Ok providersList ->
-                    { model = { model | providers = providersList, loading = False, error = Nothing }
+                    { model = { model | providers = providersList, loading = False }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | loading = False, error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) { model | loading = False }
                     , command = Cmd.none
                     }
 
@@ -1051,16 +1052,16 @@ update msg model =
                                 Array.pushLast savedProvider model.providers
                     in
                     { model =
-                        { model
-                            | providers = updatedProviders
-                            , providerForm = Nothing
-                            , error = Nothing
-                        }
+                        addSuccessNotification "Provider saved"
+                            { model
+                                | providers = updatedProviders
+                                , providerForm = Nothing
+                            }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) model
                     , command = Cmd.none
                     }
 
@@ -1068,15 +1069,15 @@ update msg model =
             when result is
                 Ok _ ->
                     { model =
-                        { model
-                            | providers = Array.keepIf (\p -> p.name /= name) model.providers
-                            , error = Nothing
-                        }
+                        addSuccessNotification "Provider deleted"
+                            { model
+                                | providers = Array.keepIf (\p -> p.name /= name) model.providers
+                            }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) model
                     , command = Cmd.none
                     }
 
@@ -1160,7 +1161,7 @@ update msg model =
             when model.providerForm is
                 Just form ->
                     if String.isEmpty (String.trim form.name) then
-                        { model = { model | error = Just "Provider name is required" }
+                        { model = addErrorNotification "Provider name is required" model
                         , command = Cmd.none
                         }
                     else
@@ -1216,7 +1217,7 @@ update msg model =
                     }
 
                 _ ->
-                    { model = { model | error = Just "Select an agent before starting" }
+                    { model = addErrorNotification "Select an agent before starting" model
                     , command = Cmd.none
                     }
 
@@ -1238,13 +1239,12 @@ update msg model =
                             | tasks = newTasks
                             , selectedTask = Just updatedTask
                             , startingAgent = Nothing
-                            , error = Nothing
                         }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) model
                     , command = Cmd.none
                     }
 
@@ -1276,13 +1276,12 @@ update msg model =
                             | tasks = newTasks
                             , selectedTask = Just updatedTask
                             , draftAnswers = []
-                            , error = Nothing
                         }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) model
                     , command = Cmd.none
                     }
 
@@ -1304,7 +1303,6 @@ update msg model =
                             { model
                                 | workspaceStatus = WorkspaceOpened { config = wc, configPath = configResponse.configPath }
                                 , loading = False
-                                , error = Nothing
                                 , settingsForm = Just (SystemSettings.workspaceConfigToForm wc)
                             }
                     in
@@ -1337,7 +1335,6 @@ update msg model =
                             { model
                                 | workspaceStatus = WorkspaceOpened { config = wc, configPath = configResponse.configPath }
                                 , loading = False
-                                , error = Nothing
                                 , settingsForm = Just (SystemSettings.workspaceConfigToForm wc)
                             }
                     in
@@ -1376,7 +1373,7 @@ update msg model =
 
         SelectConfig ->
             if String.isEmpty (String.trim model.openPath) then
-                { model = { model | error = Just "Please enter a path to a chorus.json file" }
+                { model = addErrorNotification "Please enter a path to a chorus.json file" model
                 , command = Cmd.none
                 }
             else
@@ -1386,7 +1383,7 @@ update msg model =
 
         CreateConfig ->
             if String.isEmpty (String.trim model.createPath) then
-                { model = { model | error = Just "Please enter a directory path" }
+                { model = addErrorNotification "Please enter a directory path" model
                 , command = Cmd.none
                 }
             else
@@ -1547,18 +1544,18 @@ update msg model =
                             configResponse.config
                     in
                     { model =
-                        { model
-                            | workspaceStatus = WorkspaceOpened { config = wc, configPath = configResponse.configPath }
-                            , settingsForm = Just (SystemSettings.workspaceConfigToForm wc)
-                            , loading = False
-                            , error = Nothing
-                            , settingsValidationError = Nothing
-                        }
+                        addSuccessNotification "Settings saved"
+                            { model
+                                | workspaceStatus = WorkspaceOpened { config = wc, configPath = configResponse.configPath }
+                                , settingsForm = Just (SystemSettings.workspaceConfigToForm wc)
+                                , loading = False
+                                , settingsValidationError = Nothing
+                            }
                     , command = Cmd.none
                     }
 
                 Err err ->
-                    { model = { model | loading = False, error = Just (httpErrorToString err) }
+                    { model = addErrorNotification (httpErrorToString err) { model | loading = False }
                     , command = Cmd.none
                     }
 
@@ -1588,7 +1585,7 @@ view model =
     , body =
         [ div [ class "app" ]
             [ viewHeader model
-            , viewError model.error
+            , Notification.viewNotifications model.notifications DismissNotification
             , viewMain model
             ]
         ]
@@ -1631,19 +1628,6 @@ viewHeader model =
                 text ""
             ]
         ]
-
-
-viewError : Maybe String -> Html Msg
-viewError maybeError =
-    when maybeError is
-        Nothing ->
-            text ""
-
-        Just error ->
-            div [ class "error-banner" ]
-                [ span [] [ text error ]
-                , button [ class "close-btn", onClick ClearError ] [ text "x" ]
-                ]
 
 
 viewMain : Model -> Html Msg
@@ -1781,7 +1765,7 @@ viewCreateModal model =
         div [ class "modal-overlay", onClick CloseCreateForm ]
             [ div
                 [ class "modal"
-                , Html.Events.stopPropagationOn "click" (Json.Decode.succeed { message = ClearError, stopPropagation = True })
+                , Html.Events.stopPropagationOn "click" (Json.Decode.succeed { message = NoOp, stopPropagation = True })
                 ]
                 [ h2 [] [ text "Create New Task" ]
                 , Html.form [ onSubmit SubmitCreateForm ]
@@ -1872,6 +1856,28 @@ viewDeleteProviderConfirmation model =
 
 
 -- HELPERS
+
+
+addErrorNotification : String -> Model -> Model
+addErrorNotification errorMessage model =
+    { model
+        | notifications =
+            Array.pushLast
+                (Notification.error model.nextNotificationId errorMessage)
+                model.notifications
+        , nextNotificationId = model.nextNotificationId + 1
+    }
+
+
+addSuccessNotification : String -> Model -> Model
+addSuccessNotification successMessage model =
+    { model
+        | notifications =
+            Array.pushLast
+                (Notification.success model.nextNotificationId model.lastPoll successMessage)
+                model.notifications
+        , nextNotificationId = model.nextNotificationId + 1
+    }
 
 
 {-| Build a prompt for an agent from the task's planning fields.
