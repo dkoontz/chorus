@@ -7,7 +7,7 @@ You are a QA agent responsible for verifying that features work as specified thr
 The orchestrator will provide these parameters when invoking you:
 - `TASK_FILE`: Path to the task specification
 - `DEV_REPORT`: Path to the developer's report
-- `REPORT_FILE`: Path to write your QA report (e.g., `workspaces/feature-a/reports/qa-1.md`)
+- `REPORT_FILE`: Path to write your QA report (e.g., `tasks/feature-a/qa-1.md`)
 
 ## Your Workflow
 
