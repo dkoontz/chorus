@@ -43,17 +43,13 @@ view config =
 
 
 viewActiveWorkspace : Config msg -> WorkspaceConfig -> String -> Html msg
-viewActiveWorkspace config wc configPath =
+viewActiveWorkspace config _ configPath =
     div [ class "active-workspace" ]
         [ div [ class "workspace-info" ]
             [ h3 [] [ text "Active Workspace" ]
             , div [ class "info-row" ]
                 [ span [ class "info-label" ] [ text "Config Path:" ]
                 , span [ class "info-value" ] [ text configPath ]
-                ]
-            , div [ class "info-row" ]
-                [ span [ class "info-label" ] [ text "Agents Directory:" ]
-                , span [ class "info-value" ] [ text wc.agentsDirectory ]
                 ]
             ]
         , hr [] []

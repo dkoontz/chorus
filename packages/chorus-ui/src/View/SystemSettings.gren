@@ -12,8 +12,7 @@ import Types exposing (AgentProvider(..), ProviderConfig, WorkspaceConfig)
 {-| Form state for editing system settings.
 -}
 type alias SettingsForm =
-    { agentsDirectory : String
-    , allowedAgentDirectories : Array String
+    { allowedAgentDirectories : Array String
     , initialAgentDirectory : String
     , systemAgentProvider : String
     , serverPort : String
@@ -24,8 +23,7 @@ type alias SettingsForm =
 -}
 workspaceConfigToForm : WorkspaceConfig -> SettingsForm
 workspaceConfigToForm wc =
-    { agentsDirectory = wc.agentsDirectory
-    , allowedAgentDirectories = wc.allowedAgentDirectories
+    { allowedAgentDirectories = wc.allowedAgentDirectories
     , initialAgentDirectory = wc.initialAgentDirectory
     , systemAgentProvider =
         when wc.systemAgentProvider is
@@ -51,7 +49,6 @@ type alias Config msg =
     , providers : Array ProviderConfig
     , loading : Bool
     , validationError : Maybe String
-    , onUpdateAgentsDirectory : String -> msg
     , onUpdateAllowedDir : { index : Int, value : String } -> msg
     , onAddAllowedDir : msg
     , onRemoveAllowedDir : Int -> msg
@@ -88,19 +85,6 @@ viewSettingsForm config form =
 
             Nothing ->
                 text ""
-        , div [ class "form-group" ]
-            [ label [ for "settings-agents-dir" ] [ text "Agents Directory" ]
-            , p [ class "section-help" ]
-                [ text "Where agent configuration files are stored." ]
-            , input
-                [ id "settings-agents-dir"
-                , type_ "text"
-                , value form.agentsDirectory
-                , onInput config.onUpdateAgentsDirectory
-                , placeholder "/path/to/agents"
-                ]
-                []
-            ]
         , div [ class "form-group" ]
             [ label [] [ text "Allowed Agent Directories" ]
             , p [ class "section-help" ]

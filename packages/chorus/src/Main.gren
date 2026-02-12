@@ -1239,9 +1239,12 @@ update msg model =
                                 { registryRoot = registryRoot }
                                 |> GrenTask.attempt GotRegistry
 
+                        agentsRoot =
+                            configRoot ++ "/agents"
+
                         initAgentRegistryCmd =
                             AgentRegistry.init model.filesystemPermission
-                                { agentsRoot = config.agentsDirectory }
+                                { agentsRoot = agentsRoot }
                                 |> GrenTask.attempt GotAgentRegistry
 
                         initProviderRegistryCmd =
@@ -2400,9 +2403,11 @@ createWorkspaceConfig filesystemPermission dirPath =
         configPath =
             dirPath ++ "/chorus.json"
 
+        agentsDir =
+            dirPath ++ "/agents"
+
         wsConfig =
-            { agentsDirectory = dirPath ++ "/agents"
-            , allowedAgentDirectories = []
+            { allowedAgentDirectories = []
             , initialAgentDirectory = ""
             , systemAgentProvider = NotConfigured
             , serverPort = Nothing
@@ -2425,7 +2430,7 @@ createWorkspaceConfig filesystemPermission dirPath =
                 |> GrenTask.mapError (\err -> FileSystem.errorToString err)
     in
     ensureDir dirPath
-        |> GrenTask.andThen (\_ -> ensureDir wsConfig.agentsDirectory)
+        |> GrenTask.andThen (\_ -> ensureDir agentsDir)
         |> GrenTask.andThen
             (\_ ->
                 FileSystem.writeFile filesystemPermission bytes configFilePath

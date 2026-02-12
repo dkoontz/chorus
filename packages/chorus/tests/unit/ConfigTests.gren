@@ -433,9 +433,7 @@ testWorkspaceConfigDecoderWithPort =
         let
             json =
                 Encode.object
-                    [ { key = "dataDirectory", value = Encode.string "/data" }
-                    , { key = "agentsDirectory", value = Encode.string "/agents" }
-                    , { key = "allowedAgentDirectories", value = Encode.array Encode.string [ "/workspace" ] }
+                    [ { key = "allowedAgentDirectories", value = Encode.array Encode.string [ "/workspace" ] }
                     , { key = "initialAgentDirectory", value = Encode.string "/workspace" }
                     , { key = "systemAgentProvider", value = Encode.string "not-configured" }
                     , { key = "port", value = Encode.int 3000 }
@@ -461,9 +459,7 @@ testWorkspaceConfigDecoderWithoutPort =
         let
             json =
                 Encode.object
-                    [ { key = "dataDirectory", value = Encode.string "/data" }
-                    , { key = "agentsDirectory", value = Encode.string "/agents" }
-                    , { key = "allowedAgentDirectories", value = Encode.array Encode.string [ "/workspace" ] }
+                    [ { key = "allowedAgentDirectories", value = Encode.array Encode.string [ "/workspace" ] }
                     , { key = "initialAgentDirectory", value = Encode.string "/workspace" }
                     , { key = "systemAgentProvider", value = Encode.string "not-configured" }
                     ]

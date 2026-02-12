@@ -323,13 +323,11 @@ type alias ProviderConfig =
 
 {-| Workspace configuration stored in a `chorus.json` file.
 
-Contains all settings that define a workspace: where data is stored,
-where agents live, which directories agents can access, and which
-provider to use for internal/system agents.
+Contains all settings that define a workspace: which directories agents
+can access, and which provider to use for internal/system agents.
 -}
 type alias WorkspaceConfig =
-    { agentsDirectory : String
-    , allowedAgentDirectories : Array String
+    { allowedAgentDirectories : Array String
     , initialAgentDirectory : String
     , systemAgentProvider : AgentProvider
     , serverPort : Maybe Int
@@ -1338,8 +1336,7 @@ encodeWorkspaceConfig : WorkspaceConfig -> Encode.Value
 encodeWorkspaceConfig config =
     let
         requiredFields =
-            [ { key = "agentsDirectory", value = Encode.string config.agentsDirectory }
-            , { key = "allowedAgentDirectories", value = Encode.array Encode.string config.allowedAgentDirectories }
+            [ { key = "allowedAgentDirectories", value = Encode.array Encode.string config.allowedAgentDirectories }
             , { key = "initialAgentDirectory", value = Encode.string config.initialAgentDirectory }
             , { key = "systemAgentProvider", value = encodeAgentProvider config.systemAgentProvider }
             ]
@@ -1359,16 +1356,14 @@ encodeWorkspaceConfig config =
 -}
 workspaceConfigDecoder : Decoder WorkspaceConfig
 workspaceConfigDecoder =
-    Decode.map4
-        (\agentsDirectory allowedAgentDirectories initialAgentDirectory systemAgentProvider ->
-            { agentsDirectory = agentsDirectory
-            , allowedAgentDirectories = allowedAgentDirectories
+    Decode.map3
+        (\allowedAgentDirectories initialAgentDirectory systemAgentProvider ->
+            { allowedAgentDirectories = allowedAgentDirectories
             , initialAgentDirectory = initialAgentDirectory
             , systemAgentProvider = systemAgentProvider
             , serverPort = Nothing
             }
         )
-        (Decode.field "agentsDirectory" Decode.string)
         (Decode.field "allowedAgentDirectories" (Decode.array Decode.string))
         (Decode.field "initialAgentDirectory" Decode.string)
         (Decode.field "systemAgentProvider" agentProviderDecoder)

@@ -193,7 +193,6 @@ type Msg
     | SelectConfig
     | CreateConfig
       -- System settings
-    | UpdateSettingsAgentsDirectory String
     | UpdateSettingsAllowedDir { index : Int, value : String }
     | AddSettingsAllowedDir
     | RemoveSettingsAllowedDir Int
@@ -1397,15 +1396,6 @@ update msg model =
 
         -- System settings
 
-        UpdateSettingsAgentsDirectory val ->
-            { model =
-                { model
-                    | settingsForm =
-                        Maybe.map (\f -> { f | agentsDirectory = val }) model.settingsForm
-                }
-            , command = Cmd.none
-            }
-
         UpdateSettingsAllowedDir { index, value } ->
             { model =
                 { model
@@ -1534,8 +1524,7 @@ update msg model =
                             Ok parsedPort ->
                                 let
                                     wc =
-                                        { agentsDirectory = form.agentsDirectory
-                                        , allowedAgentDirectories = form.allowedAgentDirectories
+                                        { allowedAgentDirectories = form.allowedAgentDirectories
                                         , initialAgentDirectory = form.initialAgentDirectory
                                         , systemAgentProvider = provider
                                         , serverPort = parsedPort
@@ -1768,7 +1757,6 @@ viewMain model =
                     , providers = model.providers
                     , loading = model.loading
                     , validationError = model.settingsValidationError
-                    , onUpdateAgentsDirectory = UpdateSettingsAgentsDirectory
                     , onUpdateAllowedDir = UpdateSettingsAllowedDir
                     , onAddAllowedDir = AddSettingsAllowedDir
                     , onRemoveAllowedDir = RemoveSettingsAllowedDir
