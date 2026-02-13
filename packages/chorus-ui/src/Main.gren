@@ -1683,6 +1683,19 @@ viewMain model =
                     externalAgents =
                         model.agents
                             |> Array.keepIf (\a -> not (Types.isInternalAgent a))
+
+                    providerConfigured =
+                        when model.workspaceStatus is
+                            WorkspaceOpened { config } ->
+                                when config.systemAgentProvider is
+                                    ProviderRef _ ->
+                                        True
+
+                                    NotConfigured ->
+                                        False
+
+                            _ ->
+                                False
                 in
                 TaskDetail.view
                     { task = model.selectedTask
@@ -1713,6 +1726,7 @@ viewMain model =
                     , onToggleEventExpanded = ToggleEventExpanded
                     , zone = model.timeZone
                     , now = model.lastPoll
+                    , systemAgentProviderConfigured = providerConfigured
                     }
 
             AgentsPage ->

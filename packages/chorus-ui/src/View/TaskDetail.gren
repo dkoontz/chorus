@@ -67,6 +67,7 @@ type alias Props msg =
     , onToggleEventExpanded : Int -> msg
     , zone : Time.Zone
     , now : Time.Posix
+    , systemAgentProviderConfigured : Bool
     }
 
 
@@ -128,12 +129,21 @@ viewStatusActions props task =
     div [ class "status-actions" ]
         (when Types.taskStatus task is
             Pending ->
-                [ button
-                    [ class "btn btn-primary"
-                    , onClick (props.onPlanTask taskId)
+                if props.systemAgentProviderConfigured then
+                    [ button
+                        [ class "btn btn-primary"
+                        , onClick (props.onPlanTask taskId)
+                        ]
+                        [ text "Plan Task" ]
                     ]
-                    [ text "Plan Task" ]
-                ]
+                else
+                    [ button
+                        [ class "btn btn-primary"
+                        , disabled True
+                        ]
+                        [ text "Plan Task" ]
+                    , span [ class "status-indicator" ] [ text "Configure a system agent provider in Settings to plan tasks" ]
+                    ]
 
             Planning ->
                 [ span [ class "status-indicator" ] [ text "Planning in progress..." ]
@@ -197,39 +207,48 @@ viewStatusActions props task =
 
 viewStartWithAgent : Props msg -> String -> Array (Html msg)
 viewStartWithAgent props taskId =
-    let
-        hasAgent =
-            when props.selectedStartAgent is
-                Just _ ->
-                    True
+    if not props.systemAgentProviderConfigured then
+        [ button
+            [ class "btn btn-primary"
+            , disabled True
+            ]
+            [ text "Start Task" ]
+        , span [ class "status-indicator" ] [ text "Configure a system agent provider in Settings to start tasks" ]
+        ]
+    else
+        let
+            hasAgent =
+                when props.selectedStartAgent is
+                    Just _ ->
+                        True
 
-                Nothing ->
-                    False
-    in
-    [ select
-        [ class "agent-select"
-        , onInput props.onSelectStartAgent
-        ]
-        (Array.pushFirst
-            (option [ value "" ] [ text "Select agent..." ])
-            (Array.map
-                (\name ->
-                    option
-                        [ value name
-                        , selected (props.selectedStartAgent == Just name)
-                        ]
-                        [ text name ]
+                    Nothing ->
+                        False
+        in
+        [ select
+            [ class "agent-select"
+            , onInput props.onSelectStartAgent
+            ]
+            (Array.pushFirst
+                (option [ value "" ] [ text "Select agent..." ])
+                (Array.map
+                    (\name ->
+                        option
+                            [ value name
+                            , selected (props.selectedStartAgent == Just name)
+                            ]
+                            [ text name ]
+                    )
+                    props.agents
                 )
-                props.agents
             )
-        )
-    , button
-        [ class "btn btn-primary"
-        , onClick (props.onStartTask taskId)
-        , disabled (not hasAgent)
+        , button
+            [ class "btn btn-primary"
+            , onClick (props.onStartTask taskId)
+            , disabled (not hasAgent)
+            ]
+            [ text "Start Task" ]
         ]
-        [ text "Start Task" ]
-    ]
 
 
 viewTaskInfo : Time.Zone -> Time.Posix -> Types.Task -> Html msg

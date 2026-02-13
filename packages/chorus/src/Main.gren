@@ -1603,58 +1603,74 @@ handleRoute model route request response =
                                     sendBadRequest response errMsg
 
                         Router.PlanTask taskId ->
-                            Api.requestPlanTask ctx taskId
-                                (\{ apiResult, description } ->
-                                    GotPlanTaskResult { response = response, taskId = taskId, description = description, result = apiResult }
-                                )
+                            when Maybe.map .systemAgentProvider model.workspaceConfig is
+                                Just NotConfigured ->
+                                    sendBadRequest response "System agent provider is not configured. Please configure it in System Settings."
+
+                                Nothing ->
+                                    sendBadRequest response "No workspace config loaded"
+
+                                _ ->
+                                    Api.requestPlanTask ctx taskId
+                                        (\{ apiResult, description } ->
+                                            GotPlanTaskResult { response = response, taskId = taskId, description = description, result = apiResult }
+                                        )
 
                         Router.StartHandoff taskId ->
-                            when parseStartHandoffBody request is
-                                Ok params ->
-                                    when model.agentRegistry is
-                                        Nothing ->
-                                            sendBadRequest response "Agent registry not initialized"
+                            when Maybe.map .systemAgentProvider model.workspaceConfig is
+                                Just NotConfigured ->
+                                    sendBadRequest response "System agent provider is not configured. Please configure it in System Settings."
 
-                                        Just agentReg ->
-                                            -- Look up the agent, then validate its provider exists
-                                            AgentRegistry.getAgent agentReg params.agentName
-                                                |> GrenTask.andThen
-                                                    (\agentConfig ->
-                                                        -- Validate provider exists for user-defined agents
-                                                        when agentConfig is
-                                                            UserDefinedAgent r ->
-                                                                when r.provider is
-                                                                    NotConfigured ->
-                                                                        GrenTask.fail (AgentRegistry.FileSystemError ("Agent '" ++ params.agentName ++ "' has no provider configured"))
+                                Nothing ->
+                                    sendBadRequest response "No workspace config loaded"
 
-                                                                    ProviderRef providerName ->
-                                                                        when model.providerRegistry is
-                                                                            Nothing ->
-                                                                                GrenTask.fail (AgentRegistry.FileSystemError "Provider registry not available")
+                                _ ->
+                                    when parseStartHandoffBody request is
+                                        Ok params ->
+                                            when model.agentRegistry is
+                                                Nothing ->
+                                                    sendBadRequest response "Agent registry not initialized"
 
-                                                                            Just providerReg ->
-                                                                                ProviderRegistry.getProvider providerReg providerName
-                                                                                    |> GrenTask.map (\_ -> agentConfig)
-                                                                                    |> GrenTask.onError
-                                                                                        (\_ ->
-                                                                                            GrenTask.fail (AgentRegistry.FileSystemError ("Agent '" ++ params.agentName ++ "' references provider '" ++ providerName ++ "' which does not exist"))
-                                                                                        )
+                                                Just agentReg ->
+                                                    -- Look up the agent, then validate its provider exists
+                                                    AgentRegistry.getAgent agentReg params.agentName
+                                                        |> GrenTask.andThen
+                                                            (\agentConfig ->
+                                                                -- Validate provider exists for user-defined agents
+                                                                when agentConfig is
+                                                                    UserDefinedAgent r ->
+                                                                        when r.provider is
+                                                                            NotConfigured ->
+                                                                                GrenTask.fail (AgentRegistry.FileSystemError ("Agent '" ++ params.agentName ++ "' has no provider configured"))
 
-                                                            InternalAgent _ ->
-                                                                GrenTask.succeed agentConfig
-                                                    )
-                                                |> GrenTask.attempt
-                                                    (\result ->
-                                                        GotAgentLookup
-                                                            { taskId = taskId
-                                                            , prompt = params.prompt
-                                                            , response = response
-                                                            , result = result
-                                                            }
-                                                    )
+                                                                            ProviderRef providerName ->
+                                                                                when model.providerRegistry is
+                                                                                    Nothing ->
+                                                                                        GrenTask.fail (AgentRegistry.FileSystemError "Provider registry not available")
 
-                                Err errMsg ->
-                                    sendBadRequest response errMsg
+                                                                                    Just providerReg ->
+                                                                                        ProviderRegistry.getProvider providerReg providerName
+                                                                                            |> GrenTask.map (\_ -> agentConfig)
+                                                                                            |> GrenTask.onError
+                                                                                                (\_ ->
+                                                                                                    GrenTask.fail (AgentRegistry.FileSystemError ("Agent '" ++ params.agentName ++ "' references provider '" ++ providerName ++ "' which does not exist"))
+                                                                                                )
+
+                                                                    InternalAgent _ ->
+                                                                        GrenTask.succeed agentConfig
+                                                            )
+                                                        |> GrenTask.attempt
+                                                            (\result ->
+                                                                GotAgentLookup
+                                                                    { taskId = taskId
+                                                                    , prompt = params.prompt
+                                                                    , response = response
+                                                                    , result = result
+                                                                    }
+                                                            )
+
+                                        Err errMsg ->
+                                            sendBadRequest response errMsg
 
                         Router.CompleteHandoff taskId ->
                             when parseCompleteHandoffBody request is
