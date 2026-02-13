@@ -180,6 +180,8 @@ type Msg
     | SaveProvider
     | DeleteProvider String
     | ConfirmDeleteProvider String
+    | PlanTask String
+    | PlanTaskStarted (Result Http.Error Types.Task)
     | SelectStartAgent String
     | StartTask String
     | HandoffStarted (Result Http.Error Types.Task)
@@ -1200,6 +1202,37 @@ update msg model =
             , command = Cmd.none
             }
 
+        PlanTask taskId ->
+            { model = model
+            , command = Api.planTask taskId PlanTaskStarted
+            }
+
+        PlanTaskStarted result ->
+            when result is
+                Ok updatedTask ->
+                    let
+                        updateTask t =
+                            if Types.taskId t == Types.taskId updatedTask then
+                                updatedTask
+                            else
+                                t
+
+                        newTasks =
+                            Array.map updateTask model.tasks
+                    in
+                    { model =
+                        { model
+                            | tasks = newTasks
+                            , selectedTask = Just updatedTask
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = addErrorNotification (httpErrorToString err) model
+                    , command = Cmd.none
+                    }
+
         SelectStartAgent agentName ->
             { model = { model | startingAgent = Just agentName }
             , command = Cmd.none
@@ -1657,6 +1690,7 @@ viewMain model =
                     , queue = model.taskQueue
                     , loading = model.loading
                     , onStatusUpdate = \statusTaskId status -> UpdateTaskStatus { taskId = statusTaskId, status = status }
+                    , onPlanTask = PlanTask
                     , onStartTask = StartTask
                     , onSelectStartAgent = SelectStartAgent
                     , agents = Array.map Types.agentConfigName externalAgents

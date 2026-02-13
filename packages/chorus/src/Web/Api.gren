@@ -28,6 +28,7 @@ module Web.Api exposing
     , requestApplyPlan
     , requestSetQuestions
     , requestSubmitAnswers
+    , requestPlanTask
     , sendApiResponse
     , sendBinaryResponse
     , CreateTaskParams
@@ -464,6 +465,55 @@ requestSetQuestions ctx taskId questionStrings questionsEventData toMsg =
         |> GrenTask.onError
             (\err ->
                 GrenTask.succeed (ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err })
+            )
+        |> GrenTask.perform toMsg
+
+
+{-| POST /api/tasks/:id/plan - Trigger planning for a pending task.
+    Validates the task is in Pending status, then returns the task with
+    its description so the caller can dispatch the planner.
+-}
+requestPlanTask : ApiContext -> TaskId -> ({ apiResult : ApiResult, description : String } -> msg) -> Cmd msg
+requestPlanTask ctx taskId toMsg =
+    Registry.getTask ctx.registry taskId
+        |> GrenTask.andThen
+            (\maybeTask ->
+                when maybeTask is
+                    Nothing ->
+                        GrenTask.succeed
+                            { apiResult = ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ Id.taskIdToString taskId }
+                            , description = ""
+                            }
+
+                    Just task ->
+                        let
+                            currentStatus =
+                                Types.taskStatus task
+                        in
+                        if currentStatus == Pending then
+                            Time.now
+                                |> GrenTask.map
+                                    (\now ->
+                                        { apiResult = ApiSuccess { statusCode = 200, body = wrapResponse (Types.encodeTask task) now }
+                                        , description = Types.taskDescription task
+                                        }
+                                    )
+                        else
+                            GrenTask.succeed
+                                { apiResult = ApiError
+                                    { statusCode = 409
+                                    , code = "INVALID_STATUS"
+                                    , message = "Task must be in Pending status to plan, but is " ++ Types.statusToString currentStatus
+                                    }
+                                , description = ""
+                                }
+            )
+        |> GrenTask.onError
+            (\err ->
+                GrenTask.succeed
+                    { apiResult = ApiError { statusCode = 500, code = "REGISTRY_ERROR", message = Registry.errorToString err }
+                    , description = ""
+                    }
             )
         |> GrenTask.perform toMsg
 
@@ -971,12 +1021,9 @@ requestStartHandoff ctx taskId params toMsg =
                                                         newChain =
                                                             Array.pushLast newRecord chain
 
-                                                        -- Set status to Active if Pending, Planned, or Waiting
+                                                        -- Set status to Active if ReadyToStart or Waiting
                                                         newStatus =
                                                             when Types.taskStatus t is
-                                                                Pending ->
-                                                                    Active
-
                                                                 ReadyToStart ->
                                                                     Active
 

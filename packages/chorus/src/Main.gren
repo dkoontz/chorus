@@ -134,6 +134,7 @@ type Msg
     | GotToolResult { taskId : TaskId, toolName : String, response : Response, result : Api.ApiResult }
     | GotInternalApiResult Api.ApiResult
     | GotTaskCreated { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
+    | GotPlanTaskResult { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
     | GotPlannerComplete { taskId : TaskId, result : Result String String }
     | GotAnswersSubmitted { response : Response, taskId : TaskId, enrichedPrompt : String, result : Api.ApiResult }
     | GotToolGrant { taskId : TaskId, addTools : Array String, removeTools : Array String, response : Response }
@@ -1044,13 +1045,19 @@ update msg model =
             }
 
         GotTaskCreated { response, taskId, description, result } ->
+            -- Task created. Remains in Pending status; user must trigger planning.
+            { model = model
+            , command = Api.sendApiResponse response result
+            }
+
+        GotPlanTaskResult { response, taskId, description, result } ->
             let
                 sendResponseCmd =
                     Api.sendApiResponse response result
             in
             when result is
                 Api.ApiSuccess _ ->
-                    -- Task created. Dispatch the task-validator agent.
+                    -- Plan endpoint succeeded. Dispatch the task-validator agent.
                     when model.agentRegistry is
                         Just agentReg ->
                             { model = model
@@ -1594,6 +1601,12 @@ handleRoute model route request response =
 
                                 Err errMsg ->
                                     sendBadRequest response errMsg
+
+                        Router.PlanTask taskId ->
+                            Api.requestPlanTask ctx taskId
+                                (\{ apiResult, description } ->
+                                    GotPlanTaskResult { response = response, taskId = taskId, description = description, result = apiResult }
+                                )
 
                         Router.StartHandoff taskId ->
                             when parseStartHandoffBody request is

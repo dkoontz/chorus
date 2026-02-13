@@ -5,6 +5,7 @@ module Api exposing
     , updateTaskStatus
     , updateTaskPlanning
     , submitAnswers
+    , planTask
     , startHandoff
     , getTaskHistory
     , getTaskQueue
@@ -189,6 +190,17 @@ submitAnswers taskId answers toMsg =
                     [ { key = "answers", value = Encode.array Encode.string answers }
                     ]
                 )
+        , expect = expectApiResponse toMsg (dataDecoder Types.taskDecoder)
+        }
+
+
+{-| Trigger planning for a pending task.
+-}
+planTask : String -> (Result Http.Error Task -> msg) -> Cmd msg
+planTask taskId toMsg =
+    Http.post
+        { url = "/api/tasks/" ++ taskId ++ "/plan"
+        , body = Http.emptyBody
         , expect = expectApiResponse toMsg (dataDecoder Types.taskDecoder)
         }
 

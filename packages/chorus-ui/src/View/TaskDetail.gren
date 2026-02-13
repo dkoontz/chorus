@@ -44,6 +44,7 @@ type alias Props msg =
     , queue : Maybe Types.Queue
     , loading : Bool
     , onStatusUpdate : String -> String -> msg
+    , onPlanTask : String -> msg
     , onStartTask : String -> msg
     , onSelectStartAgent : String -> msg
     , agents : Array String
@@ -129,9 +130,9 @@ viewStatusActions props task =
             Pending ->
                 [ button
                     [ class "btn btn-primary"
-                    , onClick (props.onStatusUpdate taskId "active")
+                    , onClick (props.onPlanTask taskId)
                     ]
-                    [ text "Start Task" ]
+                    [ text "Plan Task" ]
                 ]
 
             Planning ->

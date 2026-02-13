@@ -35,6 +35,7 @@ type Route
     | ExecuteTool TaskId                        -- POST /api/tasks/:id/tools
     | UpdateAgentTools TaskId                   -- PUT /api/tasks/:id/agent-tools
     | SubmitAnswers TaskId                      -- POST /api/tasks/:id/answers
+    | PlanTask TaskId                           -- POST /api/tasks/:id/plan
     | StartHandoff TaskId                      -- POST /api/tasks/:id/handoff
     | CompleteHandoff TaskId                   -- PUT /api/tasks/:id/handoff/complete
     | ListAgents                               -- GET /api/agents
@@ -145,6 +146,9 @@ parseRoute method path =
 
         { method = POST, segments = [ "api", "tasks", rawId, "answers" ] } ->
             withTaskId rawId SubmitAnswers
+
+        { method = POST, segments = [ "api", "tasks", rawId, "plan" ] } ->
+            withTaskId rawId PlanTask
 
         { method = POST, segments = [ "api", "tasks", rawId, "handoff" ] } ->
             withTaskId rawId StartHandoff
@@ -347,6 +351,9 @@ routeToString route =
 
         SubmitAnswers taskId ->
             "SubmitAnswers(" ++ Id.taskIdToString taskId ++ ")"
+
+        PlanTask taskId ->
+            "PlanTask(" ++ Id.taskIdToString taskId ++ ")"
 
         StartHandoff taskId ->
             "StartHandoff(" ++ Id.taskIdToString taskId ++ ")"
