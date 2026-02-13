@@ -76,7 +76,7 @@ type alias Model =
     , workspaceConfig : Maybe WorkspaceConfig
     , workspaceConfigPath : Maybe String
     , status : Status
-    , pendingResponses : Array PendingResponse
+    , pendingConfigResponse : Maybe PendingConfigResponse
     , logger : Logging.Logger
     , cliPort : Maybe Int
     }
@@ -102,9 +102,10 @@ type ExecutorStatus
     | ExecFailed String
 
 
-type alias PendingResponse =
+type alias PendingConfigResponse =
     { response : Response
-    , id : Int
+    , config : WorkspaceConfig
+    , configPath : String
     }
 
 
@@ -136,7 +137,7 @@ type Msg
     | GotPlannerComplete { taskId : TaskId, result : Result String String }
     | GotAnswersSubmitted { response : Response, taskId : TaskId, enrichedPrompt : String, result : Api.ApiResult }
     | GotToolGrant { taskId : TaskId, addTools : Array String, removeTools : Array String, response : Response }
-    | GotConfigLoaded { response : Maybe Response, result : Result String { config : WorkspaceConfig, configPath : String } }
+    | GotConfigLoaded { response : Maybe Response, deferResponse : Bool, result : Result String { config : WorkspaceConfig, configPath : String } }
     | NoOp
 
 
@@ -221,7 +222,7 @@ init env =
                                         , workspaceConfig = Nothing
                                         , workspaceConfigPath = Nothing
                                         , status = Initializing
-                                        , pendingResponses = []
+                                        , pendingConfigResponse = Nothing
                                         , logger = logger
                                         , cliPort = cliPort
                                         }
@@ -233,7 +234,7 @@ init env =
                                                 GrenTask.succeed preloadedConfigResult
                                                     |> GrenTask.perform
                                                         (\result ->
-                                                            GotConfigLoaded { response = Nothing, result = result }
+                                                            GotConfigLoaded { response = Nothing, deferResponse = False, result = result }
                                                         )
 
                                             Err _ ->
@@ -477,41 +478,106 @@ update msg model =
         GotRegistry result ->
             when result is
                 Ok registry ->
-                    { model =
-                        { model
-                            | registry = Just registry
-                            , status = Running
-                        }
-                    , command = Logging.logInfo model.logger "Task registry initialized" NoOp
+                    let
+                        newModel =
+                            { model
+                                | registry = Just registry
+                                , status = Running
+                            }
+
+                        flush =
+                            flushPendingConfigResponse newModel
+                    in
+                    { model = flush.model
+                    , command =
+                        Cmd.batch
+                            [ Logging.logInfo model.logger "Task registry initialized" NoOp
+                            , flush.command
+                            ]
                     }
 
                 Err err ->
-                    { model = { model | status = Error (Registry.errorToString err) }
-                    , command = Logging.logError model.logger ("Registry error: " ++ Registry.errorToString err) NoOp
+                    let
+                        errMsg =
+                            Registry.errorToString err
+
+                        errorFlush =
+                            failPendingConfigResponse model ("Registry error: " ++ errMsg)
+                    in
+                    { model = { errorFlush.model | status = Error errMsg }
+                    , command =
+                        Cmd.batch
+                            [ Logging.logError model.logger ("Registry error: " ++ errMsg) NoOp
+                            , errorFlush.command
+                            ]
                     }
 
         GotAgentRegistry result ->
             when result is
                 Ok agentReg ->
-                    { model = { model | agentRegistry = Just agentReg }
-                    , command = Logging.logInfo model.logger "Agent registry initialized" NoOp
+                    let
+                        newModel =
+                            { model | agentRegistry = Just agentReg }
+
+                        flush =
+                            flushPendingConfigResponse newModel
+                    in
+                    { model = flush.model
+                    , command =
+                        Cmd.batch
+                            [ Logging.logInfo model.logger "Agent registry initialized" NoOp
+                            , flush.command
+                            ]
                     }
 
                 Err err ->
-                    { model = model
-                    , command = Logging.logError model.logger ("Agent registry error: " ++ AgentRegistry.errorToString err) NoOp
+                    let
+                        errMsg =
+                            AgentRegistry.errorToString err
+
+                        errorFlush =
+                            failPendingConfigResponse model ("Agent registry error: " ++ errMsg)
+                    in
+                    { model = errorFlush.model
+                    , command =
+                        Cmd.batch
+                            [ Logging.logError model.logger ("Agent registry error: " ++ errMsg) NoOp
+                            , errorFlush.command
+                            ]
                     }
 
         GotProviderRegistry result ->
             when result is
                 Ok providerReg ->
-                    { model = { model | providerRegistry = Just providerReg }
-                    , command = Logging.logInfo model.logger "Provider registry initialized" NoOp
+                    let
+                        newModel =
+                            { model | providerRegistry = Just providerReg }
+
+                        flush =
+                            flushPendingConfigResponse newModel
+                    in
+                    { model = flush.model
+                    , command =
+                        Cmd.batch
+                            [ Logging.logInfo model.logger "Provider registry initialized" NoOp
+                            , flush.command
+                            ]
                     }
 
                 Err err ->
-                    { model = model
-                    , command = Logging.logError model.logger ("Provider registry error: " ++ ProviderRegistry.errorToString err) NoOp
+                    let
+                        errMsg =
+                            ProviderRegistry.errorToString err
+
+                        errorFlush =
+                            failPendingConfigResponse model ("Provider registry error: " ++ errMsg)
+                    in
+                    { model = errorFlush.model
+                    , command =
+                        Cmd.batch
+                            [ Logging.logError model.logger ("Provider registry error: " ++ errMsg) NoOp
+                            , errorFlush.command
+                            ]
                     }
 
         GotToolAgentLookup { taskId, requestBody, response, result } ->
@@ -1198,7 +1264,7 @@ update msg model =
                             ]
                     }
 
-        GotConfigLoaded { response, result } ->
+        GotConfigLoaded { response, deferResponse, result } ->
             when result is
                 Err errMsg ->
                     let
@@ -1259,26 +1325,31 @@ update msg model =
                                 |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                 |> GrenTask.perform (\_ -> NoOp)
 
-                        -- Send success response if there is one
-                        responseCmd =
-                            when response is
-                                Just resp ->
-                                    let
-                                        body =
-                                            Encode.object
-                                                [ { key = "data", value = Types.encodeWorkspaceConfig config }
-                                                , { key = "configPath", value = Encode.string configPath }
-                                                ]
-                                                |> Encode.encode 0
-                                    in
-                                    resp
-                                        |> Response.setStatus 200
-                                        |> Response.setHeader "Content-Type" "application/json"
-                                        |> Response.setBody body
-                                        |> Response.send
+                        -- Either defer the response (select/create) or send immediately (update/startup)
+                        shouldDefer =
+                            deferResponse && response /= Nothing
 
-                                Nothing ->
-                                    Cmd.none
+                        responseCmd =
+                            if shouldDefer then
+                                Cmd.none
+                            else
+                                when response is
+                                    Just resp ->
+                                        sendConfigResponse resp config configPath
+
+                                    Nothing ->
+                                        Cmd.none
+
+                        pendingConfig =
+                            if shouldDefer then
+                                when response is
+                                    Just resp ->
+                                        Just { response = resp, config = config, configPath = configPath }
+
+                                    Nothing ->
+                                        Nothing
+                            else
+                                Nothing
                     in
                     let
                         -- Apply workspace config port with CLI port precedence
@@ -1302,6 +1373,13 @@ update msg model =
                             | workspaceConfig = Just config
                             , workspaceConfigPath = Just configPath
                             , config = updatedConfig
+                            , pendingConfigResponse = pendingConfig
+                            , registry =
+                                if shouldDefer then Nothing else model.registry
+                            , agentRegistry =
+                                if shouldDefer then Nothing else model.agentRegistry
+                            , providerRegistry =
+                                if shouldDefer then Nothing else model.providerRegistry
                         }
                     , command =
                         Cmd.batch
@@ -2496,6 +2574,7 @@ handleUpdateConfig model request response =
                                         Ok _ ->
                                             GotConfigLoaded
                                                 { response = Just response
+                                                , deferResponse = False
                                                 , result = Ok { config = newConfig, configPath = currentConfigPath }
                                                 }
 
@@ -2522,7 +2601,7 @@ handleSelectConfig model request response =
             loadWorkspaceConfig model.filesystemPermission configPath
                 |> GrenTask.perform
                     (\result ->
-                        GotConfigLoaded { response = Just response, result = result }
+                        GotConfigLoaded { response = Just response, deferResponse = True, result = result }
                     )
 
 
@@ -2538,12 +2617,70 @@ handleCreateConfig model request response =
             createWorkspaceConfig model.filesystemPermission dirPath
                 |> GrenTask.perform
                     (\result ->
-                        GotConfigLoaded { response = Just response, result = result }
+                        GotConfigLoaded { response = Just response, deferResponse = True, result = result }
                     )
 
 
 
 -- HELPERS
+
+
+{-| Send a config response to the client.
+-}
+sendConfigResponse : Response -> WorkspaceConfig -> String -> Cmd Msg
+sendConfigResponse resp config configPath =
+    let
+        body =
+            Encode.object
+                [ { key = "data", value = Types.encodeWorkspaceConfig config }
+                , { key = "configPath", value = Encode.string configPath }
+                ]
+                |> Encode.encode 0
+    in
+    resp
+        |> Response.setStatus 200
+        |> Response.setHeader "Content-Type" "application/json"
+        |> Response.setBody body
+        |> Response.send
+
+
+{-| If all three registries are initialized and there is a pending config
+response, send it and clear the pending state.
+-}
+flushPendingConfigResponse : Model -> { model : Model, command : Cmd Msg }
+flushPendingConfigResponse model =
+    when { pending = model.pendingConfigResponse, reg = model.registry, agent = model.agentRegistry, provider = model.providerRegistry } is
+        { pending = Just { response, config, configPath }, reg = Just _, agent = Just _, provider = Just _ } ->
+            { model = { model | pendingConfigResponse = Nothing }
+            , command = sendConfigResponse response config configPath
+            }
+
+        _ ->
+            { model = model
+            , command = Cmd.none
+            }
+
+
+{-| If a registry fails to initialize and there is a pending config response,
+send a 500 error and clear the pending state.
+-}
+failPendingConfigResponse : Model -> String -> { model : Model, command : Cmd Msg }
+failPendingConfigResponse model errMsg =
+    when model.pendingConfigResponse is
+        Just { response } ->
+            { model = { model | pendingConfigResponse = Nothing }
+            , command =
+                response
+                    |> Response.setStatus 500
+                    |> Response.setHeader "Content-Type" "application/json"
+                    |> Response.setBody (Encode.encode 0 (Encode.object [ { key = "error", value = Encode.string errMsg } ]))
+                    |> Response.send
+            }
+
+        Nothing ->
+            { model = model
+            , command = Cmd.none
+            }
 
 
 {-| Get a SecureContext for cryptographic operations.
