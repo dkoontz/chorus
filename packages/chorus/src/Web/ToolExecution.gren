@@ -11,7 +11,8 @@ Handles tool requests by checking permissions against the agent's
 allowed tools list, then dispatching to the appropriate tool implementation.
 
 File tools are executed directly. Task tools (task.get, task.list) are
-handled via the registry. Handoff is rejected here (use the handoff endpoint).
+handled via the registry. Handoff returns a DeferredHandoff result that
+signals Main.gren to start the agent and hold the response until completion.
 
 -}
 
@@ -128,14 +129,7 @@ dispatchTool ctx toolName requestBody toMsg =
             dispatchCompletionReport ctx requestBody toMsg
 
         "handoff" ->
-            GrenTask.succeed
-                (Api.ApiError
-                    { statusCode = 400
-                    , code = "BAD_REQUEST"
-                    , message = "Use POST /api/tasks/:id/handoff for handoff operations"
-                    }
-                )
-                |> GrenTask.perform toMsg
+            dispatchHandoffTool requestBody toMsg
 
         "help" ->
             GrenTask.succeed
@@ -213,7 +207,7 @@ dispatchFileTool ctx requestBody toMsg =
                         encodeSearchOutput
                         toMsg
 
-                -- HandoffRequest and HelpRequest are handled above by tool name
+                -- HelpRequest is handled above by tool name
                 _ ->
                     GrenTask.succeed
                         (Api.ApiError
@@ -453,3 +447,46 @@ executeFileTask task encoder toMsg =
                     )
             )
         |> GrenTask.perform toMsg
+
+
+{-| Dispatch a handoff tool request by returning a DeferredHandoff result.
+
+The handoff is not executed here. Instead, a DeferredHandoff result signals
+Main.gren to start the handoff, hold the HTTP response, and return the
+agent's output when it completes.
+-}
+dispatchHandoffTool : String -> (Api.ApiResult -> msg) -> Cmd msg
+dispatchHandoffTool requestBody toMsg =
+    let
+        handoffParamsResult =
+            Decode.decodeString
+                (Decode.map2
+                    (\agentName prompt ->
+                        { agentName = agentName
+                        , prompt = prompt
+                        }
+                    )
+                    (Decode.field "agentName" Decode.string)
+                    (Decode.field "prompt" Decode.string)
+                )
+                requestBody
+    in
+    when handoffParamsResult is
+        Err _ ->
+            GrenTask.succeed
+                (Api.ApiError
+                    { statusCode = 400
+                    , code = "BAD_REQUEST"
+                    , message = "Invalid handoff request: requires 'agentName' and 'prompt' fields"
+                    }
+                )
+                |> GrenTask.perform toMsg
+
+        Ok params ->
+            GrenTask.succeed
+                (Api.DeferredHandoff
+                    { agentName = params.agentName
+                    , prompt = params.prompt
+                    }
+                )
+                |> GrenTask.perform toMsg

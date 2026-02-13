@@ -2,7 +2,10 @@ module ChorusToolsMain exposing (main)
 
 {-| CLI entry point for the chorus-tools proxy binary.
 
-Forwards tool requests to the Chorus server's tool execution endpoint.
+Pure proxy that forwards all tool requests to the Chorus server's tool
+execution endpoint. No tool-specific logic; the server handles dispatch,
+permission checking, and execution for all tools including handoff.
+
 Reads configuration from environment variables:
     - CHORUS_BASE_URL: Server base URL (default: http://localhost:8080)
     - CHORUS_TASK_ID: Current task ID (required)
@@ -12,8 +15,6 @@ Usage:
 
 Example:
     CHORUS_TASK_ID=abc123 chorus-tools '{"tool":"file.read","path":"src/main.gren"}'
-
-For handoff requests, starts the handoff via the API and polls until complete.
 -}
 
 import Bytes exposing (Bytes)
@@ -25,7 +26,6 @@ import Json.Encode as Encode
 import Node
 import Stream
 import Task
-import Tools.Handoff as Handoff
 import Tools.Json as Json
 
 
@@ -66,7 +66,10 @@ runTool env childProcessPermission envVars =
                     outputError env "Usage: chorus-tools <json_input>"
 
 
-{-| Dispatch based on tool name.
+{-| Dispatch a tool request by forwarding it to the server.
+
+All tools are forwarded to the server's tool execution endpoint.
+The server handles tool dispatch, permission checking, and execution.
 -}
 dispatchTool :
     Node.Environment
@@ -76,23 +79,7 @@ dispatchTool :
     -> String
     -> Init.Task (Cmd a)
 dispatchTool env childProcessPermission baseUrl taskId jsonInput =
-    let
-        toolNameResult =
-            Decode.decodeString (Decode.field "tool" Decode.string) jsonInput
-    in
-    when toolNameResult is
-        Err _ ->
-            outputError env "Missing or invalid 'tool' field in JSON input"
-
-        Ok toolName ->
-            when toolName is
-                "handoff" ->
-                    -- Special case: handoff uses start + poll pattern
-                    dispatchHandoff env childProcessPermission baseUrl taskId jsonInput
-
-                _ ->
-                    -- Forward to server's tool execution endpoint
-                    forwardToServer env childProcessPermission baseUrl taskId jsonInput
+    forwardToServer env childProcessPermission baseUrl taskId jsonInput
 
 
 {-| Forward a tool request to the server's POST /api/tasks/:id/tools endpoint.
@@ -154,76 +141,6 @@ forwardToServer env childProcessPermission baseUrl taskId jsonInput =
                                 bodyStr
                 in
                 Stream.writeLineAsBytes rawBody env.stdout
-                    |> Task.mapError (\_ -> "Failed to write output")
-            )
-        |> Task.onError
-            (\errorMsg ->
-                let
-                    errorJson =
-                        Json.encodeError errorMsg
-                in
-                Stream.writeLineAsBytes errorJson env.stderr
-                    |> Task.map (\_ -> env.stderr)
-                    |> Task.onError (\_ -> Task.succeed env.stderr)
-                    |> Task.map (\_ -> errorMsg)
-                    |> Task.andThen (\_ -> Task.fail errorMsg)
-            )
-        |> Task.map (\_ -> env.stdout)
-        |> Task.onError (\_ -> Task.succeed env.stdout)
-        |> Node.endSimpleProgram
-
-
-{-| Handle handoff by decoding params, calling Handoff.run, and encoding output.
--}
-dispatchHandoff :
-    Node.Environment
-    -> ChildProcess.Permission
-    -> String
-    -> String
-    -> String
-    -> Init.Task (Cmd a)
-dispatchHandoff env childProcessPermission baseUrl taskId jsonInput =
-    let
-        inputResult =
-            Decode.decodeString
-                (Decode.map2
-                    (\agentName prompt ->
-                        { taskId = taskId
-                        , agentName = agentName
-                        , prompt = prompt
-                        , baseUrl = baseUrl
-                        , pollIntervalMs = 5000
-                        , maxWaitMs = 600000
-                        }
-                    )
-                    (Decode.field "agentName" Decode.string)
-                    (Decode.field "prompt" Decode.string)
-                )
-                jsonInput
-    in
-    when inputResult is
-        Err _ ->
-            outputError env "Invalid handoff request: requires 'agentName' and 'prompt' fields"
-
-        Ok handoffInput ->
-            Handoff.run childProcessPermission handoffInput
-                |> Task.map Json.encodeHandoffOutput
-                |> Task.mapError Handoff.handoffErrorToString
-                |> handleResult env
-
-
-{-| Handle a tool result task.
--}
-handleResult : Node.Environment -> Task.Task String Encode.Value -> Init.Task (Cmd a)
-handleResult env task =
-    task
-        |> Task.andThen
-            (\value ->
-                let
-                    json =
-                        Encode.encode 0 value
-                in
-                Stream.writeLineAsBytes json env.stdout
                     |> Task.mapError (\_ -> "Failed to write output")
             )
         |> Task.onError

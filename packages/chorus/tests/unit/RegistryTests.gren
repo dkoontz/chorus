@@ -8,7 +8,6 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import Task
 import Types exposing (Task(..), TaskStatus(..), AgentConfig(..), AgentProvider(..), SourceInfo, Attachment, HandoffRecord)
-import Provider.ClaudeCode as ClaudeCode
 import Time
 
 
@@ -34,10 +33,6 @@ tests =
     , testTaskAgentChainAccessor
     , testSetCurrentAgentMutator
     , testSetAgentChainMutator
-    , testToolCliFlagSingleToolWithParens
-    , testToolCliFlagMultipleTools
-    , testToolCliFlagSpacesInsideParens
-    , testToolCliFlagNoParens
     , testInternalAgentEncodeDecode
     , testUserDefinedAgentEncodeDecodeWithoutModel
     , testUserDefinedAgentEncodeDecodeWithModel
@@ -964,41 +959,6 @@ testSetAgentChainMutator =
     }
 
 
--- TOOLCLIFLAGFROMALLOWEDTOOLS TESTS
-
-
-testToolCliFlagSingleToolWithParens : { name : String, run : Task.Task String {} }
-testToolCliFlagSingleToolWithParens =
-    { name = "toolCliFlagFromAllowedTools extracts single tool name from parenthesized value"
-    , run =
-        expectEqual "Bash" (ClaudeCode.toolCliFlagFromAllowedTools "Bash(file-tools *)")
-    }
-
-
-testToolCliFlagMultipleTools : { name : String, run : Task.Task String {} }
-testToolCliFlagMultipleTools =
-    { name = "toolCliFlagFromAllowedTools extracts multiple tool names"
-    , run =
-        expectEqual "Bash Edit Read" (ClaudeCode.toolCliFlagFromAllowedTools "Bash(file-tools *) Edit Read(*)")
-    }
-
-
-testToolCliFlagSpacesInsideParens : { name : String, run : Task.Task String {} }
-testToolCliFlagSpacesInsideParens =
-    { name = "toolCliFlagFromAllowedTools handles spaces inside parentheses"
-    , run =
-        expectEqual "Bash" (ClaudeCode.toolCliFlagFromAllowedTools "Bash(file-tools * scripts/agent/*)")
-    }
-
-
-testToolCliFlagNoParens : { name : String, run : Task.Task String {} }
-testToolCliFlagNoParens =
-    { name = "toolCliFlagFromAllowedTools handles plain tool names without parentheses"
-    , run =
-        expectEqual "Bash Edit" (ClaudeCode.toolCliFlagFromAllowedTools "Bash Edit")
-    }
-
-
 -- AGENTCONFIG TESTS
 
 
@@ -1179,3 +1139,5 @@ testIsInternalAgentFalse =
         in
         expectEqual False (Types.isInternalAgent config)
     }
+
+

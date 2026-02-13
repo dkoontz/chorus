@@ -4,6 +4,7 @@ module Provider.ClaudeCode exposing
     , CliArgs
     , buildShellCommand
     , toolCliFlagFromAllowedTools
+    , chorusToolsToCliFlags
     )
 
 {-| Claude Code provider implementation.
@@ -336,16 +337,23 @@ buildCliArgs args =
                 Nothing ->
                     []
 
-        allowedToolsValue =
-            args.allowedTools
-                |> Maybe.withDefault ("Bash(" ++ args.chorusToolsPath ++ " *)")
+        cliFlags =
+            when args.allowedTools is
+                Just chorusToolNames ->
+                    chorusToolsToCliFlags args.chorusToolsPath chorusToolNames
 
-        toolsFlag =
-            toolCliFlagFromAllowedTools allowedToolsValue
+                Nothing ->
+                    let
+                        defaultValue =
+                            "Bash(" ++ args.chorusToolsPath ++ " *)"
+                    in
+                    { tools = toolCliFlagFromAllowedTools defaultValue
+                    , allowedTools = defaultValue
+                    }
 
         toolArgs =
-            [ "--tools", toolsFlag
-            , "--allowedTools", allowedToolsValue
+            [ "--tools", cliFlags.tools
+            , "--allowedTools", cliFlags.allowedTools
             ]
 
         dirArgs =
@@ -403,15 +411,22 @@ buildShellCommand args =
                 Nothing ->
                     ""
 
-        allowedToolsValue =
-            args.allowedTools
-                |> Maybe.withDefault ("Bash(" ++ args.chorusToolsPath ++ " *)")
+        cliFlags =
+            when args.allowedTools is
+                Just chorusToolNames ->
+                    chorusToolsToCliFlags args.chorusToolsPath chorusToolNames
 
-        toolsFlag =
-            toolCliFlagFromAllowedTools allowedToolsValue
+                Nothing ->
+                    let
+                        defaultValue =
+                            "Bash(" ++ args.chorusToolsPath ++ " *)"
+                    in
+                    { tools = toolCliFlagFromAllowedTools defaultValue
+                    , allowedTools = defaultValue
+                    }
 
         toolArgs =
-            " --tools " ++ escapeForShell toolsFlag ++ " --allowedTools " ++ escapeForShell allowedToolsValue
+            " --tools " ++ escapeForShell cliFlags.tools ++ " --allowedTools " ++ escapeForShell cliFlags.allowedTools
 
         dirArgs =
             if String.isEmpty args.workspaceRoot then
@@ -448,6 +463,80 @@ buildShellCommand args =
             taskIdVar ++ baseUrlVar
     in
     envVars ++ baseArgs ++ sessionArgs ++ promptArgs ++ toolArgs ++ dirArgs ++ messageArg ++ stdinRedirect
+
+
+{-| Map Chorus tool names to Claude CLI --tools and --allowedTools flags.
+
+Chorus tool names (file.read, web.search, handoff, etc.) are internal names
+that the Claude CLI does not recognize. This function translates them into
+the correct CLI flag values:
+
+  - File tools and handoff → Bash(chorusToolsPath *)
+  - web.search → WebSearch
+  - Unrecognized names → ignored (not passed through)
+  - Empty result → falls back to Bash(chorusToolsPath *)
+
+-}
+chorusToolsToCliFlags : String -> String -> { tools : String, allowedTools : String }
+chorusToolsToCliFlags chorusToolsPath chorusToolNames =
+    let
+        bashValue =
+            "Bash(" ++ chorusToolsPath ++ " *)"
+
+        names =
+            chorusToolNames
+                |> String.split " "
+                |> Array.keepIf (\s -> not (String.isEmpty (String.trim s)))
+
+        mapped =
+            names
+                |> Array.mapAndKeepJust
+                    (\name ->
+                        when name is
+                            "file.read" ->
+                                Just bashValue
+
+                            "file.write" ->
+                                Just bashValue
+
+                            "file.create" ->
+                                Just bashValue
+
+                            "file.patch" ->
+                                Just bashValue
+
+                            "file.delete" ->
+                                Just bashValue
+
+                            "file.list" ->
+                                Just bashValue
+
+                            "file.search" ->
+                                Just bashValue
+
+                            "handoff" ->
+                                Just bashValue
+
+                            "web.search" ->
+                                Just "WebSearch"
+
+                            _ ->
+                                Nothing
+                    )
+                |> deduplicateStrings
+
+        allowedToolsValue =
+            if Array.isEmpty mapped then
+                bashValue
+            else
+                String.join " " mapped
+
+        toolsFlag =
+            toolCliFlagFromAllowedTools allowedToolsValue
+    in
+    { tools = toolsFlag
+    , allowedTools = allowedToolsValue
+    }
 
 
 {-| Derive the --tools flag value from an allowedTools string.

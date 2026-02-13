@@ -82,6 +82,7 @@ type alias ApiContext =
 type ApiResult
     = ApiSuccess { statusCode : Int, body : String }
     | ApiError { statusCode : Int, code : String, message : String }
+    | DeferredHandoff { agentName : String, prompt : String }
 
 
 {-| Parameters for creating a task.
@@ -1627,6 +1628,15 @@ sendApiResponse response result =
                 |> Response.setStatus statusCode
                 |> Response.setHeader "Content-Type" "application/json"
                 |> Response.setBody errorBody
+                |> Response.send
+
+        DeferredHandoff _ ->
+            -- DeferredHandoff should never reach sendApiResponse.
+            -- It is handled by Main.gren before reaching this point.
+            response
+                |> Response.setStatus 500
+                |> Response.setHeader "Content-Type" "application/json"
+                |> Response.setBody "{\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Unexpected deferred handoff in sendApiResponse\"}}"
                 |> Response.send
 
 

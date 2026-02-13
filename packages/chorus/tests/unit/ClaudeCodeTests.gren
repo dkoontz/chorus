@@ -1,0 +1,151 @@
+module ClaudeCodeTests exposing (tests)
+
+{-| Unit tests for Provider.ClaudeCode module.
+-}
+
+import Provider.ClaudeCode as ClaudeCode
+import Task
+
+
+tests : Array { name : String, run : Task.Task String {} }
+tests =
+    [ testToolCliFlagSingleToolWithParens
+    , testToolCliFlagMultipleTools
+    , testToolCliFlagSpacesInsideParens
+    , testToolCliFlagNoParens
+    , testChorusToolsMapsFileReadWrite
+    , testChorusToolsMapsWebSearch
+    , testChorusToolsMapsFileReadAndWebSearch
+    , testChorusToolsMapsHandoffAndFileRead
+    , testChorusToolsEmptyFallsBackToBash
+    , testChorusToolsIgnoresUnrecognized
+    ]
+
+
+-- TEST HELPERS
+
+
+expectEqual : a -> a -> Task.Task String {}
+expectEqual expected actual =
+    if expected == actual then
+        Task.succeed {}
+    else
+        Task.fail ("Expected: " ++ Debug.toString expected ++ " but got: " ++ Debug.toString actual)
+
+
+
+-- TOOLCLIFLAGFROMALLOWEDTOOLS TESTS
+
+
+testToolCliFlagSingleToolWithParens : { name : String, run : Task.Task String {} }
+testToolCliFlagSingleToolWithParens =
+    { name = "toolCliFlagFromAllowedTools extracts single tool name from parenthesized value"
+    , run =
+        expectEqual "Bash" (ClaudeCode.toolCliFlagFromAllowedTools "Bash(file-tools *)")
+    }
+
+
+testToolCliFlagMultipleTools : { name : String, run : Task.Task String {} }
+testToolCliFlagMultipleTools =
+    { name = "toolCliFlagFromAllowedTools extracts multiple tool names"
+    , run =
+        expectEqual "Bash Edit Read" (ClaudeCode.toolCliFlagFromAllowedTools "Bash(file-tools *) Edit Read(*)")
+    }
+
+
+testToolCliFlagSpacesInsideParens : { name : String, run : Task.Task String {} }
+testToolCliFlagSpacesInsideParens =
+    { name = "toolCliFlagFromAllowedTools handles spaces inside parentheses"
+    , run =
+        expectEqual "Bash" (ClaudeCode.toolCliFlagFromAllowedTools "Bash(file-tools * scripts/agent/*)")
+    }
+
+
+testToolCliFlagNoParens : { name : String, run : Task.Task String {} }
+testToolCliFlagNoParens =
+    { name = "toolCliFlagFromAllowedTools handles plain tool names without parentheses"
+    , run =
+        expectEqual "Bash Edit" (ClaudeCode.toolCliFlagFromAllowedTools "Bash Edit")
+    }
+
+
+
+-- CHORUSTOOLSTOCLIFLAGS TESTS
+
+
+testChorusToolsMapsFileReadWrite : { name : String, run : Task.Task String {} }
+testChorusToolsMapsFileReadWrite =
+    { name = "chorusToolsToCliFlags maps file.read file.write to Bash"
+    , run =
+        let
+            result =
+                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" "file.read file.write"
+        in
+        expectEqual "Bash" result.tools
+            |> Task.andThen (\_ -> expectEqual "Bash(./tools/chorus-tools *)" result.allowedTools)
+    }
+
+
+testChorusToolsMapsWebSearch : { name : String, run : Task.Task String {} }
+testChorusToolsMapsWebSearch =
+    { name = "chorusToolsToCliFlags maps web.search to WebSearch"
+    , run =
+        let
+            result =
+                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" "web.search"
+        in
+        expectEqual "WebSearch" result.tools
+            |> Task.andThen (\_ -> expectEqual "WebSearch" result.allowedTools)
+    }
+
+
+testChorusToolsMapsFileReadAndWebSearch : { name : String, run : Task.Task String {} }
+testChorusToolsMapsFileReadAndWebSearch =
+    { name = "chorusToolsToCliFlags maps file.read and web.search to Bash and WebSearch"
+    , run =
+        let
+            result =
+                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" "file.read web.search"
+        in
+        expectEqual "Bash WebSearch" result.tools
+            |> Task.andThen (\_ -> expectEqual "Bash(./tools/chorus-tools *) WebSearch" result.allowedTools)
+    }
+
+
+testChorusToolsMapsHandoffAndFileRead : { name : String, run : Task.Task String {} }
+testChorusToolsMapsHandoffAndFileRead =
+    { name = "chorusToolsToCliFlags maps handoff and file.read to Bash"
+    , run =
+        let
+            result =
+                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" "handoff file.read"
+        in
+        expectEqual "Bash" result.tools
+            |> Task.andThen (\_ -> expectEqual "Bash(./tools/chorus-tools *)" result.allowedTools)
+    }
+
+
+testChorusToolsEmptyFallsBackToBash : { name : String, run : Task.Task String {} }
+testChorusToolsEmptyFallsBackToBash =
+    { name = "chorusToolsToCliFlags falls back to Bash for empty input"
+    , run =
+        let
+            result =
+                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" ""
+        in
+        expectEqual "Bash" result.tools
+            |> Task.andThen (\_ -> expectEqual "Bash(./tools/chorus-tools *)" result.allowedTools)
+    }
+
+
+testChorusToolsIgnoresUnrecognized : { name : String, run : Task.Task String {} }
+testChorusToolsIgnoresUnrecognized =
+    { name = "chorusToolsToCliFlags ignores unrecognized tool names"
+    , run =
+        let
+            result =
+                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" "unknown.tool"
+        in
+        expectEqual "Bash" result.tools
+            |> Task.andThen (\_ -> expectEqual "Bash(./tools/chorus-tools *)" result.allowedTools)
+    }

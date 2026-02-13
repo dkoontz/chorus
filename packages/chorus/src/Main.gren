@@ -68,6 +68,7 @@ type alias Model =
     , agentRegistry : Maybe AgentRegistry.AgentRegistry
     , providerRegistry : Maybe ProviderRegistry.ProviderRegistry
     , activeExecutors : Dict String ExecutorState
+    , pendingHandoffResponses : Dict String Response
     , filesystemPermission : FileSystem.Permission
     , childProcessPermission : ChildProcess.Permission
     , httpClientPermission : HttpClient.Permission
@@ -130,6 +131,8 @@ type Msg
     | GotToolAgentLookup { taskId : TaskId, requestBody : String, response : Response, result : Result String { agentConfig : Types.AgentConfig } }
     | GotAgentLookup { taskId : TaskId, prompt : String, response : Response, result : Result AgentRegistry.Error Types.AgentConfig }
     | GotHandoffRecorded { taskId : TaskId, prompt : String, response : Response, agentConfig : Types.AgentConfig, apiResult : Api.ApiResult }
+    | GotDeferredHandoffLookup { taskId : TaskId, prompt : String, response : Response, agentConfig : Types.AgentConfig }
+    | GotDeferredHandoffStarted { taskId : TaskId, prompt : String, response : Response, agentConfig : Types.AgentConfig, apiResult : Api.ApiResult }
     | GotAgentComplete { taskId : TaskId, result : Result String String }
     | GotToolResult { taskId : TaskId, toolName : String, response : Response, result : Api.ApiResult }
     | GotInternalApiResult Api.ApiResult
@@ -215,6 +218,7 @@ init env =
                                         , agentRegistry = Nothing
                                         , providerRegistry = Nothing
                                         , activeExecutors = Dict.empty
+                                        , pendingHandoffResponses = Dict.empty
                                         , filesystemPermission = filesystemPermission
                                         , childProcessPermission = childProcessPermission
                                         , httpClientPermission = httpClientPermission
@@ -447,6 +451,135 @@ resolveProviderConfig model agentConfig =
                                     (\err ->
                                         "Agent '" ++ r.name ++ "' references provider '" ++ providerName ++ "' which does not exist"
                                     )
+
+
+-- AGENT SPAWNING
+
+
+{-| Build the executor state and spawn command for a handoff agent.
+
+Both the immediate handoff (GotHandoffRecorded) and the deferred handoff
+(GotDeferredHandoffStarted) need to resolve the provider, build a shell command,
+and spawn the agent process. This helper encapsulates that shared logic.
+-}
+buildAgentSpawn :
+    Model
+    -> TaskId
+    -> String
+    -> Types.AgentConfig
+    -> { executorState : ExecutorState, spawnCmd : Cmd Msg }
+buildAgentSpawn model taskId prompt agentConfig =
+    let
+        agentName =
+            Types.agentConfigName agentConfig
+
+        agentInstructions =
+            when agentConfig is
+                InternalAgent r ->
+                    r.instructions
+
+                UserDefinedAgent r ->
+                    r.instructions
+
+        completionReportInstruction =
+            "\n\nIMPORTANT: Before finishing your work, you MUST call the completion-report tool to submit your results. Use: {\"tool\": \"completion-report\", \"status\": \"complete\", \"summary\": \"Brief summary of what was done\", \"output\": \"Detailed output\"}\nFor blocked work, use status \"blocked\" with a \"blockedReason\". For failures, use status \"failed\"."
+
+        systemPrompt =
+            if String.isEmpty agentInstructions then
+                Just completionReportInstruction
+            else
+                Just (agentInstructions ++ completionReportInstruction)
+
+        initialDirectory =
+            initialAgentDir model
+
+        taskIdStr =
+            Id.taskIdToString taskId
+
+        executorState =
+            { taskId = taskId
+            , agentName = agentName
+            , agentConfig = agentConfig
+            , status = ExecRunning
+            , completionReportReceived = False
+            }
+
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.InheritWorkingDirectory
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 10 * 1024 * 1024
+            , runDuration = ChildProcess.Milliseconds 600000
+            }
+
+        spawnCmd =
+            resolveProviderConfig model agentConfig
+                |> GrenTask.andThen
+                    (\providerConfig ->
+                        let
+                            shellCommand =
+                                buildShellCommandForProvider model providerConfig agentConfig
+                                    { systemPrompt = systemPrompt
+                                    , initialDirectory = initialDirectory
+                                    , message = prompt
+                                    , taskId = Just taskIdStr
+                                    }
+                        in
+                        when shellCommand is
+                            Err errMsg ->
+                                GrenTask.fail errMsg
+
+                            Ok cmd ->
+                                ChildProcess.run model.childProcessPermission "bash" [ "-c", cmd ] options
+                                    |> GrenTask.map
+                                        (\cliResult ->
+                                            let
+                                                output =
+                                                    cliResult.stdout
+                                                        |> Bytes.toString
+                                                        |> Maybe.withDefault ""
+
+                                                -- Extract the result text from CLI JSON output
+                                                resultText =
+                                                    when Decode.decodeString (Decode.field "result" Decode.string) output is
+                                                        Ok text ->
+                                                            text
+
+                                                        Err _ ->
+                                                            output
+                                            in
+                                            Ok resultText
+                                        )
+                                    |> GrenTask.onError
+                                        (\runError ->
+                                            let
+                                                errMsg =
+                                                    when runError is
+                                                        ChildProcess.InitError { errorCode } ->
+                                                            "Failed to start agent CLI: " ++ errorCode
+
+                                                        ChildProcess.ProgramError { exitCode, stderr } ->
+                                                            let
+                                                                stderrStr =
+                                                                    stderr
+                                                                        |> Bytes.toString
+                                                                        |> Maybe.withDefault ""
+                                                            in
+                                                            "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                                            in
+                                            GrenTask.succeed (Err errMsg)
+                                        )
+                    )
+                |> GrenTask.onError
+                    (\errMsg ->
+                        GrenTask.succeed (Err errMsg)
+                    )
+                |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
+    in
+    { executorState = executorState
+    , spawnCmd = spawnCmd
+    }
+
 
 
 -- UPDATE
@@ -706,118 +839,105 @@ update msg model =
                     , command = sendResponseCmd
                     }
 
+                Api.DeferredHandoff _ ->
+                    -- Should not happen in this handler
+                    { model = model
+                    , command = sendResponseCmd
+                    }
+
                 Api.ApiSuccess _ ->
                     -- Task updated successfully. Resolve the provider and spawn the agent.
                     let
-                        agentName =
-                            Types.agentConfigName agentConfig
+                        { executorState, spawnCmd } =
+                            buildAgentSpawn model taskId prompt agentConfig
 
-                        agentInstructions =
-                            when agentConfig is
-                                InternalAgent r ->
-                                    r.instructions
-
-                                UserDefinedAgent r ->
-                                    r.instructions
-
-                        completionReportInstruction =
-                            "\n\nIMPORTANT: Before finishing your work, you MUST call the completion-report tool to submit your results. Use: {\"tool\": \"completion-report\", \"status\": \"complete\", \"summary\": \"Brief summary of what was done\", \"output\": \"Detailed output\"}\nFor blocked work, use status \"blocked\" with a \"blockedReason\". For failures, use status \"failed\"."
-
-                        systemPrompt =
-                            if String.isEmpty agentInstructions then
-                                Just completionReportInstruction
-                            else
-                                Just (agentInstructions ++ completionReportInstruction)
-
-                        initialDirectory =
-                            initialAgentDir model
-
-                        executorState =
-                            { taskId = taskId
-                            , agentName = agentName
-                            , agentConfig = agentConfig
-                            , status = ExecRunning
-                            , completionReportReceived = False
-                            }
-
-                        options =
-                            { shell = ChildProcess.NoShell
-                            , workingDirectory = ChildProcess.InheritWorkingDirectory
-                            , environmentVariables = ChildProcess.InheritEnvironmentVariables
-                            , maximumBytesWrittenToStreams = 10 * 1024 * 1024
-                            , runDuration = ChildProcess.Milliseconds 600000
-                            }
-
-                        spawnCmd =
-                            resolveProviderConfig model agentConfig
-                                |> GrenTask.andThen
-                                    (\providerConfig ->
-                                        let
-                                            shellCommand =
-                                                buildShellCommandForProvider model providerConfig agentConfig
-                                                    { systemPrompt = systemPrompt
-                                                    , initialDirectory = initialDirectory
-                                                    , message = prompt
-                                                    , taskId = Just (Id.taskIdToString taskId)
-                                                    }
-                                        in
-                                        when shellCommand is
-                                            Err errMsg ->
-                                                GrenTask.fail errMsg
-
-                                            Ok cmd ->
-                                                ChildProcess.run model.childProcessPermission "bash" [ "-c", cmd ] options
-                                                    |> GrenTask.map
-                                                        (\cliResult ->
-                                                            let
-                                                                output =
-                                                                    cliResult.stdout
-                                                                        |> Bytes.toString
-                                                                        |> Maybe.withDefault ""
-
-                                                                -- Extract the result text from CLI JSON output
-                                                                resultText =
-                                                                    when Decode.decodeString (Decode.field "result" Decode.string) output is
-                                                                        Ok text ->
-                                                                            text
-
-                                                                        Err _ ->
-                                                                            output
-                                                            in
-                                                            Ok resultText
-                                                        )
-                                                    |> GrenTask.onError
-                                                        (\runError ->
-                                                            let
-                                                                errMsg =
-                                                                    when runError is
-                                                                        ChildProcess.InitError { errorCode } ->
-                                                                            "Failed to start agent CLI: " ++ errorCode
-
-                                                                        ChildProcess.ProgramError { exitCode, stderr } ->
-                                                                            let
-                                                                                stderrStr =
-                                                                                    stderr
-                                                                                        |> Bytes.toString
-                                                                                        |> Maybe.withDefault ""
-                                                                            in
-                                                                            "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
-                                                            in
-                                                            GrenTask.succeed (Err errMsg)
-                                                        )
-                                    )
-                                |> GrenTask.onError
-                                    (\errMsg ->
-                                        GrenTask.succeed (Err errMsg)
-                                    )
-                                |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
+                        taskIdStr =
+                            Id.taskIdToString taskId
                     in
-                    { model = { model | activeExecutors = Dict.set (Id.taskIdToString taskId) executorState model.activeExecutors }
+                    { model = { model | activeExecutors = Dict.set taskIdStr executorState model.activeExecutors }
                     , command =
                         Cmd.batch
                             [ sendResponseCmd
                             , spawnCmd
-                            , Logging.logInfo model.logger ("Spawned agent " ++ agentName ++ " for task " ++ Id.taskIdToString taskId) NoOp
+                            , Logging.logInfo model.logger ("Spawned agent " ++ executorState.agentName ++ " for task " ++ taskIdStr) NoOp
+                            ]
+                    }
+
+        GotDeferredHandoffLookup { taskId, prompt, response, agentConfig } ->
+            -- Agent found for deferred handoff. Start the handoff in the registry.
+            when model.registry is
+                Nothing ->
+                    { model = model
+                    , command = sendBadRequest response "Registry not available"
+                    }
+
+                Just registry ->
+                    let
+                        ctx =
+                            { registry = registry
+                            , filesystemPermission = model.filesystemPermission
+                            , secureContext = model.secureContext
+                            , registryRoot = registryRootPath model
+                            }
+
+                        toMsg =
+                            \apiResult ->
+                                GotDeferredHandoffStarted
+                                    { taskId = taskId
+                                    , prompt = prompt
+                                    , response = response
+                                    , agentConfig = agentConfig
+                                    , apiResult = apiResult
+                                    }
+                    in
+                    { model = model
+                    , command =
+                        Api.requestStartHandoff ctx taskId { agentName = Types.agentConfigName agentConfig, prompt = prompt } toMsg
+                    }
+
+        GotDeferredHandoffStarted { taskId, prompt, response, agentConfig, apiResult } ->
+            -- Handoff recorded in registry. Store the deferred response and spawn the agent.
+            when apiResult is
+                Api.ApiError err ->
+                    -- Handoff start failed (e.g., 409 conflict), send error to tool binary
+                    { model = model
+                    , command =
+                        Api.sendApiResponse response (Api.ApiError err)
+                    }
+
+                Api.DeferredHandoff _ ->
+                    -- Should not happen in this handler (requestStartHandoff returns ApiSuccess/ApiError)
+                    { model = model
+                    , command =
+                        Api.sendApiResponse response
+                            (Api.ApiError { statusCode = 500, code = "INTERNAL_ERROR", message = "Unexpected DeferredHandoff result in GotDeferredHandoffStarted" })
+                    }
+
+                Api.ApiSuccess _ ->
+                    -- Handoff started successfully. Store the HTTP response for later resolution.
+                    -- Note: The deferred response is implicitly timed out by the ChildProcess
+                    -- runDuration of 600 seconds (10 minutes). If the agent process is killed
+                    -- by that timeout, GotAgentComplete fires with an error and resolves
+                    -- the pending response. No separate timeout mechanism is needed as long
+                    -- as the ChildProcess timeout remains in place.
+                    let
+                        { executorState, spawnCmd } =
+                            buildAgentSpawn model taskId prompt agentConfig
+
+                        taskIdStr =
+                            Id.taskIdToString taskId
+
+                        updatedModel =
+                            { model
+                                | activeExecutors = Dict.set taskIdStr executorState model.activeExecutors
+                                , pendingHandoffResponses = Dict.set taskIdStr response model.pendingHandoffResponses
+                            }
+                    in
+                    { model = updatedModel
+                    , command =
+                        Cmd.batch
+                            [ spawnCmd
+                            , Logging.logInfo model.logger ("Spawned deferred handoff agent " ++ executorState.agentName ++ " for task " ++ taskIdStr) NoOp
                             ]
                     }
 
@@ -832,19 +952,60 @@ update msg model =
                         |> Maybe.map .completionReportReceived
                         |> Maybe.withDefault False
 
-                -- Remove executor from active
+                -- Check for pending deferred handoff response
+                maybeDeferredResponse =
+                    Dict.get taskIdStr model.pendingHandoffResponses
+
+                -- Remove executor from active and clear pending response
                 updatedExecutors =
                     Dict.remove taskIdStr model.activeExecutors
 
+                updatedPendingResponses =
+                    Dict.remove taskIdStr model.pendingHandoffResponses
+
                 updatedModel =
-                    { model | activeExecutors = updatedExecutors }
+                    { model
+                        | activeExecutors = updatedExecutors
+                        , pendingHandoffResponses = updatedPendingResponses
+                    }
+
+                -- Build the deferred response command if there's a pending response
+                deferredResponseCmd =
+                    when maybeDeferredResponse is
+                        Nothing ->
+                            Cmd.none
+
+                        Just deferredResponse ->
+                            let
+                                rawOutput =
+                                    when result is
+                                        Ok text ->
+                                            text
+
+                                        Err errMsg ->
+                                            "Agent failed: " ++ errMsg
+
+                                agentName =
+                                    Dict.get taskIdStr model.activeExecutors
+                                        |> Maybe.map .agentName
+                                        |> Maybe.withDefault "unknown"
+
+                                responseBody =
+                                    Encode.object
+                                        [ { key = "agent_name", value = Encode.string agentName }
+                                        , { key = "output", value = Encode.string rawOutput }
+                                        ]
+                                        |> Encode.encode 0
+                            in
+                            Api.sendApiResponse deferredResponse
+                                (Api.ApiSuccess { statusCode = 200, body = responseBody })
             in
             if hadCompletionReport then
                 -- Completion report already handled status/output; just complete the handoff record timestamps
                 when model.registry is
                     Nothing ->
                         { model = updatedModel
-                        , command = Cmd.none
+                        , command = deferredResponseCmd
                         }
 
                     Just registry ->
@@ -870,6 +1031,7 @@ update msg model =
                                 [ Api.requestCompleteHandoff ctx taskId { output = rawOutput }
                                     (\apiResult -> GotInternalApiResult apiResult)
                                 , Logging.logInfo model.logger ("Agent completed for task " ++ taskIdStr ++ " (completion report received)") NoOp
+                                , deferredResponseCmd
                                 ]
                         }
             else
@@ -879,7 +1041,11 @@ update msg model =
                         when model.registry is
                             Nothing ->
                                 { model = updatedModel
-                                , command = Logging.logError model.logger "Agent completed but registry not available" NoOp
+                                , command =
+                                    Cmd.batch
+                                        [ Logging.logError model.logger "Agent completed but registry not available" NoOp
+                                        , deferredResponseCmd
+                                        ]
                                 }
 
                             Just registry ->
@@ -897,6 +1063,7 @@ update msg model =
                                         [ Api.requestCompleteHandoff ctx taskId { output = outputText }
                                             (\apiResult -> GotInternalApiResult apiResult)
                                         , Logging.logInfo model.logger ("Agent completed for task " ++ taskIdStr ++ " without completion report (output length: " ++ String.fromInt (String.unitLength outputText) ++ ")") NoOp
+                                        , deferredResponseCmd
                                         ]
                                 }
 
@@ -904,7 +1071,11 @@ update msg model =
                         when model.registry is
                             Nothing ->
                                 { model = updatedModel
-                                , command = Logging.logError model.logger ("Agent failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                                , command =
+                                    Cmd.batch
+                                        [ Logging.logError model.logger ("Agent failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                                        , deferredResponseCmd
+                                        ]
                                 }
 
                             Just registry ->
@@ -922,6 +1093,7 @@ update msg model =
                                         [ Api.requestCompleteHandoff ctx taskId { output = "Agent failed: " ++ errMsg }
                                             (\apiResult -> GotInternalApiResult apiResult)
                                         , Logging.logError model.logger ("Agent failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                                        , deferredResponseCmd
                                         ]
                                 }
 
@@ -981,57 +1153,98 @@ update msg model =
             }
 
         GotToolResult { taskId, toolName, response, result } ->
-            let
-                status =
-                    when result is
-                        Api.ApiSuccess _ ->
-                            "success"
-
-                        Api.ApiError _ ->
-                            "error"
-
-                logCmd =
-                    when model.registry is
+            when result is
+                Api.DeferredHandoff { agentName, prompt } ->
+                    -- Handoff requested through tool binary: look up agent, start handoff, defer response
+                    when model.agentRegistry is
                         Nothing ->
-                            Cmd.none
+                            { model = model
+                            , command = sendBadRequest response "Agent registry not available"
+                            }
 
-                        Just reg ->
-                            Registry.recordEvent reg taskId
-                                { eventType = "tool_executed"
-                                , data =
-                                    Dict.empty
-                                        |> Dict.set "tool" toolName
-                                        |> Dict.set "status" status
-                                }
-                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
-                                |> GrenTask.perform (\_ -> NoOp)
+                        Just agentReg ->
+                            { model = model
+                            , command =
+                                AgentRegistry.getAgent agentReg agentName
+                                    |> GrenTask.mapError AgentRegistry.errorToString
+                                    |> GrenTask.andThen
+                                        (\agentConfig ->
+                                            if Types.isInternalAgent agentConfig then
+                                                GrenTask.fail ("Cannot hand off to internal agent: " ++ Types.agentConfigName agentConfig)
+                                            else
+                                                GrenTask.succeed agentConfig
+                                        )
+                                    |> GrenTask.attempt
+                                        (\lookupResult ->
+                                            when lookupResult is
+                                                Err errMsg ->
+                                                    GotApiResult { response = response, result = Api.ApiError { statusCode = 400, code = "BAD_REQUEST", message = errMsg } }
 
-                -- Track successful completion-report submissions
-                updatedModel =
-                    if toolName == "completion-report" && status == "success" then
-                        let
-                            taskIdStr =
-                                Id.taskIdToString taskId
+                                                Ok agentConfig ->
+                                                    GotDeferredHandoffLookup
+                                                        { taskId = taskId
+                                                        , prompt = prompt
+                                                        , response = response
+                                                        , agentConfig = agentConfig
+                                                        }
+                                        )
+                            }
 
-                            updatedExecutors =
-                                when Dict.get taskIdStr model.activeExecutors is
-                                    Just executor ->
-                                        Dict.set taskIdStr { executor | completionReportReceived = True } model.activeExecutors
+                _ ->
+                    let
+                        status =
+                            when result is
+                                Api.ApiSuccess _ ->
+                                    "success"
 
-                                    Nothing ->
-                                        model.activeExecutors
-                        in
-                        { model | activeExecutors = updatedExecutors }
-                    else
-                        model
-            in
-            { model = updatedModel
-            , command =
-                Cmd.batch
-                    [ Api.sendApiResponse response result
-                    , logCmd
-                    ]
-            }
+                                Api.ApiError _ ->
+                                    "error"
+
+                                Api.DeferredHandoff _ ->
+                                    "deferred"
+
+                        logCmd =
+                            when model.registry is
+                                Nothing ->
+                                    Cmd.none
+
+                                Just reg ->
+                                    Registry.recordEvent reg taskId
+                                        { eventType = "tool_executed"
+                                        , data =
+                                            Dict.empty
+                                                |> Dict.set "tool" toolName
+                                                |> Dict.set "status" status
+                                        }
+                                        |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                        |> GrenTask.perform (\_ -> NoOp)
+
+                        -- Track successful completion-report submissions
+                        updatedModel =
+                            if toolName == "completion-report" && status == "success" then
+                                let
+                                    taskIdStr =
+                                        Id.taskIdToString taskId
+
+                                    updatedExecutors =
+                                        when Dict.get taskIdStr model.activeExecutors is
+                                            Just executor ->
+                                                Dict.set taskIdStr { executor | completionReportReceived = True } model.activeExecutors
+
+                                            Nothing ->
+                                                model.activeExecutors
+                                in
+                                { model | activeExecutors = updatedExecutors }
+                            else
+                                model
+                    in
+                    { model = updatedModel
+                    , command =
+                        Cmd.batch
+                            [ Api.sendApiResponse response result
+                            , logCmd
+                            ]
+                    }
 
         GotBinaryResult { response, result } ->
             { model = model
@@ -1072,6 +1285,9 @@ update msg model =
                             { model = model, command = sendResponseCmd }
 
                 Api.ApiError _ ->
+                    { model = model, command = sendResponseCmd }
+
+                Api.DeferredHandoff _ ->
                     { model = model, command = sendResponseCmd }
 
         GotPlannerComplete { taskId, result } ->
@@ -1195,6 +1411,9 @@ update msg model =
                             { model = model, command = sendResponseCmd }
 
                 Api.ApiError _ ->
+                    { model = model, command = sendResponseCmd }
+
+                Api.DeferredHandoff _ ->
                     { model = model, command = sendResponseCmd }
 
         GotToolGrant { taskId, addTools, removeTools, response } ->

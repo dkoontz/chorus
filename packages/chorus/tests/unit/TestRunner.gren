@@ -7,6 +7,7 @@ import Init
 import Node
 import Stream
 import Task
+import ClaudeCodeTests
 import ConfigTests
 import RegistryTests
 import QueueTests
@@ -22,7 +23,8 @@ init env =
     let
         allTests =
             Array.flatten
-                [ ConfigTests.tests
+                [ ClaudeCodeTests.tests
+                , ConfigTests.tests
                 , RegistryTests.tests
                 , QueueTests.tests
                 ]
