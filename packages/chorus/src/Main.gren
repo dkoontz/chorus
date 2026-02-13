@@ -1605,12 +1605,12 @@ handleRoute model route request response =
                         Router.PlanTask taskId ->
                             when Maybe.map .systemAgentProvider model.workspaceConfig is
                                 Just NotConfigured ->
-                                    sendBadRequest response "System agent provider is not configured. Please configure it in System Settings."
+                                    sendConflict response "System agent provider is not configured. Please configure it in System Settings."
 
                                 Nothing ->
-                                    sendBadRequest response "No workspace config loaded"
+                                    sendConflict response "No workspace config loaded"
 
-                                _ ->
+                                Just (ProviderRef _) ->
                                     Api.requestPlanTask ctx taskId
                                         (\{ apiResult, description } ->
                                             GotPlanTaskResult { response = response, taskId = taskId, description = description, result = apiResult }
@@ -1619,12 +1619,12 @@ handleRoute model route request response =
                         Router.StartHandoff taskId ->
                             when Maybe.map .systemAgentProvider model.workspaceConfig is
                                 Just NotConfigured ->
-                                    sendBadRequest response "System agent provider is not configured. Please configure it in System Settings."
+                                    sendConflict response "System agent provider is not configured. Please configure it in System Settings."
 
                                 Nothing ->
-                                    sendBadRequest response "No workspace config loaded"
+                                    sendConflict response "No workspace config loaded"
 
-                                _ ->
+                                Just (ProviderRef _) ->
                                     when parseStartHandoffBody request is
                                         Ok params ->
                                             when model.agentRegistry is
@@ -1831,6 +1831,30 @@ sendBadRequest response message =
     in
     response
         |> Response.setStatus 400
+        |> Response.setHeader "Content-Type" "application/json"
+        |> Response.setBody body
+        |> Response.send
+
+
+{-| Send a 409 Conflict response.
+-}
+sendConflict : Response -> String -> Cmd Msg
+sendConflict response message =
+    let
+        body =
+            Encode.object
+                [ { key = "error"
+                  , value =
+                        Encode.object
+                            [ { key = "code", value = Encode.string "CONFLICT" }
+                            , { key = "message", value = Encode.string message }
+                            ]
+                  }
+                ]
+                |> Encode.encode 0
+    in
+    response
+        |> Response.setStatus 409
         |> Response.setHeader "Content-Type" "application/json"
         |> Response.setBody body
         |> Response.send
