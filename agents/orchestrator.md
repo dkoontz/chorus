@@ -10,8 +10,9 @@ When invoked, you may optionally receive:
 If `TASK_FILE` is not provided, you will ask the user what they want to work on and invoke the Planner agent if needed.
 
 Derived paths:
+- Project name: `$(basename $PWD)` (e.g., `chorus`)
 - Task name: directory name (e.g., `feature-a`)
-- Worktree: `../chorus.worktrees/{task-name}` (branch: `{task-name}`)
+- Worktree: `../{project-name}.worktrees/{task-name}` (branch: `{task-name}`)
 - Task directory: `tasks/{task-name}/`
 - Task spec: `tasks/{task-name}/plan.md`
 - Status file: `tasks/{task-name}/status.md`
@@ -24,7 +25,7 @@ Report files (where `N` is the current iteration number):
 ## Your Workflow
 
 1. **Parse the task filename** to derive the workspace path
-2. **Create a git worktree** at `../chorus.worktrees/{task-name}` on a new branch `{task-name}`
+2. **Create a git worktree** at `../{project-name}.worktrees/{task-name}` on a new branch `{task-name}`
 3. **Create the task directory** if it doesn't exist: `tasks/{task-name}/`
 4. **Read the task specification** from `TASK_FILE`
 5. **Read or initialize status** from `tasks/{task-name}/status.md`
@@ -88,7 +89,7 @@ Where `[planning]` is optional - only invoked if the user describes a new task.
   - If user approves merge:
     1. Switch to main: `git checkout main`
     2. Fast-forward merge: `git merge --ff-only {task-name}`
-    3. Delete the worktree: `git worktree remove ../chorus.worktrees/{task-name}`
+    3. Delete the worktree: `git worktree remove ../$(basename $PWD).worktrees/{task-name}`
     4. Delete the branch: `git branch -d {task-name}`
     5. Report that the merge is complete
   - If user declines:
@@ -117,10 +118,10 @@ Task tool:
     TASK_FILE: {TASK_FILE}
     STATUS_FILE: tasks/{task-name}/status.md
     REPORT_FILE: tasks/{task-name}/developer-{N}.md
-    WORKTREE: ../chorus.worktrees/{task-name}
+    WORKTREE: ../$(basename $PWD).worktrees/{task-name}
 
     Before starting, navigate to the worktree:
-        cd $(git rev-parse --show-toplevel)/../chorus.worktrees/{task-name}
+        cd $(git rev-parse --show-toplevel)/../$(basename $(git rev-parse --show-toplevel)).worktrees/{task-name}
 
     Read your instructions from agents/developer.md, then execute your workflow using the parameters above.
 ```
@@ -138,10 +139,10 @@ Task tool:
     STATUS_FILE: tasks/{task-name}/status.md
     REPORT_FILE: tasks/{task-name}/developer-{N}.md
     REVIEW_REPORT: tasks/{task-name}/review-{N-1}.md
-    WORKTREE: ../chorus.worktrees/{task-name}
+    WORKTREE: ../$(basename $PWD).worktrees/{task-name}
 
     Before starting, navigate to the worktree:
-        cd $(git rev-parse --show-toplevel)/../chorus.worktrees/{task-name}
+        cd $(git rev-parse --show-toplevel)/../$(basename $(git rev-parse --show-toplevel)).worktrees/{task-name}
 
     Read your instructions from agents/developer.md, then execute your workflow using the parameters above.
     Address the issues identified in REVIEW_REPORT.
@@ -160,10 +161,10 @@ Task tool:
     STATUS_FILE: tasks/{task-name}/status.md
     REPORT_FILE: tasks/{task-name}/developer-{N}.md
     QA_REPORT: tasks/{task-name}/qa-{N-1}.md
-    WORKTREE: ../chorus.worktrees/{task-name}
+    WORKTREE: ../$(basename $PWD).worktrees/{task-name}
 
     Before starting, navigate to the worktree:
-        cd $(git rev-parse --show-toplevel)/../chorus.worktrees/{task-name}
+        cd $(git rev-parse --show-toplevel)/../$(basename $(git rev-parse --show-toplevel)).worktrees/{task-name}
 
     Read your instructions from agents/developer.md, then execute your workflow using the parameters above.
     Fix the failures identified in QA_REPORT.
@@ -181,10 +182,10 @@ Task tool:
     TASK_FILE: {TASK_FILE}
     DEV_REPORT: tasks/{task-name}/developer-{N}.md
     REPORT_FILE: tasks/{task-name}/review-{N}.md
-    WORKTREE: ../chorus.worktrees/{task-name}
+    WORKTREE: ../$(basename $PWD).worktrees/{task-name}
 
     Before starting, navigate to the worktree:
-        cd $(git rev-parse --show-toplevel)/../chorus.worktrees/{task-name}
+        cd $(git rev-parse --show-toplevel)/../$(basename $(git rev-parse --show-toplevel)).worktrees/{task-name}
 
     Read your instructions from agents/developer-review.md, then execute your workflow using the parameters above.
 ```
@@ -201,10 +202,10 @@ Task tool:
     TASK_FILE: {TASK_FILE}
     DEV_REPORT: tasks/{task-name}/developer-{N}.md
     REPORT_FILE: tasks/{task-name}/qa-{N}.md
-    WORKTREE: ../chorus.worktrees/{task-name}
+    WORKTREE: ../$(basename $PWD).worktrees/{task-name}
 
     Before starting, navigate to the worktree:
-        cd $(git rev-parse --show-toplevel)/../chorus.worktrees/{task-name}
+        cd $(git rev-parse --show-toplevel)/../$(basename $(git rev-parse --show-toplevel)).worktrees/{task-name}
 
     Read your instructions from agents/qa.md, then execute your workflow using the parameters above.
 ```
@@ -244,7 +245,7 @@ Update `tasks/{task-name}/status.md` after each phase transition:
 
 Task: {TASK_FILE}
 Branch: {task-name}
-Worktree: ../chorus.worktrees/{task-name}
+Worktree: ../{project-name}.worktrees/{task-name}
 Phase: [ask | planning | dev | review | qa | complete]
 Iteration: [number - increment each time we return to dev]
 Current Agent: [Planner | Developer | Review | QA | none]
@@ -321,8 +322,8 @@ When first invoked:
 
 6. **Create git worktree** for the task:
    - Create a new branch from `main`: `git branch {task-name} main`
-   - Create the worktree: `git worktree add ../chorus.worktrees/{task-name} {task-name}`
-   - The `../chorus.worktrees/` directory must already exist
+   - Create the worktree: `git worktree add ../$(basename $PWD).worktrees/{task-name} {task-name}`
+   - The `../{project-name}.worktrees/` directory must already exist
 
 7. **Initialize `tasks/{task-name}/status.md`**
 
