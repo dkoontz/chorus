@@ -13,7 +13,9 @@ module Web.Api exposing
     , requestUploadAttachment
     , requestDownloadAttachment
     , requestDeleteAttachment
+    , requestStartAgent
     , requestStartHandoff
+    , requestCompleteAgent
     , requestCompleteHandoff
     , requestAgents
     , requestAgent
@@ -33,8 +35,8 @@ module Web.Api exposing
     , sendBinaryResponse
     , CreateTaskParams
     , UpdatePlanningParams
-    , StartHandoffParams
-    , CompleteHandoffParams
+    , StartAgentParams
+    , CompleteAgentParams
     , indexedArrayToDict
     )
 
@@ -104,17 +106,17 @@ type alias UpdatePlanningParams =
     }
 
 
-{-| Parameters for starting a hand-off.
+{-| Parameters for starting an agent on a task.
 -}
-type alias StartHandoffParams =
+type alias StartAgentParams =
     { agentName : String
     , prompt : String
     }
 
 
-{-| Parameters for completing a hand-off.
+{-| Parameters for completing an agent run on a task.
 -}
-type alias CompleteHandoffParams =
+type alias CompleteAgentParams =
     { output : String
     }
 
@@ -978,14 +980,32 @@ requestDeleteAttachment ctx taskId filename uploadDir toMsg =
 
 
 
-{-| POST /api/tasks/:id/handoff - Start a hand-off to an agent.
+{-| Start an agent on a task (UI-initiated, not a handoff).
+
+Records an "agent_started" history event.
+-}
+requestStartAgent : ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
+requestStartAgent =
+    startAgentOnTask "agent_started"
+
+
+{-| Start a hand-off to an agent (initiated by another agent's handoff tool).
+
+Records an "agent_handoff_started" history event.
+-}
+requestStartHandoff : ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
+requestStartHandoff =
+    startAgentOnTask "agent_handoff_started"
+
+
+{-| Shared implementation for starting an agent on a task.
 
 Sets currentAgent, appends a HandoffRecord to agentChain, records a history event,
 and transitions the task to Active if it was Pending or Waiting.
 The actual agent spawning is handled by the caller (Main.gren).
 -}
-requestStartHandoff : ApiContext -> TaskId -> StartHandoffParams -> (ApiResult -> msg) -> Cmd msg
-requestStartHandoff ctx taskId params toMsg =
+startAgentOnTask : String -> ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
+startAgentOnTask eventType ctx taskId params toMsg =
     -- First check if the task exists and currentAgent is not already set
     Registry.getTask ctx.registry taskId
         |> GrenTask.andThen
@@ -1050,7 +1070,7 @@ requestStartHandoff ctx taskId params toMsg =
                                                         in
                                                         -- Record history event
                                                         Registry.recordEvent ctx.registry taskId
-                                                            { eventType = "agent_handoff_started"
+                                                            { eventType = eventType
                                                             , data =
                                                                 Dict.empty
                                                                     |> Dict.set "agentName" params.agentName
@@ -1079,13 +1099,31 @@ requestStartHandoff ctx taskId params toMsg =
         |> GrenTask.perform toMsg
 
 
-{-| PUT /api/tasks/:id/handoff/complete - Complete a hand-off.
+{-| Complete an agent run on a task (UI-initiated agent, not a handoff).
+
+Records an "agent_completed" history event.
+-}
+requestCompleteAgent : ApiContext -> TaskId -> CompleteAgentParams -> (ApiResult -> msg) -> Cmd msg
+requestCompleteAgent =
+    completeAgentOnTask "agent_completed"
+
+
+{-| Complete a hand-off (agent initiated by another agent's handoff tool).
+
+Records an "agent_handoff_completed" history event.
+-}
+requestCompleteHandoff : ApiContext -> TaskId -> CompleteAgentParams -> (ApiResult -> msg) -> Cmd msg
+requestCompleteHandoff =
+    completeAgentOnTask "agent_handoff_completed"
+
+
+{-| Shared implementation for completing an agent on a task.
 
 Sets completedAt on the last agentChain entry, stores the output,
 clears currentAgent, sets status to Waiting, and records a history event.
 -}
-requestCompleteHandoff : ApiContext -> TaskId -> CompleteHandoffParams -> (ApiResult -> msg) -> Cmd msg
-requestCompleteHandoff ctx taskId params toMsg =
+completeAgentOnTask : String -> ApiContext -> TaskId -> CompleteAgentParams -> (ApiResult -> msg) -> Cmd msg
+completeAgentOnTask eventType ctx taskId params toMsg =
     Registry.getTask ctx.registry taskId
         |> GrenTask.andThen
             (\maybeTask ->
@@ -1151,7 +1189,7 @@ requestCompleteHandoff ctx taskId params toMsg =
                                                 in
                                                 -- Record history event
                                                 Registry.recordEvent ctx.registry taskId
-                                                    { eventType = "agent_handoff_completed"
+                                                    { eventType = eventType
                                                     , data =
                                                         Dict.empty
                                                             |> Dict.set "agentName" agentName

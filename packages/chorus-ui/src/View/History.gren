@@ -132,6 +132,12 @@ eventTypeClass eventType =
         "answers_submitted" ->
             "message"
 
+        "agent_started" ->
+            "agent"
+
+        "agent_completed" ->
+            "agent"
+
         "agent_handoff_started" ->
             "handoff"
 

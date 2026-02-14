@@ -823,7 +823,7 @@ update msg model =
                             in
                             { model = model
                             , command =
-                                Api.requestStartHandoff ctx taskId { agentName = Types.agentConfigName agentConfig, prompt = prompt } toMsg
+                                Api.requestStartAgent ctx taskId { agentName = Types.agentConfigName agentConfig, prompt = prompt } toMsg
                             }
 
         GotHandoffRecorded { taskId, prompt, response, agentConfig, apiResult } ->
@@ -956,6 +956,15 @@ update msg model =
                 maybeDeferredResponse =
                     Dict.get taskIdStr model.pendingHandoffResponses
 
+                -- Use the appropriate complete function based on whether this was a handoff
+                requestComplete =
+                    when maybeDeferredResponse is
+                        Just _ ->
+                            Api.requestCompleteHandoff
+
+                        Nothing ->
+                            Api.requestCompleteAgent
+
                 -- Remove executor from active and clear pending response
                 updatedExecutors =
                     Dict.remove taskIdStr model.activeExecutors
@@ -1028,7 +1037,7 @@ update msg model =
                         { model = updatedModel
                         , command =
                             Cmd.batch
-                                [ Api.requestCompleteHandoff ctx taskId { output = rawOutput }
+                                [ requestComplete ctx taskId { output = rawOutput }
                                     (\apiResult -> GotInternalApiResult apiResult)
                                 , Logging.logInfo model.logger ("Agent completed for task " ++ taskIdStr ++ " (completion report received)") NoOp
                                 , deferredResponseCmd
@@ -1060,7 +1069,7 @@ update msg model =
                                 { model = updatedModel
                                 , command =
                                     Cmd.batch
-                                        [ Api.requestCompleteHandoff ctx taskId { output = outputText }
+                                        [ requestComplete ctx taskId { output = outputText }
                                             (\apiResult -> GotInternalApiResult apiResult)
                                         , Logging.logInfo model.logger ("Agent completed for task " ++ taskIdStr ++ " without completion report (output length: " ++ String.fromInt (String.unitLength outputText) ++ ")") NoOp
                                         , deferredResponseCmd
@@ -1090,7 +1099,7 @@ update msg model =
                                 { model = updatedModel
                                 , command =
                                     Cmd.batch
-                                        [ Api.requestCompleteHandoff ctx taskId { output = "Agent failed: " ++ errMsg }
+                                        [ requestComplete ctx taskId { output = "Agent failed: " ++ errMsg }
                                             (\apiResult -> GotInternalApiResult apiResult)
                                         , Logging.logError model.logger ("Agent failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
                                         , deferredResponseCmd
@@ -2258,7 +2267,7 @@ parseUpdatePlanningBody request =
 
 {-| Parse the body for POST /api/tasks/:id/handoff.
 -}
-parseStartHandoffBody : HttpServer.Request -> Result String Api.StartHandoffParams
+parseStartHandoffBody : HttpServer.Request -> Result String Api.StartAgentParams
 parseStartHandoffBody request =
     let
         decoder =
@@ -2281,7 +2290,7 @@ parseStartHandoffBody request =
 
 {-| Parse the body for PUT /api/tasks/:id/handoff/complete.
 -}
-parseCompleteHandoffBody : HttpServer.Request -> Result String Api.CompleteHandoffParams
+parseCompleteHandoffBody : HttpServer.Request -> Result String Api.CompleteAgentParams
 parseCompleteHandoffBody request =
     let
         decoder =

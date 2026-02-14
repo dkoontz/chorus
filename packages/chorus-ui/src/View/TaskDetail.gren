@@ -619,20 +619,21 @@ viewTaskHistory props task =
 viewEvent : Time.Zone -> Time.Posix -> Array Types.HandoffRecord -> Set Int -> (Int -> msg) -> Int -> Types.Event -> Html msg
 viewEvent zone now agentChain expandedEvents onToggle eventIndex event =
     let
-        isHandoffEvent =
-            event.eventType == "agent_handoff_started" || event.eventType == "agent_handoff_completed"
+        isExpandableAgentEvent =
+            event.eventType == "agent_started" || event.eventType == "agent_completed"
+                || event.eventType == "agent_handoff_started" || event.eventType == "agent_handoff_completed"
 
         isExpanded =
             Set.member eventIndex expandedEvents
 
         handoffClasses =
-            if isHandoffEvent then
+            if isExpandableAgentEvent then
                 "event-item event-item-handoff"
             else
                 "event-item"
 
         clickHandler =
-            if isHandoffEvent then
+            if isExpandableAgentEvent then
                 [ onClick (onToggle eventIndex) ]
             else
                 []
@@ -645,7 +646,7 @@ viewEvent zone now agentChain expandedEvents onToggle eventIndex event =
 
         -- Filter out handoffIndex from visible event data (only relevant for handoff events)
         visibleData =
-            if isHandoffEvent then
+            if isExpandableAgentEvent then
                 Dict.remove "handoffIndex" event.data
             else
                 event.data
@@ -654,7 +655,7 @@ viewEvent zone now agentChain expandedEvents onToggle eventIndex event =
         (Array.flatten
             [ [ div ([ class "event-header" ] ++ clickHandler)
                     [ span [ class "event-type" ]
-                        [ if isHandoffEvent then
+                        [ if isExpandableAgentEvent then
                             span [ class "event-expand-indicator" ]
                                 [ text
                                     (if isExpanded then
@@ -702,13 +703,13 @@ viewExpandedHandoffDetail eventType maybeRecord =
                 [ p [ class "empty-state-text" ] [ text "Handoff record not found" ] ]
 
         Just record ->
-            if eventType == "agent_handoff_started" then
+            if eventType == "agent_started" || eventType == "agent_handoff_started" then
                 div [ class "event-detail" ]
                     [ h4 [] [ text "Input / Prompt" ]
                     , pre [ class "event-detail-content" ] [ text record.input ]
                     ]
             else
-                -- agent_handoff_completed
+                -- agent_completed / agent_handoff_completed
                 div [ class "event-detail" ]
                     (Array.flatten
                         [ [ h4 [] [ text "Output" ]
