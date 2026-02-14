@@ -38,7 +38,7 @@ import Tools.Json as ToolsJson
         , encodeAllToolsHelp
         )
 import Tools.Validation as Validation
-import Types
+import Types exposing (EventType(..))
 import Web.Api as Api
 
 
@@ -335,7 +335,7 @@ dispatchCompletionReport ctx requestBody toMsg =
                                 (\_ ->
                                     -- Record completion_report_submitted event
                                     Registry.recordEvent ctx.apiContext.registry ctx.taskId
-                                        { eventType = "completion_report_submitted"
+                                        { eventType = CompletionReportSubmitted
                                         , data =
                                             Dict.empty
                                                 |> Dict.set "status" (Types.completionStatusToString report.status)
@@ -346,7 +346,7 @@ dispatchCompletionReport ctx requestBody toMsg =
                                             (\_ ->
                                                 -- Record status_changed event
                                                 Registry.recordEvent ctx.apiContext.registry ctx.taskId
-                                                    { eventType = "status_changed"
+                                                    { eventType = StatusChanged
                                                     , data =
                                                         Dict.empty
                                                             |> Dict.set "from" (Types.statusToString previousStatus)

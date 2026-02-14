@@ -7,7 +7,7 @@ import Id
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Task
-import Types exposing (Task(..), TaskStatus(..), AgentConfig(..), AgentProvider(..), SourceInfo, Attachment, HandoffRecord)
+import Types exposing (Task(..), TaskStatus(..), EventType(..), SourceType(..), AgentConfig(..), AgentProvider(..), SourceInfo, Attachment, HandoffRecord)
 import Time
 
 
@@ -101,7 +101,7 @@ testTaskEncodeDecode =
                     , updatedAt = Time.millisToPosix 1707048600000
                     , sessionId = Nothing
                     , source =
-                        { sourceType = "terminal"
+                        { sourceType = TerminalSource
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
@@ -165,7 +165,7 @@ testStatusRoundTrip status =
                 , updatedAt = Time.millisToPosix 0
                 , sessionId = Nothing
                 , source =
-                    { sourceType = "test"
+                    { sourceType = TestSource
                     , userId = "test"
                     , conversationId = Nothing
                     }
@@ -205,7 +205,7 @@ testSourceInfoEncodeDecode =
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Just (testSessionId "session-123")
                     , source =
-                        { sourceType = "xmpp"
+                        { sourceType = XmppSource
                         , userId = "user@example.com"
                         , conversationId = Just "thread-456"
                         }
@@ -264,7 +264,7 @@ testAttachmentRoundTrip =
                     , updatedAt = Time.millisToPosix 1707048600000
                     , sessionId = Nothing
                     , source =
-                        { sourceType = "terminal"
+                        { sourceType = TerminalSource
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
@@ -396,7 +396,7 @@ testTaskEncodeDecodeWithPlanningFields =
                     , updatedAt = Time.millisToPosix 1707048600000
                     , sessionId = Nothing
                     , source =
-                        { sourceType = "terminal"
+                        { sourceType = TerminalSource
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
@@ -444,7 +444,7 @@ testDescriptionOnlyRoundTrip =
                     , updatedAt = Time.millisToPosix 1707048600000
                     , sessionId = Just (testSessionId "sess-1")
                     , source =
-                        { sourceType = "web"
+                        { sourceType = WebSource
                         , userId = "user1"
                         , conversationId = Nothing
                         }
@@ -566,7 +566,7 @@ testTaskWithHandoffFieldsEncodeDecode =
                     , updatedAt = Time.millisToPosix 1707048700000
                     , sessionId = Nothing
                     , source =
-                        { sourceType = "terminal"
+                        { sourceType = TerminalSource
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
@@ -628,7 +628,7 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
                     , updatedAt = Time.millisToPosix 1707048700000
                     , sessionId = Nothing
                     , source =
-                        { sourceType = "terminal"
+                        { sourceType = TerminalSource
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
@@ -697,7 +697,7 @@ testPlanTaskCarriesHandoffFields =
                     , updatedAt = Time.millisToPosix 1707048600000
                     , sessionId = Nothing
                     , source =
-                        { sourceType = "terminal"
+                        { sourceType = TerminalSource
                         , userId = "testuser"
                         , conversationId = Nothing
                         }
@@ -746,7 +746,7 @@ testTaskCurrentAgentAccessor =
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
-                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
 
                     , attachments = []
                     , currentAgent = Just "writer"
@@ -761,7 +761,7 @@ testTaskCurrentAgentAccessor =
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
-                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
 
                     , attachments = []
                     , currentAgent = Just "editor"
@@ -810,7 +810,7 @@ testTaskAgentChainAccessor =
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
-                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
 
                     , attachments = []
                     , currentAgent = Just "editor"
@@ -862,7 +862,7 @@ testSetCurrentAgentMutator =
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
-                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
 
                     , attachments = []
                     , currentAgent = Nothing
@@ -902,7 +902,7 @@ testSetAgentChainMutator =
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
-                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
 
                     , attachments = []
                     , currentAgent = Nothing
@@ -917,7 +917,7 @@ testSetAgentChainMutator =
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
-                    , source = { sourceType = "test", userId = "test", conversationId = Nothing }
+                    , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
 
                     , attachments = []
                     , currentAgent = Nothing

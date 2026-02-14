@@ -17,7 +17,7 @@ import Id
 import Json.Decode
 import Set exposing (Set)
 import Time
-import Types exposing (Task(..), TaskStatus(..))
+import Types exposing (Task(..), TaskStatus(..), EventType(..))
 
 
 {-| Which planning section is being edited.
@@ -263,7 +263,7 @@ viewTaskInfo zone now task =
             [ dt [] [ text "ID" ]
             , dd [ class "monospace" ] [ text (Id.taskIdToString (Types.taskId task)) ]
             , dt [] [ text "Source" ]
-            , dd [] [ text (source.sourceType ++ " / " ++ source.userId) ]
+            , dd [] [ text (Types.sourceTypeToString source.sourceType ++ " / " ++ source.userId) ]
             , dt [] [ text "Session ID" ]
             , dd [ class "monospace" ]
                 [ text (Maybe.withDefault "None" (Maybe.map Id.sessionIdToString (Types.taskSessionId task))) ]
@@ -620,8 +620,8 @@ viewEvent : Time.Zone -> Time.Posix -> Array Types.HandoffRecord -> Set Int -> (
 viewEvent zone now agentChain expandedEvents onToggle eventIndex event =
     let
         isExpandableAgentEvent =
-            event.eventType == "agent_started" || event.eventType == "agent_completed"
-                || event.eventType == "agent_handoff_started" || event.eventType == "agent_handoff_completed"
+            event.eventType == AgentStarted || event.eventType == AgentCompleted
+                || event.eventType == AgentHandoffStarted || event.eventType == AgentHandoffCompleted
 
         isExpanded =
             Set.member eventIndex expandedEvents
@@ -666,7 +666,7 @@ viewEvent zone now agentChain expandedEvents onToggle eventIndex event =
                                 ]
                           else
                             text ""
-                        , text event.eventType
+                        , text (Types.eventTypeToString event.eventType)
                         ]
                     , span [ class "event-time" ] [ text (FormatTime.format zone now event.timestamp) ]
                     ]
@@ -695,7 +695,7 @@ viewEvent zone now agentChain expandedEvents onToggle eventIndex event =
         )
 
 
-viewExpandedHandoffDetail : String -> Maybe Types.HandoffRecord -> Html msg
+viewExpandedHandoffDetail : EventType -> Maybe Types.HandoffRecord -> Html msg
 viewExpandedHandoffDetail eventType maybeRecord =
     when maybeRecord is
         Nothing ->
@@ -703,7 +703,7 @@ viewExpandedHandoffDetail eventType maybeRecord =
                 [ p [ class "empty-state-text" ] [ text "Handoff record not found" ] ]
 
         Just record ->
-            if eventType == "agent_started" || eventType == "agent_handoff_started" then
+            if eventType == AgentStarted || eventType == AgentHandoffStarted then
                 div [ class "event-detail" ]
                     [ h4 [] [ text "Input / Prompt" ]
                     , pre [ class "event-detail-content" ] [ text record.input ]

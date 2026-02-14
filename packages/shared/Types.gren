@@ -8,6 +8,8 @@ module Types exposing
     , CompletionReport
     , CompletionStatus(..)
     , TaskStatus(..)
+    , EventType(..)
+    , SourceType(..)
     , SourceInfo
     , Attachment
     , Event
@@ -79,6 +81,10 @@ module Types exposing
     , statusFromString
     , statusEquals
     , completionStatusToString
+    , eventTypeToString
+    , eventTypeFromString
+    , sourceTypeToString
+    , sourceTypeFromString
     , agentConfigName
     , isInternalAgent
     )
@@ -222,10 +228,37 @@ type TaskStatus
     | Failed String  -- finished with error message
 
 
+{-| The type of event recorded in task history.
+-}
+type EventType
+    = TaskCreated
+    | StatusChanged
+    | ToolExecuted
+    | PlanningStarted
+    | PlanningCompleted
+    | PlanningFailed
+    | PlanningQuestionsReturned
+    | AnswersSubmitted
+    | AgentStarted
+    | AgentCompleted
+    | AgentHandoffStarted
+    | AgentHandoffCompleted
+    | CompletionReportSubmitted
+
+
+{-| The source channel that originated a task.
+-}
+type SourceType
+    = WebSource
+    | TerminalSource
+    | TestSource
+    | XmppSource
+
+
 {-| Information about where the task originated.
 -}
 type alias SourceInfo =
-    { sourceType : String
+    { sourceType : SourceType
     , userId : String
     , conversationId : Maybe String
     }
@@ -235,7 +268,7 @@ type alias SourceInfo =
 -}
 type alias Event =
     { timestamp : Time.Posix
-    , eventType : String
+    , eventType : EventType
     , data : Dict String String
     }
 
@@ -743,7 +776,7 @@ encodeStatus status =
 encodeSourceInfo : SourceInfo -> Encode.Value
 encodeSourceInfo source =
     Encode.object
-        [ { key = "sourceType", value = Encode.string source.sourceType }
+        [ { key = "sourceType", value = Encode.string (sourceTypeToString source.sourceType) }
         , { key = "userId", value = Encode.string source.userId }
         , { key = "conversationId", value = encodeMaybe Encode.string source.conversationId }
         ]
@@ -763,7 +796,7 @@ encodeEvent : Event -> Encode.Value
 encodeEvent event =
     Encode.object
         [ { key = "timestamp", value = Encode.int (Time.posixToMillis event.timestamp) }
-        , { key = "eventType", value = Encode.string event.eventType }
+        , { key = "eventType", value = Encode.string (eventTypeToString event.eventType) }
         , { key = "data", value = Encode.dict identity Encode.string event.data }
         ]
 
@@ -823,7 +856,7 @@ descriptionOnlyTaskDecoder =
             , createdAt = createdAt
             , updatedAt = updatedAt
             , sessionId = Nothing
-            , source = { sourceType = "", userId = "", conversationId = Nothing }
+            , source = { sourceType = WebSource, userId = "", conversationId = Nothing }
             , attachments = []
             , currentAgent = Nothing
             , agentChain = []
@@ -871,7 +904,7 @@ plannedTaskDecoder =
             , createdAt = createdAt
             , updatedAt = updatedAt
             , sessionId = Nothing
-            , source = { sourceType = "", userId = "", conversationId = Nothing }
+            , source = { sourceType = WebSource, userId = "", conversationId = Nothing }
             , attachments = []
             , currentAgent = Nothing
             , agentChain = []
@@ -1084,9 +1117,23 @@ sourceInfoDecoder =
             , conversationId = conversationId
             }
         )
-        (Decode.field "sourceType" Decode.string)
+        (Decode.field "sourceType" sourceTypeDecoder)
         (Decode.field "userId" Decode.string)
         (Decode.field "conversationId" (Decode.maybe Decode.string))
+
+
+sourceTypeDecoder : Decoder SourceType
+sourceTypeDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\str ->
+                when sourceTypeFromString str is
+                    Just sourceType ->
+                        Decode.succeed sourceType
+
+                    Nothing ->
+                        Decode.fail ("Unknown source type: " ++ str)
+            )
 
 
 eventDecoder : Decoder Event
@@ -1099,8 +1146,22 @@ eventDecoder =
             }
         )
         (Decode.field "timestamp" (Decode.map Time.millisToPosix Decode.int))
-        (Decode.field "eventType" Decode.string)
+        (Decode.field "eventType" eventTypeDecoder)
         (Decode.field "data" (Decode.dict Decode.string))
+
+
+eventTypeDecoder : Decoder EventType
+eventTypeDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\str ->
+                when eventTypeFromString str is
+                    Just eventType ->
+                        Decode.succeed eventType
+
+                    Nothing ->
+                        Decode.fail ("Unknown event type: " ++ str)
+            )
 
 
 historyDecoder : Decoder History
@@ -1436,6 +1497,138 @@ statusFromString str =
 
         "failed" ->
             Just (Failed "")
+
+        _ ->
+            Nothing
+
+
+{-| Convert an EventType to its string representation for JSON serialization.
+-}
+eventTypeToString : EventType -> String
+eventTypeToString eventType =
+    when eventType is
+        TaskCreated ->
+            "task_created"
+
+        StatusChanged ->
+            "status_changed"
+
+        ToolExecuted ->
+            "tool_executed"
+
+        PlanningStarted ->
+            "planning_started"
+
+        PlanningCompleted ->
+            "planning_completed"
+
+        PlanningFailed ->
+            "planning_failed"
+
+        PlanningQuestionsReturned ->
+            "planning_questions_returned"
+
+        AnswersSubmitted ->
+            "answers_submitted"
+
+        AgentStarted ->
+            "agent_started"
+
+        AgentCompleted ->
+            "agent_completed"
+
+        AgentHandoffStarted ->
+            "agent_handoff_started"
+
+        AgentHandoffCompleted ->
+            "agent_handoff_completed"
+
+        CompletionReportSubmitted ->
+            "completion_report_submitted"
+
+
+{-| Parse an EventType from its string representation.
+-}
+eventTypeFromString : String -> Maybe EventType
+eventTypeFromString str =
+    when str is
+        "task_created" ->
+            Just TaskCreated
+
+        "status_changed" ->
+            Just StatusChanged
+
+        "tool_executed" ->
+            Just ToolExecuted
+
+        "planning_started" ->
+            Just PlanningStarted
+
+        "planning_completed" ->
+            Just PlanningCompleted
+
+        "planning_failed" ->
+            Just PlanningFailed
+
+        "planning_questions_returned" ->
+            Just PlanningQuestionsReturned
+
+        "answers_submitted" ->
+            Just AnswersSubmitted
+
+        "agent_started" ->
+            Just AgentStarted
+
+        "agent_completed" ->
+            Just AgentCompleted
+
+        "agent_handoff_started" ->
+            Just AgentHandoffStarted
+
+        "agent_handoff_completed" ->
+            Just AgentHandoffCompleted
+
+        "completion_report_submitted" ->
+            Just CompletionReportSubmitted
+
+        _ ->
+            Nothing
+
+
+{-| Convert a SourceType to its string representation for JSON serialization.
+-}
+sourceTypeToString : SourceType -> String
+sourceTypeToString sourceType =
+    when sourceType is
+        WebSource ->
+            "web"
+
+        TerminalSource ->
+            "terminal"
+
+        TestSource ->
+            "test"
+
+        XmppSource ->
+            "xmpp"
+
+
+{-| Parse a SourceType from its string representation.
+-}
+sourceTypeFromString : String -> Maybe SourceType
+sourceTypeFromString str =
+    when str is
+        "web" ->
+            Just WebSource
+
+        "terminal" ->
+            Just TerminalSource
+
+        "test" ->
+            Just TestSource
+
+        "xmpp" ->
+            Just XmppSource
 
         _ ->
             Nothing

@@ -40,7 +40,7 @@ import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import Task as GrenTask
 import Time
-import Types exposing (Task(..), TaskStatus(..), SourceInfo, Attachment, Event, History, PlanningFields)
+import Types exposing (Task(..), TaskStatus(..), EventType(..), SourceInfo, Attachment, Event, History, PlanningFields)
 
 
 -- TYPES
@@ -257,7 +257,7 @@ createTask (Registry config) { description, source } =
 
                                         initialEvent =
                                             { timestamp = now
-                                            , eventType = "task_created"
+                                            , eventType = TaskCreated
                                             , data = Dict.singleton "description" description
                                             }
 
@@ -485,7 +485,7 @@ getRecentTasks registry limit =
 recordEvent :
     Registry
     -> TaskId
-    -> { eventType : String, data : Dict String String }
+    -> { eventType : EventType, data : Dict String String }
     -> GrenTask.Task Error {}
 recordEvent (Registry config) taskId event =
     let

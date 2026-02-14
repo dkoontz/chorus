@@ -27,7 +27,7 @@ import Json.Decode
 import Set exposing (Set)
 import Task
 import Time
-import Types exposing (AgentConfig(..), AgentProvider(..), ProviderConfig, Task(..), TaskStatus(..), WorkspaceConfig)
+import Types exposing (AgentConfig(..), AgentProvider(..), ProviderConfig, SourceType(..), Task(..), TaskStatus(..), WorkspaceConfig)
 import Url exposing (Url)
 import View.Agents as Agents exposing (AgentForm)
 import View.Providers as Providers exposing (ProviderForm)
@@ -100,7 +100,7 @@ type Page
 
 type alias CreateTaskForm =
     { description : String
-    , sourceType : String
+    , sourceType : SourceType
     , userId : String
     , isOpen : Bool
     }
@@ -109,7 +109,7 @@ type alias CreateTaskForm =
 emptyCreateForm : CreateTaskForm
 emptyCreateForm =
     { description = ""
-    , sourceType = "web"
+    , sourceType = WebSource
     , userId = "anonymous"
     , isOpen = False
     }

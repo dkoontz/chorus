@@ -18,7 +18,7 @@ import Task as GrenTask
 import Id
 import Task.Queue as Queue
 import Task.Registry as Registry exposing (Registry)
-import Types exposing (TaskStatus(..))
+import Types exposing (TaskStatus(..), EventType(..), SourceType(..))
 import Time
 
 
@@ -334,7 +334,7 @@ testCreateTaskCreatesTask ctx subdir =
                 Registry.createTask registry
                     { description = "Test Task"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -363,7 +363,7 @@ testCreateTaskWritesTaskJson ctx subdir =
                 Registry.createTask registry
                     { description = "Test Task"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -388,7 +388,7 @@ testCreateTaskWritesQueueJson ctx subdir =
                 Registry.createTask registry
                     { description = "Test Task"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -413,7 +413,7 @@ testCreateTaskWritesHistoryJson ctx subdir =
                 Registry.createTask registry
                     { description = "Test Task"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -438,7 +438,7 @@ testGetTaskReturnsTask ctx subdir =
                 Registry.createTask registry
                     { description = "Test Task"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -482,7 +482,7 @@ testUpdateTaskModifiesStatus ctx subdir =
                 Registry.createTask registry
                     { description = "Test Task"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -515,7 +515,7 @@ testListTasksReturnsAll ctx subdir =
                 Registry.createTask registry
                     { description = "Task 1"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -528,7 +528,7 @@ testListTasksReturnsAll ctx subdir =
                 Registry.createTask registry
                     { description = "Task 2"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -556,7 +556,7 @@ testListTasksFiltersByStatus ctx subdir =
                 Registry.createTask registry
                     { description = "Active Task"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -575,7 +575,7 @@ testListTasksFiltersByStatus ctx subdir =
                 Registry.createTask registry
                     { description = "Pending Task"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -602,7 +602,7 @@ testRecordEventAppendsToHistory ctx subdir =
                 Registry.createTask registry
                     { description = "Test Task"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -613,7 +613,7 @@ testRecordEventAppendsToHistory ctx subdir =
         |> GrenTask.andThen
             (\{ registry, task } ->
                 Registry.recordEvent registry (Types.taskId task)
-                    { eventType = "test_event"
+                    { eventType = ToolExecuted
                     , data = Dict.singleton "key" "value"
                     }
                     |> GrenTask.mapError Registry.errorToString
@@ -682,7 +682,7 @@ testEnqueueAddsMessage ctx subdir =
                 Registry.createTask registry
                     { description = "Queue Test Task"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -720,7 +720,7 @@ testDequeueFIFO ctx subdir =
                 Registry.createTask registry
                     { description = "Queue FIFO Test"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -786,7 +786,7 @@ testDequeueEmptyQueue ctx subdir =
                 Registry.createTask registry
                     { description = "Empty Queue Test"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -813,7 +813,7 @@ testPeekDoesNotRemove ctx subdir =
                 Registry.createTask registry
                     { description = "Peek Test"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -870,7 +870,7 @@ testIsEmpty ctx subdir =
                 Registry.createTask registry
                     { description = "IsEmpty Test"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -927,7 +927,7 @@ testQueueLength ctx subdir =
                 Registry.createTask registry
                     { description = "Length Test"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }
@@ -983,7 +983,7 @@ testTaskSummaryIncludesCurrentAgent ctx subdir =
                 Registry.createTask registry
                     { description = "Summary Agent Test"
                     , source =
-                        { sourceType = "test"
+                        { sourceType = TestSource
                         , userId = "tester"
                         , conversationId = Nothing
                         }

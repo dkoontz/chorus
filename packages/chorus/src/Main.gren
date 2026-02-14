@@ -38,7 +38,7 @@ import Stream
 import Task as GrenTask
 import Task.Registry as Registry
 import Agent.ToolContext exposing (toolContextForAgent)
-import Types exposing (AgentConfig(..), AgentProvider(..), ProviderType(..), TaskStatus(..), SourceInfo, WorkspaceConfig)
+import Types exposing (AgentConfig(..), AgentProvider(..), EventType(..), ProviderType(..), TaskStatus(..), SourceInfo, WorkspaceConfig)
 import Web.Api as Api exposing (indexedArrayToDict)
 import Web.Router as Router
 import Web.Server as Server
@@ -1228,7 +1228,7 @@ update msg model =
 
                                 Just reg ->
                                     Registry.recordEvent reg taskId
-                                        { eventType = "tool_executed"
+                                        { eventType = ToolExecuted
                                         , data =
                                             Dict.empty
                                                 |> Dict.set "tool" toolName
@@ -1376,7 +1376,7 @@ update msg model =
                                     let
                                         planningFailedEvent =
                                             Just
-                                                { eventType = "planning_failed"
+                                                { eventType = PlanningFailed
                                                 , data =
                                                     Dict.empty
                                                         |> Dict.set "error" ("Planner output parse error: " ++ errMsg)
@@ -1394,7 +1394,7 @@ update msg model =
                             let
                                 planningFailedEvent =
                                     Just
-                                        { eventType = "planning_failed"
+                                        { eventType = PlanningFailed
                                         , data =
                                             Dict.empty
                                                 |> Dict.set "error" ("Planner failed: " ++ errMsg)
@@ -2440,7 +2440,7 @@ dispatchPlanner model agentReg taskId description =
                                             |> GrenTask.andThen
                                                 (\_ ->
                                                     Registry.recordEvent registry taskId
-                                                        { eventType = "planning_started"
+                                                        { eventType = PlanningStarted
                                                         , data =
                                                             Dict.empty
                                                                 |> Dict.set "description" description

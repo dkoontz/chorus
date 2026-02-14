@@ -62,7 +62,7 @@ import Task as GrenTask exposing (Task)
 import Task.Queue as Queue
 import Task.Registry as Registry
 import Time
-import Types exposing (Task(..), TaskStatus(..), SourceInfo, PlanningFields, PlanningQuestion, HandoffRecord, AgentConfig(..), encodeAgentConfig, setAgentChain)
+import Types exposing (Task(..), TaskStatus(..), EventType(..), SourceInfo, PlanningFields, PlanningQuestion, HandoffRecord, AgentConfig(..), encodeAgentConfig, setAgentChain)
 import Web.Router exposing (Route(..))
 
 
@@ -225,7 +225,7 @@ requestCreateTask ctx params toMsg =
     Accepts an optional extra event to record in the same sequential chain
     (before the status_changed event) to avoid race conditions.
 -}
-requestUpdateStatus : ApiContext -> TaskId -> TaskStatus -> Maybe { eventType : String, data : Dict String String } -> (ApiResult -> msg) -> Cmd msg
+requestUpdateStatus : ApiContext -> TaskId -> TaskStatus -> Maybe { eventType : EventType, data : Dict String String } -> (ApiResult -> msg) -> Cmd msg
 requestUpdateStatus ctx taskId status maybeExtraEvent toMsg =
     Registry.getTask ctx.registry taskId
         |> GrenTask.andThen
@@ -257,7 +257,7 @@ requestUpdateStatus ctx taskId status maybeExtraEvent toMsg =
                                             |> GrenTask.andThen
                                                 (\_ ->
                                                     Registry.recordEvent ctx.registry taskId
-                                                        { eventType = "status_changed"
+                                                        { eventType = StatusChanged
                                                         , data =
                                                             Dict.empty
                                                                 |> Dict.set "from" (Types.statusToString currentStatus)
@@ -382,14 +382,14 @@ requestApplyPlan ctx taskId fields planningCompletedData toMsg =
         |> GrenTask.andThen
             (\updatedTask ->
                 Registry.recordEvent ctx.registry taskId
-                    { eventType = "planning_completed"
+                    { eventType = PlanningCompleted
                     , data = planningCompletedData
                     }
                     |> GrenTask.onError (\_ -> GrenTask.succeed {})
                     |> GrenTask.andThen
                         (\_ ->
                             Registry.recordEvent ctx.registry taskId
-                                { eventType = "status_changed"
+                                { eventType = StatusChanged
                                 , data =
                                     Dict.empty
                                         |> Dict.set "from" (Types.statusToString Types.Planning)
@@ -441,14 +441,14 @@ requestSetQuestions ctx taskId questionStrings questionsEventData toMsg =
         |> GrenTask.andThen
             (\updatedTask ->
                 Registry.recordEvent ctx.registry taskId
-                    { eventType = "planning_questions_returned"
+                    { eventType = PlanningQuestionsReturned
                     , data = questionsEventData
                     }
                     |> GrenTask.onError (\_ -> GrenTask.succeed {})
                     |> GrenTask.andThen
                         (\_ ->
                             Registry.recordEvent ctx.registry taskId
-                                { eventType = "status_changed"
+                                { eventType = StatusChanged
                                 , data =
                                     Dict.empty
                                         |> Dict.set "from" (Types.statusToString Types.Planning)
@@ -606,14 +606,14 @@ requestSubmitAnswers ctx taskId answers toMsg =
                             |> GrenTask.andThen
                                 (\updatedTask ->
                                     Registry.recordEvent ctx.registry taskId
-                                        { eventType = "answers_submitted"
+                                        { eventType = AnswersSubmitted
                                         , data = answersEventData
                                         }
                                         |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                         |> GrenTask.andThen
                                             (\_ ->
                                                 Registry.recordEvent ctx.registry taskId
-                                                    { eventType = "status_changed"
+                                                    { eventType = StatusChanged
                                                     , data =
                                                         Dict.empty
                                                             |> Dict.set "from" (Types.statusToString Types.AwaitingInput)
@@ -982,20 +982,20 @@ requestDeleteAttachment ctx taskId filename uploadDir toMsg =
 
 {-| Start an agent on a task (UI-initiated, not a handoff).
 
-Records an "agent_started" history event.
+Records an AgentStarted history event.
 -}
 requestStartAgent : ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
 requestStartAgent =
-    startAgentOnTask "agent_started"
+    startAgentOnTask AgentStarted
 
 
 {-| Start a hand-off to an agent (initiated by another agent's handoff tool).
 
-Records an "agent_handoff_started" history event.
+Records an AgentHandoffStarted history event.
 -}
 requestStartHandoff : ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
 requestStartHandoff =
-    startAgentOnTask "agent_handoff_started"
+    startAgentOnTask AgentHandoffStarted
 
 
 {-| Shared implementation for starting an agent on a task.
@@ -1004,7 +1004,7 @@ Sets currentAgent, appends a HandoffRecord to agentChain, records a history even
 and transitions the task to Active if it was Pending or Waiting.
 The actual agent spawning is handled by the caller (Main.gren).
 -}
-startAgentOnTask : String -> ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
+startAgentOnTask : EventType -> ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
 startAgentOnTask eventType ctx taskId params toMsg =
     -- First check if the task exists and currentAgent is not already set
     Registry.getTask ctx.registry taskId
@@ -1101,20 +1101,20 @@ startAgentOnTask eventType ctx taskId params toMsg =
 
 {-| Complete an agent run on a task (UI-initiated agent, not a handoff).
 
-Records an "agent_completed" history event.
+Records an AgentCompleted history event.
 -}
 requestCompleteAgent : ApiContext -> TaskId -> CompleteAgentParams -> (ApiResult -> msg) -> Cmd msg
 requestCompleteAgent =
-    completeAgentOnTask "agent_completed"
+    completeAgentOnTask AgentCompleted
 
 
 {-| Complete a hand-off (agent initiated by another agent's handoff tool).
 
-Records an "agent_handoff_completed" history event.
+Records an AgentHandoffCompleted history event.
 -}
 requestCompleteHandoff : ApiContext -> TaskId -> CompleteAgentParams -> (ApiResult -> msg) -> Cmd msg
 requestCompleteHandoff =
-    completeAgentOnTask "agent_handoff_completed"
+    completeAgentOnTask AgentHandoffCompleted
 
 
 {-| Shared implementation for completing an agent on a task.
@@ -1122,7 +1122,7 @@ requestCompleteHandoff =
 Sets completedAt on the last agentChain entry, stores the output,
 clears currentAgent, sets status to Waiting, and records a history event.
 -}
-completeAgentOnTask : String -> ApiContext -> TaskId -> CompleteAgentParams -> (ApiResult -> msg) -> Cmd msg
+completeAgentOnTask : EventType -> ApiContext -> TaskId -> CompleteAgentParams -> (ApiResult -> msg) -> Cmd msg
 completeAgentOnTask eventType ctx taskId params toMsg =
     Registry.getTask ctx.registry taskId
         |> GrenTask.andThen

@@ -112,7 +112,7 @@ viewCard zone now task =
             , viewHandoffCount agentChainLength
             , div [ class "kanban-card-meta" ]
                 [ span [ class "kanban-card-source" ]
-                    [ text (source.sourceType ++ " / " ++ source.userId) ]
+                    [ text (Types.sourceTypeToString source.sourceType ++ " / " ++ source.userId) ]
                 , span [ class "kanban-card-updated" ]
                     [ text (FormatTime.format zone now (Types.taskUpdatedAt task)) ]
                 ]

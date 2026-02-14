@@ -8,7 +8,7 @@ import FormatTime
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Time
-import Types
+import Types exposing (EventType(..))
 
 
 type alias Props =
@@ -58,6 +58,15 @@ viewTimelineEvent zone now event =
         ]
 
 
+{-| Format an EventType for display: convert to string, replace underscores with spaces, capitalize first letter.
+-}
+formatEventType : EventType -> String
+formatEventType eventType =
+    Types.eventTypeToString eventType
+        |> String.replace "_" " "
+        |> capitalizeFirst
+
+
 viewEventData : Dict String String -> Html msg
 viewEventData data =
     if Dict.isEmpty data then
@@ -79,13 +88,6 @@ viewDataItem { key, value } =
         ]
 
 
-formatEventType : String -> String
-formatEventType eventType =
-    eventType
-        |> String.replace "_" " "
-        |> capitalizeFirst
-
-
 capitalizeFirst : String -> String
 capitalizeFirst str =
     when String.popFirst str is
@@ -96,61 +98,46 @@ capitalizeFirst str =
             String.toUpper (String.fromChar first) ++ rest
 
 
-eventTypeClass : String -> String
+eventTypeClass : EventType -> String
 eventTypeClass eventType =
     when eventType is
-        "task_created" ->
+        TaskCreated ->
             "created"
 
-        "status_changed" ->
+        StatusChanged ->
             "status"
 
-        "message_received" ->
-            "message"
+        PlanningStarted ->
+            "planning"
 
-        "session_started" ->
-            "session"
+        PlanningCompleted ->
+            "planning"
 
-        "session_ended" ->
-            "session"
+        PlanningQuestionsReturned ->
+            "planning"
 
-        "error" ->
+        PlanningFailed ->
             "error"
 
-        "planning_started" ->
-            "planning"
-
-        "planning_completed" ->
-            "planning"
-
-        "planning_questions_returned" ->
-            "planning"
-
-        "planning_failed" ->
-            "error"
-
-        "answers_submitted" ->
+        AnswersSubmitted ->
             "message"
 
-        "agent_started" ->
+        AgentStarted ->
             "agent"
 
-        "agent_completed" ->
+        AgentCompleted ->
             "agent"
 
-        "agent_handoff_started" ->
+        AgentHandoffStarted ->
             "handoff"
 
-        "agent_handoff_completed" ->
+        AgentHandoffCompleted ->
             "handoff"
 
-        "tool_executed" ->
+        ToolExecuted ->
             "tool"
 
-        "completion_report_submitted" ->
+        CompletionReportSubmitted ->
             "completion"
-
-        _ ->
-            "default"
 
 
