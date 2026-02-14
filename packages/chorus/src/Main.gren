@@ -44,6 +44,8 @@ import Web.Router as Router
 import Web.Server as Server
 import Web.Static as Static
 import Web.ToolExecution as ToolExecution
+import WebSocketServer
+import WebSocketServer.Connection as WsConnection
 
 
 -- MAIN
@@ -81,6 +83,8 @@ type alias Model =
     , pendingConfigResponse : Maybe PendingConfigResponse
     , logger : Logging.Logger
     , cliPort : Maybe Int
+    , websocketServer : Maybe WebSocketServer.Server
+    , websocketClients : Dict Int WebSocketServer.Connection
     }
 
 
@@ -137,12 +141,18 @@ type Msg
     | GotAgentComplete { taskId : TaskId, result : Result String String }
     | GotToolResult { taskId : TaskId, toolName : String, response : Response, result : Api.ApiResult }
     | GotInternalApiResult Api.ApiResult
+    | GotMutatingApiResult { broadcastType : String, response : Response, result : Api.ApiResult }
     | GotTaskCreated { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
     | GotPlanTaskResult { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
     | GotPlannerComplete { taskId : TaskId, result : Result String String }
     | GotAnswersSubmitted { response : Response, taskId : TaskId, enrichedPrompt : String, result : Api.ApiResult }
     | GotToolGrant { taskId : TaskId, addTools : Array String, removeTools : Array String, response : Response }
     | GotConfigLoaded { response : Maybe Response, deferResponse : Bool, result : Result String { config : WorkspaceConfig, configPath : String } }
+    | GotWebSocketServer (Result WebSocketServer.ServerError WebSocketServer.Server)
+    | WsClientConnected WebSocketServer.Connection
+    | WsClientDisconnected { connection : WebSocketServer.Connection, reason : WebSocketServer.CloseReason }
+    | WsClientError { connection : WebSocketServer.Connection, error : String }
+    | WsBroadcastResult (Result WsConnection.Error {})
     | NoOp
 
 
@@ -158,6 +168,7 @@ init env =
                 Init.awaitTask getSecureContext <| \secureContext ->
                     Init.awaitTask Node.getEnvironmentVariables <| \envVars ->
                         Init.await HttpServer.initialize <| \httpPermission ->
+                            Init.await WebSocketServer.initialize <| \websocketPermission ->
                             let
                                 baseDir =
                                     env.applicationPath
@@ -231,6 +242,8 @@ init env =
                                         , pendingConfigResponse = Nothing
                                         , logger = logger
                                         , cliPort = cliPort
+                                        , websocketServer = Nothing
+                                        , websocketClients = Dict.empty
                                         }
 
                                     -- Deliver pre-loaded config to GotConfigLoaded for registry init
@@ -279,6 +292,13 @@ init env =
 
                                                     , -- Deliver pre-loaded config for registry initialization
                                                       configCmd
+
+                                                    , -- Initialize the WebSocket server on port + 1
+                                                      WebSocketServer.createServer websocketPermission
+                                                        { host = config.host
+                                                        , port_ = config.serverPort + 1
+                                                        }
+                                                        |> GrenTask.attempt GotWebSocketServer
 
                                                     , -- Log startup
                                                       Logging.logInfo logger ("Starting Chorus server on " ++ config.host ++ ":" ++ String.fromInt config.serverPort) NoOp
@@ -854,7 +874,7 @@ update msg model =
                     , command = sendResponseCmd
                     }
 
-                Api.ApiSuccess _ ->
+                Api.ApiSuccess { body } ->
                     -- Task updated successfully. Resolve the provider and spawn the agent.
                     let
                         { executorState, spawnCmd } =
@@ -868,6 +888,7 @@ update msg model =
                         Cmd.batch
                             [ sendResponseCmd
                             , spawnCmd
+                            , broadcastToClients model "tasks_changed" (Encode.string body)
                             , Logging.logInfo model.logger ("Spawned agent " ++ executorState.agentName ++ " for task " ++ taskIdStr) NoOp
                             ]
                     }
@@ -1170,6 +1191,24 @@ update msg model =
             , command = Api.sendApiResponse response result
             }
 
+        GotMutatingApiResult { broadcastType, response, result } ->
+            let
+                broadcastCmd =
+                    when result is
+                        Api.ApiSuccess { body } ->
+                            broadcastToClients model broadcastType (Encode.string body)
+
+                        _ ->
+                            Cmd.none
+            in
+            { model = model
+            , command =
+                Cmd.batch
+                    [ Api.sendApiResponse response result
+                    , broadcastCmd
+                    ]
+            }
+
         GotToolResult { taskId, toolName, response, result } ->
             when result is
                 Api.DeferredHandoff { agentName, prompt } ->
@@ -1261,6 +1300,7 @@ update msg model =
                         Cmd.batch
                             [ Api.sendApiResponse response result
                             , logCmd
+                            , broadcastToClients updatedModel "tasks_changed" Encode.null
                             ]
                     }
 
@@ -1270,15 +1310,28 @@ update msg model =
             }
 
         GotInternalApiResult _ ->
-            -- Internal API result from agent completion; no HTTP response to send
+            -- Internal API result from agent/planner completion; broadcast to WebSocket clients
             { model = model
-            , command = Cmd.none
+            , command = broadcastToClients model "tasks_changed" Encode.null
             }
 
         GotTaskCreated { response, taskId, description, result } ->
             -- Task created. Remains in Pending status; user must trigger planning.
+            let
+                broadcastCmd =
+                    when result is
+                        Api.ApiSuccess { body } ->
+                            broadcastToClients model "tasks_changed" (Encode.string body)
+
+                        _ ->
+                            Cmd.none
+            in
             { model = model
-            , command = Api.sendApiResponse response result
+            , command =
+                Cmd.batch
+                    [ Api.sendApiResponse response result
+                    , broadcastCmd
+                    ]
             }
 
         GotPlanTaskResult { response, taskId, description, result } ->
@@ -1287,7 +1340,7 @@ update msg model =
                     Api.sendApiResponse response result
             in
             when result is
-                Api.ApiSuccess _ ->
+                Api.ApiSuccess { body } ->
                     -- Plan endpoint succeeded. Dispatch the task-validator agent.
                     when model.agentRegistry is
                         Just agentReg ->
@@ -1296,6 +1349,7 @@ update msg model =
                                 Cmd.batch
                                     [ sendResponseCmd
                                     , dispatchPlanner model agentReg taskId description
+                                    , broadcastToClients model "tasks_changed" (Encode.string body)
                                     ]
                             }
 
@@ -1414,7 +1468,7 @@ update msg model =
                     Api.sendApiResponse response result
             in
             when result is
-                Api.ApiSuccess _ ->
+                Api.ApiSuccess { body } ->
                     when model.agentRegistry is
                         Just agentReg ->
                             { model = model
@@ -1422,6 +1476,7 @@ update msg model =
                                 Cmd.batch
                                     [ sendResponseCmd
                                     , dispatchPlanner model agentReg taskId enrichedPrompt
+                                    , broadcastToClients model "tasks_changed" (Encode.string body)
                                     ]
                             }
 
@@ -1633,9 +1688,61 @@ update msg model =
                             , ensureUploadDirCmd
                             , responseCmd
                             , portWarningCmd
+                            , broadcastToClients model "config_changed" Encode.null
                             , Logging.logInfo model.logger ("Workspace config loaded from: " ++ configPath) NoOp
                             ]
                     }
+
+        GotWebSocketServer result ->
+            when result is
+                Ok wsServer ->
+                    { model = { model | websocketServer = Just wsServer }
+                    , command = Logging.logInfo model.logger ("WebSocket server started on port " ++ String.fromInt (model.config.serverPort + 1)) NoOp
+                    }
+
+                Err (WebSocketServer.ServerError { code, message }) ->
+                    { model = model
+                    , command = Logging.logError model.logger ("WebSocket server error: " ++ message ++ " (" ++ code ++ ")") NoOp
+                    }
+
+        WsClientConnected connection ->
+            let
+                clientId =
+                    connection
+                        |> WebSocketServer.connectionId
+                        |> WebSocketServer.connectionIdToInt
+            in
+            { model = { model | websocketClients = Dict.set clientId connection model.websocketClients }
+            , command = Logging.logDebug model.logger ("WebSocket client connected: " ++ String.fromInt clientId) NoOp
+            }
+
+        WsClientDisconnected { connection } ->
+            let
+                clientId =
+                    connection
+                        |> WebSocketServer.connectionId
+                        |> WebSocketServer.connectionIdToInt
+            in
+            { model = { model | websocketClients = Dict.remove clientId model.websocketClients }
+            , command = Logging.logDebug model.logger ("WebSocket client disconnected: " ++ String.fromInt clientId) NoOp
+            }
+
+        WsClientError { connection, error } ->
+            let
+                clientId =
+                    connection
+                        |> WebSocketServer.connectionId
+                        |> WebSocketServer.connectionIdToInt
+            in
+            { model = { model | websocketClients = Dict.remove clientId model.websocketClients }
+            , command = Logging.logDebug model.logger ("WebSocket client error: " ++ String.fromInt clientId ++ " - " ++ error) NoOp
+            }
+
+        WsBroadcastResult _ ->
+            -- Fire-and-forget; stale connections are cleaned up via WsClientDisconnected/WsClientError
+            { model = model
+            , command = Cmd.none
+            }
 
         NoOp ->
             { model = model
@@ -1686,6 +1793,9 @@ handleRoute model route request response =
 
                         toMsg =
                             \apiResult -> GotApiResult { response = response, result = apiResult }
+
+                        mutatingToMsg =
+                            \broadcastType apiResult -> GotMutatingApiResult { broadcastType = broadcastType, response = response, result = apiResult }
                     in
                     when route is
                         Router.ListTasks maybeStatus ->
@@ -1728,7 +1838,7 @@ handleRoute model route request response =
                         Router.UpdateTaskStatus taskId ->
                             when parseStatusBody request is
                                 Ok status ->
-                                    Api.requestUpdateStatus ctx taskId status Nothing toMsg
+                                    Api.requestUpdateStatus ctx taskId status Nothing (mutatingToMsg "tasks_changed")
 
                                 Err errMsg ->
                                     sendBadRequest response errMsg
@@ -1736,7 +1846,7 @@ handleRoute model route request response =
                         Router.UpdateTaskPlanning taskId ->
                             when parseUpdatePlanningBody request is
                                 Ok params ->
-                                    Api.requestUpdatePlanning ctx taskId params toMsg
+                                    Api.requestUpdatePlanning ctx taskId params (mutatingToMsg "tasks_changed")
 
                                 Err errMsg ->
                                     sendBadRequest response errMsg
@@ -1750,13 +1860,13 @@ handleRoute model route request response =
                         Router.EnqueueMessage taskId ->
                             when parseEnqueueBody request is
                                 Ok content ->
-                                    Api.requestEnqueue ctx taskId content toMsg
+                                    Api.requestEnqueue ctx taskId content (mutatingToMsg "tasks_changed")
 
                                 Err errMsg ->
                                     sendBadRequest response errMsg
 
                         Router.UploadAttachment { taskId, filename } ->
-                            Api.requestUploadAttachment ctx taskId filename request.body (uploadDir model) toMsg
+                            Api.requestUploadAttachment ctx taskId filename request.body (uploadDir model) (mutatingToMsg "tasks_changed")
 
                         Router.DownloadAttachment { taskId, filename } ->
                             let
@@ -1766,7 +1876,7 @@ handleRoute model route request response =
                             Api.requestDownloadAttachment ctx taskId filename (uploadDir model) toBinaryMsg
 
                         Router.DeleteAttachment { taskId, filename } ->
-                            Api.requestDeleteAttachment ctx taskId filename (uploadDir model) toMsg
+                            Api.requestDeleteAttachment ctx taskId filename (uploadDir model) (mutatingToMsg "tasks_changed")
 
                         Router.ExecuteTool taskId ->
                             when model.agentRegistry is
@@ -1912,7 +2022,7 @@ handleRoute model route request response =
                         Router.CompleteHandoff taskId ->
                             when parseCompleteHandoffBody request is
                                 Ok params ->
-                                    Api.requestCompleteHandoff ctx taskId params toMsg
+                                    Api.requestCompleteHandoff ctx taskId params (mutatingToMsg "tasks_changed")
 
                                 Err errMsg ->
                                     sendBadRequest response errMsg
@@ -1941,7 +2051,7 @@ handleRoute model route request response =
                                 Just agentReg ->
                                     when parseAgentBody request is
                                         Ok agentConfig ->
-                                            Api.requestCreateAgent agentReg agentConfig toMsg
+                                            Api.requestCreateAgent agentReg agentConfig (mutatingToMsg "agents_changed")
 
                                         Err errMsg ->
                                             sendBadRequest response errMsg
@@ -1954,7 +2064,7 @@ handleRoute model route request response =
                                 Just agentReg ->
                                     when parseAgentBody request is
                                         Ok agentConfig ->
-                                            Api.requestUpdateAgent agentReg agentName agentConfig toMsg
+                                            Api.requestUpdateAgent agentReg agentName agentConfig (mutatingToMsg "agents_changed")
 
                                         Err errMsg ->
                                             sendBadRequest response errMsg
@@ -1965,7 +2075,7 @@ handleRoute model route request response =
                                     sendServiceUnavailable response
 
                                 Just agentReg ->
-                                    Api.requestDeleteAgent agentReg agentName toMsg
+                                    Api.requestDeleteAgent agentReg agentName (mutatingToMsg "agents_changed")
 
                         Router.ListProviders ->
                             when model.providerRegistry is
@@ -1991,7 +2101,7 @@ handleRoute model route request response =
                                 Just providerReg ->
                                     when parseProviderBody request is
                                         Ok providerConfig ->
-                                            Api.requestCreateProvider providerReg providerConfig toMsg
+                                            Api.requestCreateProvider providerReg providerConfig (mutatingToMsg "providers_changed")
 
                                         Err errMsg ->
                                             sendBadRequest response errMsg
@@ -2004,7 +2114,7 @@ handleRoute model route request response =
                                 Just providerReg ->
                                     when parseProviderBody request is
                                         Ok providerConfig ->
-                                            Api.requestUpdateProvider providerReg providerName providerConfig toMsg
+                                            Api.requestUpdateProvider providerReg providerName providerConfig (mutatingToMsg "providers_changed")
 
                                         Err errMsg ->
                                             sendBadRequest response errMsg
@@ -2012,7 +2122,7 @@ handleRoute model route request response =
                         Router.DeleteProvider providerName ->
                             when { providerReg = model.providerRegistry, agentReg = model.agentRegistry } is
                                 { providerReg = Just pr, agentReg = Just ar } ->
-                                    Api.requestDeleteProvider pr ar providerName toMsg
+                                    Api.requestDeleteProvider pr ar providerName (mutatingToMsg "providers_changed")
 
                                 _ ->
                                     sendServiceUnavailable response
@@ -2386,12 +2496,62 @@ parseProviderBody request =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    when model.server is
-        Just server ->
-            HttpServer.onRequest server (\req resp -> GotRequest { request = req, response = resp })
+    let
+        httpSub =
+            when model.server is
+                Just server ->
+                    HttpServer.onRequest server (\req resp -> GotRequest { request = req, response = resp })
 
-        Nothing ->
-            Sub.none
+                Nothing ->
+                    Sub.none
+
+        wsSubs =
+            when model.websocketServer is
+                Just wsServer ->
+                    Sub.batch
+                        [ WebSocketServer.onConnection wsServer WsClientConnected
+                        , WebSocketServer.onClose wsServer (\conn reason -> WsClientDisconnected { connection = conn, reason = reason })
+                        , WebSocketServer.onError wsServer (\conn err -> WsClientError { connection = conn, error = err })
+                        ]
+
+                Nothing ->
+                    Sub.none
+    in
+    Sub.batch
+        [ httpSub
+        , wsSubs
+        ]
+
+
+
+-- WEBSOCKET BROADCAST
+
+
+{-| Broadcast a JSON message to all connected WebSocket clients.
+
+The message is a JSON object with `type` and `data` fields.
+This is fire-and-forget: errors on individual connections are ignored.
+Stale connections are cleaned up by the WsClientDisconnected and
+WsClientError subscription handlers.
+-}
+broadcastToClients : Model -> String -> Encode.Value -> Cmd Msg
+broadcastToClients model messageType data =
+    let
+        payload =
+            Encode.object
+                [ { key = "type", value = Encode.string messageType }
+                , { key = "data", value = data }
+                ]
+                |> Encode.encode 0
+
+        sendToOne connection =
+            WsConnection.send connection payload
+                |> GrenTask.attempt WsBroadcastResult
+    in
+    model.websocketClients
+        |> Dict.values
+        |> Array.map sendToOne
+        |> Cmd.batch
 
 
 

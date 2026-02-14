@@ -9,7 +9,7 @@ Features:
 - Real-time task list with status filtering
 - Task creation form
 - Task detail view with history
-- Automatic polling for updates
+- Real-time updates via WebSocket
 
 -}
 
@@ -24,6 +24,7 @@ import Html.Events exposing (onClick, onInput, onSubmit)
 import Http
 import Id
 import Json.Decode
+import Process
 import Set exposing (Set)
 import Task
 import Time
@@ -36,6 +37,7 @@ import View.SystemSettings as SystemSettings exposing (SettingsForm)
 import View.TaskDetail as TaskDetail exposing (PlanningSection(..), PlanningEditState)
 import View.Workspaces as Workspaces
 import Notification exposing (Notification)
+import WebSocket
 import WorkspaceStatus exposing (WorkspaceStatus(..))
 
 
@@ -69,7 +71,7 @@ type alias Model =
     , loading : Bool
     , notifications : Array Notification
     , nextNotificationId : Int
-    , lastPoll : Time.Posix
+    , currentTime : Time.Posix
     , editingPlanning : Maybe PlanningEditState
     , timeZone : Time.Zone
     , agents : Array AgentConfig
@@ -85,7 +87,20 @@ type alias Model =
     , createPath : String
     , settingsForm : Maybe SettingsForm
     , settingsValidationError : Maybe String
+    , websocketConnection : WebSocketConnectionState
+    , websocketUrl : String
     }
+
+
+{-| WebSocket connection state. Uses a custom type so that invalid
+combinations (e.g. "connecting but also has a connection") are
+impossible to represent.
+-}
+type WebSocketConnectionState
+    = WsNotConnected
+    | WsConnecting
+    | WsConnected WebSocket.Connection
+    | WsReconnecting
 
 
 type Page
@@ -128,7 +143,13 @@ type Msg
     | GotQueue (Result Http.Error Types.Queue)
     | TaskCreated (Result Http.Error Types.Task)
     | StatusUpdated (Result Http.Error Types.Task)
-    | Poll Time.Posix
+    | Tick Time.Posix
+      -- WebSocket
+    | GotWsConnection (Result WebSocket.ConnectError WebSocket.Connection)
+    | GotWsMessage { connection : WebSocket.Connection, message : WebSocket.Message }
+    | GotWsClosed { connection : WebSocket.Connection, reason : WebSocket.CloseReason }
+    | GotWsError { connection : WebSocket.Connection, error : String }
+    | WsReconnect
     | OpenCreateForm
     | CloseCreateForm
     | UpdateCreateDescription String
@@ -215,6 +236,18 @@ type Msg
 init : {} -> Url -> Nav.Key -> { model : Model, command : Cmd Msg }
 init _ url key =
     let
+        -- Derive the WebSocket URL from the page URL.
+        -- The WebSocket server runs on HTTP port + 1.
+        wsUrl =
+            let
+                httpPort =
+                    Maybe.withDefault 8080 url.port_
+
+                wsPort =
+                    httpPort + 1
+            in
+            "ws://" ++ url.host ++ ":" ++ String.fromInt wsPort
+
         model =
             { key = key
             , page = WorkspacesPage
@@ -226,7 +259,7 @@ init _ url key =
             , loading = True
             , notifications = []
             , nextNotificationId = 0
-            , lastPoll = Time.millisToPosix 0
+            , currentTime = Time.millisToPosix 0
             , editingPlanning = Nothing
             , timeZone = Time.utc
             , agents = []
@@ -242,6 +275,8 @@ init _ url key =
             , createPath = ""
             , settingsForm = Nothing
             , settingsValidationError = Nothing
+            , websocketConnection = WsNotConnected
+            , websocketUrl = wsUrl
             }
     in
     { model = model
@@ -489,41 +524,14 @@ update msg model =
                     , command = Cmd.none
                     }
 
-        Poll now ->
+        Tick now ->
             { model =
                 { model
-                    | lastPoll = now
+                    | currentTime = now
                     , notifications =
                         Array.keepIf (\n -> not (Notification.isExpired now n)) model.notifications
                 }
-            , command =
-                when model.page is
-                    BoardPage ->
-                        Api.getTasks Nothing GotTasks
-
-                    TaskDetailPage taskId ->
-                        Cmd.batch
-                            [ Api.getTask taskId GotTask
-                            , Api.getTaskHistory taskId GotHistory
-                            ]
-
-                    AgentsPage ->
-                        Cmd.batch
-                            [ Api.getAgents GotAgents
-                            , Api.getProviders GotProviders
-                            ]
-
-                    ProvidersPage ->
-                        Api.getProviders GotProviders
-
-                    WorkspacesPage ->
-                        Cmd.none
-
-                    SystemSettingsPage ->
-                        Api.getProviders GotProviders
-
-                    NotFoundPage ->
-                        Cmd.none
+            , command = Cmd.none
             }
 
         OpenCreateForm ->
@@ -1339,13 +1347,24 @@ update msg model =
                                 , settingsForm = Just (SystemSettings.workspaceConfigToForm wc)
                             }
                     in
+                    let
+                        wsConnectCmd =
+                            connectWebSocket model.websocketUrl
+
+                        updatedModel =
+                            { newModel | websocketConnection = WsConnecting }
+                    in
                     if model.page == WorkspacesPage then
-                        { model = { newModel | page = BoardPage }
-                        , command = loadPageData BoardPage
+                        { model = { updatedModel | page = BoardPage }
+                        , command =
+                            Cmd.batch
+                                [ loadPageData BoardPage
+                                , wsConnectCmd
+                                ]
                         }
                     else
-                        { model = newModel
-                        , command = Cmd.none
+                        { model = updatedModel
+                        , command = wsConnectCmd
                         }
 
                 Err _ ->
@@ -1370,15 +1389,42 @@ update msg model =
                                 , loading = False
                                 , settingsForm = Just (SystemSettings.workspaceConfigToForm wc)
                             }
+
+                        -- Connect WebSocket if not already connected
+                        wsCmd =
+                            when model.websocketConnection is
+                                WsNotConnected ->
+                                    connectWebSocket model.websocketUrl
+
+                                WsReconnecting ->
+                                    Cmd.none
+
+                                WsConnecting ->
+                                    Cmd.none
+
+                                WsConnected _ ->
+                                    Cmd.none
+
+                        wsState =
+                            when model.websocketConnection is
+                                WsNotConnected ->
+                                    WsConnecting
+
+                                other ->
+                                    other
                     in
                     if not wasOpened && model.page == WorkspacesPage then
                         -- First workspace selection: navigate to Board
-                        { model = { newModel | page = BoardPage }
-                        , command = loadPageData BoardPage
+                        { model = { newModel | page = BoardPage, websocketConnection = wsState }
+                        , command =
+                            Cmd.batch
+                                [ loadPageData BoardPage
+                                , wsCmd
+                                ]
                         }
                     else
-                        { model = newModel
-                        , command = Cmd.none
+                        { model = { newModel | websocketConnection = wsState }
+                        , command = wsCmd
                         }
 
                 Err err ->
@@ -1592,10 +1638,151 @@ update msg model =
                     , command = Cmd.none
                     }
 
+        -- WebSocket handlers
+        GotWsConnection result ->
+            when result is
+                Ok connection ->
+                    { model = { model | websocketConnection = WsConnected connection }
+                    , command = Cmd.none
+                    }
+
+                Err (WebSocket.ConnectError { message }) ->
+                    -- Connection failed; schedule a reconnect
+                    { model = { model | websocketConnection = WsReconnecting }
+                    , command = scheduleReconnect
+                    }
+
+        GotWsMessage { message } ->
+            when message is
+                WebSocket.TextMessage text ->
+                    handleWebSocketMessage text model
+
+                WebSocket.BinaryMessage _ ->
+                    -- Ignore binary messages
+                    { model = model
+                    , command = Cmd.none
+                    }
+
+        GotWsClosed _ ->
+            -- Connection closed; schedule a reconnect
+            { model = { model | websocketConnection = WsReconnecting }
+            , command = scheduleReconnect
+            }
+
+        GotWsError _ ->
+            -- Connection error; schedule a reconnect
+            { model = { model | websocketConnection = WsReconnecting }
+            , command = scheduleReconnect
+            }
+
+        WsReconnect ->
+            -- Attempt to reconnect
+            { model = { model | websocketConnection = WsConnecting }
+            , command = connectWebSocket model.websocketUrl
+            }
+
         NoOp ->
             { model = model
             , command = Cmd.none
             }
+
+
+{-| Schedule a WebSocket reconnection after a 3 second delay.
+-}
+scheduleReconnect : Cmd Msg
+scheduleReconnect =
+    Process.sleep 3000
+        |> Task.perform (\_ -> WsReconnect)
+
+
+{-| Connect to the WebSocket server using the URL stored in the model.
+-}
+connectWebSocket : String -> Cmd Msg
+connectWebSocket wsUrl =
+    WebSocket.connect wsUrl GotWsConnection
+
+
+{-| Handle an incoming WebSocket text message.
+
+Messages are JSON objects with "type" and "data" fields.
+Based on the type, the UI re-fetches the relevant data.
+-}
+handleWebSocketMessage : String -> Model -> { model : Model, command : Cmd Msg }
+handleWebSocketMessage text model =
+    let
+        messageType =
+            Json.Decode.decodeString (Json.Decode.field "type" Json.Decode.string) text
+    in
+    when messageType is
+        Ok "tasks_changed" ->
+            { model = model
+            , command = refreshCurrentPageData model
+            }
+
+        Ok "agents_changed" ->
+            { model = model
+            , command =
+                when model.page is
+                    AgentsPage ->
+                        Cmd.batch
+                            [ Api.getAgents GotAgents
+                            , Api.getProviders GotProviders
+                            ]
+
+                    _ ->
+                        Cmd.none
+            }
+
+        Ok "providers_changed" ->
+            { model = model
+            , command =
+                when model.page is
+                    ProvidersPage ->
+                        Api.getProviders GotProviders
+
+                    AgentsPage ->
+                        Api.getProviders GotProviders
+
+                    SystemSettingsPage ->
+                        Api.getProviders GotProviders
+
+                    _ ->
+                        Cmd.none
+            }
+
+        Ok "config_changed" ->
+            { model = model
+            , command = Api.getConfig GotConfig
+            }
+
+        _ ->
+            -- Unknown message type; ignore
+            { model = model
+            , command = Cmd.none
+            }
+
+
+{-| Re-fetch data for the current page after a tasks_changed notification.
+
+Only refreshes task-related pages (BoardPage, TaskDetailPage). Other entity
+types (agents, providers, config) have their own WebSocket message types and
+are handled by their respective message handlers.
+-}
+refreshCurrentPageData : Model -> Cmd Msg
+refreshCurrentPageData model =
+    when model.page is
+        BoardPage ->
+            Api.getTasks Nothing GotTasks
+
+        TaskDetailPage taskId ->
+            Cmd.batch
+                [ Api.getTask taskId GotTask
+                , Api.getTaskHistory taskId GotHistory
+                , Api.getTaskQueue taskId GotQueue
+                ]
+
+        _ ->
+            Cmd.none
 
 
 
@@ -1603,9 +1790,29 @@ update msg model =
 
 
 subscriptions : Model -> Sub Msg
-subscriptions _ =
-    -- Poll every 2 seconds for updates
-    Time.every 2000 Poll
+subscriptions model =
+    let
+        -- Low-frequency timer for notification expiry and time display
+        timeSub =
+            Time.every 10000 Tick
+
+        -- WebSocket event subscriptions (only when connected)
+        wsSubs =
+            when model.websocketConnection is
+                WsConnected connection ->
+                    Sub.batch
+                        [ WebSocket.onMessage connection (\conn msg -> GotWsMessage { connection = conn, message = msg })
+                        , WebSocket.onClose connection (\conn reason -> GotWsClosed { connection = conn, reason = reason })
+                        , WebSocket.onError connection (\conn err -> GotWsError { connection = conn, error = err })
+                        ]
+
+                _ ->
+                    Sub.none
+    in
+    Sub.batch
+        [ timeSub
+        , wsSubs
+        ]
 
 
 
@@ -1673,7 +1880,7 @@ viewMain model =
                         { tasks = model.tasks
                         , loading = model.loading
                         , zone = model.timeZone
-                        , now = model.lastPoll
+                        , now = model.currentTime
                         }
                     , viewCreateModal model
                     ]
@@ -1725,7 +1932,7 @@ viewMain model =
                     , expandedEvents = model.expandedEvents
                     , onToggleEventExpanded = ToggleEventExpanded
                     , zone = model.timeZone
-                    , now = model.lastPoll
+                    , now = model.currentTime
                     , systemAgentProviderConfigured = providerConfigured
                     }
 
@@ -1922,7 +2129,7 @@ addSuccessNotification successMessage model =
     { model
         | notifications =
             Array.pushLast
-                (Notification.success model.nextNotificationId model.lastPoll successMessage)
+                (Notification.success model.nextNotificationId model.currentTime successMessage)
                 model.notifications
         , nextNotificationId = model.nextNotificationId + 1
     }
