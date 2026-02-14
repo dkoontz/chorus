@@ -79,10 +79,10 @@ testChorusToolsMapsFileReadWrite =
     , run =
         let
             result =
-                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" "file.read file.write"
+                ClaudeCode.chorusToolsToCliFlags "./chorus-tools" "file.read file.write"
         in
         expectEqual "Bash" result.tools
-            |> Task.andThen (\_ -> expectEqual "Bash(./tools/chorus-tools *)" result.allowedTools)
+            |> Task.andThen (\_ -> expectEqual "Bash(./chorus-tools *)" result.allowedTools)
     }
 
 
@@ -92,7 +92,7 @@ testChorusToolsMapsWebSearch =
     , run =
         let
             result =
-                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" "web.search"
+                ClaudeCode.chorusToolsToCliFlags "./chorus-tools" "web.search"
         in
         expectEqual "WebSearch" result.tools
             |> Task.andThen (\_ -> expectEqual "WebSearch" result.allowedTools)
@@ -105,10 +105,10 @@ testChorusToolsMapsFileReadAndWebSearch =
     , run =
         let
             result =
-                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" "file.read web.search"
+                ClaudeCode.chorusToolsToCliFlags "./chorus-tools" "file.read web.search"
         in
         expectEqual "Bash WebSearch" result.tools
-            |> Task.andThen (\_ -> expectEqual "Bash(./tools/chorus-tools *) WebSearch" result.allowedTools)
+            |> Task.andThen (\_ -> expectEqual "Bash(./chorus-tools *) WebSearch" result.allowedTools)
     }
 
 
@@ -118,10 +118,10 @@ testChorusToolsMapsHandoffAndFileRead =
     , run =
         let
             result =
-                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" "handoff file.read"
+                ClaudeCode.chorusToolsToCliFlags "./chorus-tools" "handoff file.read"
         in
         expectEqual "Bash" result.tools
-            |> Task.andThen (\_ -> expectEqual "Bash(./tools/chorus-tools *)" result.allowedTools)
+            |> Task.andThen (\_ -> expectEqual "Bash(./chorus-tools *)" result.allowedTools)
     }
 
 
@@ -131,10 +131,10 @@ testChorusToolsEmptyFallsBackToBash =
     , run =
         let
             result =
-                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" ""
+                ClaudeCode.chorusToolsToCliFlags "./chorus-tools" ""
         in
         expectEqual "Bash" result.tools
-            |> Task.andThen (\_ -> expectEqual "Bash(./tools/chorus-tools *)" result.allowedTools)
+            |> Task.andThen (\_ -> expectEqual "Bash(./chorus-tools *)" result.allowedTools)
     }
 
 
@@ -144,8 +144,8 @@ testChorusToolsIgnoresUnrecognized =
     , run =
         let
             result =
-                ClaudeCode.chorusToolsToCliFlags "./tools/chorus-tools" "unknown.tool"
+                ClaudeCode.chorusToolsToCliFlags "./chorus-tools" "unknown.tool"
         in
         expectEqual "Bash" result.tools
-            |> Task.andThen (\_ -> expectEqual "Bash(./tools/chorus-tools *)" result.allowedTools)
+            |> Task.andThen (\_ -> expectEqual "Bash(./chorus-tools *)" result.allowedTools)
     }

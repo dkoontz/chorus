@@ -99,7 +99,7 @@ testBaseDirAppliedToToolsPath =
             config =
                 Config.configFromEnv "/opt/app" Dict.empty Config.defaultConfig
         in
-        expectEqual "/opt/app/tools/chorus-tools" config.chorusToolsPath
+        expectEqual "/opt/app/chorus-tools" config.chorusToolsPath
     }
 
 
@@ -220,7 +220,7 @@ testAbsoluteBaseDir =
                 Config.configFromEnv "/usr/local/bin" Dict.empty Config.defaultConfig
         in
         if config.staticRoot == "/usr/local/bin/static"
-            && config.chorusToolsPath == "/usr/local/bin/tools/chorus-tools"
+            && config.chorusToolsPath == "/usr/local/bin/chorus-tools"
         then
             Task.succeed {}
         else

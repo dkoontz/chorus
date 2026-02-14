@@ -38,7 +38,7 @@ defaultConfig =
     { host = "0.0.0.0"
     , serverPort = 8080
     , staticRoot = "./static"
-    , chorusToolsPath = "./tools/chorus-tools"
+    , chorusToolsPath = "./chorus-tools"
     , logLevel = LogInfo
     , chorusConfigPath = Nothing
     }
@@ -54,7 +54,7 @@ defaultConfig =
     - CHORUS_HOST: Server host (default: 0.0.0.0)
     - CHORUS_PORT: Server port (default: 8080)
     - CHORUS_STATIC_DIR: Static files directory (default: <baseDir>/static)
-    - CHORUS_TOOLS_PATH: Path to chorus-tools binary (default: <baseDir>/tools/chorus-tools)
+    - CHORUS_TOOLS_PATH: Path to chorus-tools binary (default: <baseDir>/chorus-tools)
     - CHORUS_LOG_LEVEL: Log level - error, warn, info, debug (default: info)
     - CHORUS_CONFIG: Path to a chorus.json file to auto-load at startup
 
@@ -86,7 +86,7 @@ configFromEnv baseDir envVars config =
     { host = host
     , serverPort = serverPort
     , staticRoot = staticRoot
-    , chorusToolsPath = Dict.get "CHORUS_TOOLS_PATH" envVars |> Maybe.withDefault (baseDir ++ "/tools/chorus-tools")
+    , chorusToolsPath = Dict.get "CHORUS_TOOLS_PATH" envVars |> Maybe.withDefault (baseDir ++ "/chorus-tools")
     , logLevel = logLevel
     , chorusConfigPath = chorusConfigPath
     }

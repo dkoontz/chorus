@@ -21,6 +21,6 @@
     "test:unit": "cd packages/chorus && npm run test:unit",
     "test:integration": "cd packages/chorus && npm run test:integration",
     "test": "npm run test:unit && npm run test:integration",
-    "clean": "rm -rf packages/*/build packages/*/.gren packages/*/gren_packages dist/chorus dist/static dist/tools"
+    "clean": "rm -rf packages/*/build packages/*/.gren packages/*/gren_packages dist/chorus dist/chorus-tools dist/static"
   }
 }

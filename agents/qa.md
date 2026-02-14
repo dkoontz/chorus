@@ -46,16 +46,16 @@ Before running any build, test, or other commands, ensure you are in the project
 
 Use these scripts instead of constructing multi-step commands. Each script is a single command that runs without requiring approval. All paths are relative to the project root.
 
-| Script | Usage |
-|--------|-------|
-| `scripts/agent/build.sh` | Build all app components |
-| `scripts/agent/start.sh` | Start app, wait for ready |
-| `scripts/agent/stop.sh` | Stop app |
-| `scripts/agent/restart.sh` | Restart app |
-| `scripts/agent/status.sh` | Check if app is running |
-| `scripts/agent/test.sh [unit|integration]` | Run tests |
-| `scripts/agent/curl-api.sh <METHOD> <PATH> [BODY]` | Test API endpoints |
-| `scripts/agent/logs.sh [lines]` | View app logs |
+| Script                                             | Usage                     |
+| -------------------------------------------------- | ------------------------- |
+| `scripts/agent/build.sh`                           | Build all app components  |
+| `scripts/agent/start.sh`                           | Start app, wait for ready |
+| `scripts/agent/stop.sh`                            | Stop app                  |
+| `scripts/agent/restart.sh`                         | Restart app               |
+| `scripts/agent/status.sh`                          | Check if app is running   |
+| `scripts/agent/test.sh [unit                       | integration]`             | Run tests |
+| `scripts/agent/curl-api.sh <METHOD> <PATH> [BODY]` | Test API endpoints        |
+| `scripts/agent/logs.sh [lines]`                    | View app logs             |
 
 Important:
 - The `.env` file is sourced automatically before each Bash command by a hook. Do NOT source it manually.
@@ -142,7 +142,7 @@ Write your report to `REPORT_FILE` using this format:
 
 ## Important
 
-- Actually run the feature - do not just read the code
+- Actually run the feature - do not just read the code (use your browser capability to open a tab to the application and click through the feature you are testing)
 - Document exact reproduction steps for any failures
 - Be specific about what was tested and how
 - If tests pass but the feature behaves incorrectly, that's a FAIL
