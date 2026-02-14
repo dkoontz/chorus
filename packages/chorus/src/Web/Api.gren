@@ -986,16 +986,17 @@ Records an AgentStarted history event.
 -}
 requestStartAgent : ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
 requestStartAgent =
-    startAgentOnTask AgentStarted
+    startAgentOnTask False AgentStarted
 
 
 {-| Start a hand-off to an agent (initiated by another agent's handoff tool).
 
-Records an AgentHandoffStarted history event.
+Records an AgentHandoffStarted history event. Allows replacing the current
+agent since the calling agent IS the current agent in a deferred handoff.
 -}
 requestStartHandoff : ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
 requestStartHandoff =
-    startAgentOnTask AgentHandoffStarted
+    startAgentOnTask True AgentHandoffStarted
 
 
 {-| Shared implementation for starting an agent on a task.
@@ -1003,9 +1004,12 @@ requestStartHandoff =
 Sets currentAgent, appends a HandoffRecord to agentChain, records a history event,
 and transitions the task to Active if it was Pending or Waiting.
 The actual agent spawning is handled by the caller (Main.gren).
+
+When allowReplace is True (deferred handoffs), an existing currentAgent is
+allowed — the new agent replaces it. When False, a 409 CONFLICT is returned.
 -}
-startAgentOnTask : EventType -> ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
-startAgentOnTask eventType ctx taskId params toMsg =
+startAgentOnTask : Bool -> EventType -> ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
+startAgentOnTask allowReplace eventType ctx taskId params toMsg =
     -- First check if the task exists and currentAgent is not already set
     Registry.getTask ctx.registry taskId
         |> GrenTask.andThen
@@ -1015,12 +1019,17 @@ startAgentOnTask eventType ctx taskId params toMsg =
                         GrenTask.succeed (ApiError { statusCode = 404, code = "NOT_FOUND", message = "Task not found: " ++ Id.taskIdToString taskId })
 
                     Just task ->
-                        when Types.taskCurrentAgent task is
-                            Just existingAgent ->
-                                GrenTask.succeed (ApiError { statusCode = 409, code = "CONFLICT", message = "Agent already active on task: " ++ existingAgent })
+                        let
+                            existingAgent =
+                                Types.taskCurrentAgent task
 
-                            Nothing ->
-                                Time.now
+                            blocked =
+                                existingAgent /= Nothing && not allowReplace
+                        in
+                        if blocked then
+                            GrenTask.succeed (ApiError { statusCode = 409, code = "CONFLICT", message = "Agent already active on task: " ++ Maybe.withDefault "unknown" existingAgent })
+                        else
+                            Time.now
                                     |> GrenTask.mapError (\_ -> Registry.FileSystemError "Failed to get time")
                                     |> GrenTask.andThen
                                         (\now ->
@@ -1119,8 +1128,9 @@ requestCompleteHandoff =
 
 {-| Shared implementation for completing an agent on a task.
 
-Sets completedAt on the last agentChain entry, stores the output,
-clears currentAgent, sets status to Waiting, and records a history event.
+Sets completedAt on the current agent's chain entry, stores the output,
+restores the parent agent as currentAgent (or clears it if no parent),
+sets status to Waiting if no completion report, and records a history event.
 -}
 completeAgentOnTask : EventType -> ApiContext -> TaskId -> CompleteAgentParams -> (ApiResult -> msg) -> Cmd msg
 completeAgentOnTask eventType ctx taskId params toMsg =
@@ -1144,40 +1154,40 @@ completeAgentOnTask eventType ctx taskId params toMsg =
                                             Types.taskCurrentAgent task
                                                 |> Maybe.withDefault "unknown"
 
-                                        -- Update the last entry in agentChain
+                                        -- Update the entry matching the current agent
                                         updatedChain =
-                                            when Array.popLast chain is
-                                                Nothing ->
-                                                    chain
+                                            Types.updateCurrentAgentEntry agentName
+                                                (\entry ->
+                                                    { entry
+                                                        | completedAt = Just now
+                                                        , output = params.output
+                                                    }
+                                                )
+                                                chain
 
-                                                Just { last, initial } ->
-                                                    Array.pushLast
-                                                        { last
-                                                            | completedAt = Just now
-                                                            , output = params.output
-                                                        }
-                                                        initial
-
-                                        -- If completion report already set status, preserve it
+                                        -- Check the current agent's entry for a completion report
                                         hasCompletionReport =
-                                            when Array.popLast chain is
-                                                Nothing ->
-                                                    False
+                                            chain
+                                                |> Array.keepIf (\entry -> entry.agentName == agentName && entry.completedAt == Nothing)
+                                                |> Array.popLast
+                                                |> Maybe.map (\{ last } -> last.completionReport /= Nothing)
+                                                |> Maybe.withDefault False
 
-                                                Just { last } ->
-                                                    last.completionReport /= Nothing
+                                        -- Restore parent agent if one exists (last uncompleted entry after update)
+                                        parentAgent =
+                                            Types.findParentAgent updatedChain
 
                                         updateFn t =
                                             let
-                                                cleared =
+                                                updated =
                                                     t
-                                                        |> Types.setCurrentAgent Nothing
+                                                        |> Types.setCurrentAgent parentAgent
                                                         |> setAgentChain updatedChain
                                             in
                                             if hasCompletionReport then
-                                                cleared
+                                                updated
                                             else
-                                                cleared
+                                                updated
                                                     |> Types.setTaskStatus Waiting
                                     in
                                     Registry.updateTask ctx.registry taskId updateFn

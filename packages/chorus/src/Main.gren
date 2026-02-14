@@ -139,7 +139,7 @@ type Msg
     | GotDeferredHandoffLookup { taskId : TaskId, prompt : String, response : Response, agentConfig : Types.AgentConfig }
     | GotDeferredHandoffStarted { taskId : TaskId, prompt : String, response : Response, agentConfig : Types.AgentConfig, apiResult : Api.ApiResult }
     | GotAgentComplete { taskId : TaskId, result : Result String String }
-    | GotToolResult { taskId : TaskId, toolName : String, response : Response, result : Api.ApiResult }
+    | GotToolResult { taskId : TaskId, toolName : String, requestBody : String, response : Response, result : Api.ApiResult }
     | GotInternalApiResult Api.ApiResult
     | GotMutatingApiResult { broadcastType : String, response : Response, result : Api.ApiResult }
     | GotTaskCreated { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
@@ -802,7 +802,7 @@ update msg model =
                                         |> Result.withDefault "unknown"
 
                                 toMsg =
-                                    \apiResult -> GotToolResult { taskId = taskId, toolName = toolName, response = response, result = apiResult }
+                                    \apiResult -> GotToolResult { taskId = taskId, toolName = toolName, requestBody = requestBody, response = response, result = apiResult }
                             in
                             { model = model
                             , command = ToolExecution.requestExecuteTool toolCtx requestBody toMsg
@@ -1209,7 +1209,7 @@ update msg model =
                     ]
             }
 
-        GotToolResult { taskId, toolName, response, result } ->
+        GotToolResult { taskId, toolName, requestBody, response, result } ->
             when result is
                 Api.DeferredHandoff { agentName, prompt } ->
                     -- Handoff requested through tool binary: look up agent, start handoff, defer response
@@ -1260,6 +1260,17 @@ update msg model =
                                 Api.DeferredHandoff _ ->
                                     "deferred"
 
+                        output =
+                            when result is
+                                Api.ApiSuccess { body } ->
+                                    body
+
+                                Api.ApiError { message } ->
+                                    message
+
+                                Api.DeferredHandoff _ ->
+                                    ""
+
                         logCmd =
                             when model.registry is
                                 Nothing ->
@@ -1272,6 +1283,8 @@ update msg model =
                                             Dict.empty
                                                 |> Dict.set "tool" toolName
                                                 |> Dict.set "status" status
+                                                |> Dict.set "input" requestBody
+                                                |> Dict.set "output" output
                                         }
                                         |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                         |> GrenTask.perform (\_ -> NoOp)

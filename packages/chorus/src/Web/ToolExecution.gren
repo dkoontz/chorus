@@ -304,15 +304,15 @@ dispatchCompletionReport ctx requestBody toMsg =
                         chain =
                             Types.taskAgentChain task
 
-                        updatedChain =
-                            when Array.popLast chain is
-                                Nothing ->
-                                    chain
+                        agentName =
+                            Types.taskCurrentAgent task
+                                |> Maybe.withDefault "unknown"
 
-                                Just { last, initial } ->
-                                    Array.pushLast
-                                        { last | completionReport = Just report }
-                                        initial
+                        -- Update the entry matching the current agent
+                        updatedChain =
+                            Types.updateCurrentAgentEntry agentName
+                                (\entry -> { entry | completionReport = Just report })
+                                chain
                     in
                     task
                         |> Types.setAgentChain updatedChain

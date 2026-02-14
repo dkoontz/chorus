@@ -87,6 +87,8 @@ module Types exposing
     , sourceTypeFromString
     , agentConfigName
     , isInternalAgent
+    , updateCurrentAgentEntry
+    , findParentAgent
     )
 
 {-| Shared types, encoders, and decoders for the Chorus API contract.
@@ -615,6 +617,53 @@ setAgentChain chain task =
 
         Planned t ->
             Planned { t | agentChain = chain }
+
+
+{-| Update the chain entry for the current agent (last uncompleted entry
+matching the given agent name). Falls back to updating the last entry
+if no match is found (backwards compatibility).
+-}
+updateCurrentAgentEntry : String -> (HandoffRecord -> HandoffRecord) -> Array HandoffRecord -> Array HandoffRecord
+updateCurrentAgentEntry agentName updateFn chain =
+    let
+        -- Find index of last uncompleted entry matching agent name
+        targetIndex =
+            chain
+                |> Array.indexedMap (\i entry -> { i = i, entry = entry })
+                |> Array.keepIf (\x -> x.entry.agentName == agentName && x.entry.completedAt == Nothing)
+                |> Array.popLast
+                |> Maybe.map (\{ last } -> last.i)
+    in
+    when targetIndex is
+        Just idx ->
+            chain
+                |> Array.indexedMap
+                    (\i entry ->
+                        if i == idx then
+                            updateFn entry
+                        else
+                            entry
+                    )
+
+        Nothing ->
+            -- Fallback: update last entry
+            when Array.popLast chain is
+                Nothing ->
+                    chain
+
+                Just { last, initial } ->
+                    Array.pushLast (updateFn last) initial
+
+
+{-| Find the parent agent after a child completes: the last uncompleted
+entry in the chain. Returns Nothing if all entries are completed.
+-}
+findParentAgent : Array HandoffRecord -> Maybe String
+findParentAgent chain =
+    chain
+        |> Array.keepIf (\entry -> entry.completedAt == Nothing)
+        |> Array.popLast
+        |> Maybe.map (\{ last } -> last.agentName)
 
 
 
