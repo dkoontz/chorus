@@ -15,6 +15,9 @@ module Tools.Json exposing
       -- Help encoders
     , encodeFileToolsHelp
     , encodeAllToolsHelp
+      -- Help data
+    , ToolHelp
+    , toolHelpByName
     )
 
 {-| JSON encoding and decoding for tool requests and responses.
@@ -310,6 +313,19 @@ encodeFileToolsHelp =
 encodeAllToolsHelp : Encode.Value
 encodeAllToolsHelp =
     Help.encodeAllToolsHelp
+
+
+{-| Re-export ToolHelp type alias from Tools.Help.
+-}
+type alias ToolHelp =
+    Help.ToolHelp
+
+
+{-| Look up a ToolHelp record by tool name. Re-exported from Tools.Help.
+-}
+toolHelpByName : String -> Maybe ToolHelp
+toolHelpByName =
+    Help.toolHelpByName
 
 
 {-| Encode an error response.

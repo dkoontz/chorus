@@ -1,6 +1,8 @@
 module Tools.Help exposing
-    ( encodeFileToolsHelp
+    ( ToolHelp
+    , encodeFileToolsHelp
     , encodeAllToolsHelp
+    , toolHelpByName
     )
 
 {-| Help text content and JSON encoder for tool discovery.
@@ -54,153 +56,258 @@ encodeAllToolsHelp =
 
 
 
+-- TOOL HELP LOOKUP
+
+
+{-| Look up a ToolHelp record by tool name. Returns Nothing for unknown tools.
+-}
+toolHelpByName : String -> Maybe ToolHelp
+toolHelpByName name =
+    allToolHelp
+        |> Array.findFirst (\tool -> tool.name == name)
+        |> Maybe.map .value
+
+
+{-| All tool help records in the system.
+-}
+allToolHelp : Array ToolHelp
+allToolHelp =
+    [ fileReadHelpRecord
+    , fileCreateHelpRecord
+    , fileWriteHelpRecord
+    , filePatchHelpRecord
+    , fileDeleteHelpRecord
+    , fileListHelpRecord
+    , fileSearchHelpRecord
+    , handoffHelpRecord
+    , taskGetHelpRecord
+    , taskListHelpRecord
+    , webSearchHelpRecord
+    ]
+
+
+
 -- TOOL HELP ENTRIES
+
+
+fileReadHelpRecord : ToolHelp
+fileReadHelpRecord =
+    { name = "file.read"
+    , description = "Read file contents with optional pagination"
+    , required =
+        [ { key = "path", value = "Relative path to the file to read" }
+        ]
+    , optional =
+        [ { key = "offset", value = "Line number to start reading from (0-based)" }
+        , { key = "limit", value = "Maximum number of lines to return" }
+        ]
+    , output =
+        [ { key = "content", value = "File contents with line numbers" }
+        , { key = "total_lines", value = "Total number of lines in the file" }
+        , { key = "truncated", value = "Whether the output was truncated" }
+        ]
+    }
 
 
 fileReadHelp : Encode.Value
 fileReadHelp =
-    encodeTool
-        { name = "file.read"
-        , description = "Read file contents with optional pagination"
-        , required =
-            [ { key = "path", value = "Relative path to the file to read" }
-            ]
-        , optional =
-            [ { key = "offset", value = "Line number to start reading from (0-based)" }
-            , { key = "limit", value = "Maximum number of lines to return" }
-            ]
-        , output =
-            [ { key = "content", value = "File contents with line numbers" }
-            , { key = "total_lines", value = "Total number of lines in the file" }
-            , { key = "truncated", value = "Whether the output was truncated" }
-            ]
-        }
+    encodeTool fileReadHelpRecord
+
+
+fileCreateHelpRecord : ToolHelp
+fileCreateHelpRecord =
+    { name = "file.create"
+    , description = "Create a new file. Fails if the file already exists."
+    , required =
+        [ { key = "path", value = "Relative path to the file to create" }
+        , { key = "content", value = "Content to write to the new file" }
+        ]
+    , optional = []
+    , output =
+        [ { key = "success", value = "Whether the create succeeded" }
+        , { key = "bytes_written", value = "Number of bytes written" }
+        ]
+    }
 
 
 fileCreateHelp : Encode.Value
 fileCreateHelp =
-    encodeTool
-        { name = "file.create"
-        , description = "Create a new file. Fails if the file already exists."
-        , required =
-            [ { key = "path", value = "Relative path to the file to create" }
-            , { key = "content", value = "Content to write to the new file" }
-            ]
-        , optional = []
-        , output =
-            [ { key = "success", value = "Whether the create succeeded" }
-            , { key = "bytes_written", value = "Number of bytes written" }
-            ]
-        }
+    encodeTool fileCreateHelpRecord
+
+
+fileWriteHelpRecord : ToolHelp
+fileWriteHelpRecord =
+    { name = "file.write"
+    , description = "Write content to an existing file. Fails if the file does not exist. Use file.create for new files."
+    , required =
+        [ { key = "path", value = "Relative path to the file to write" }
+        , { key = "content", value = "Content to write to the file" }
+        ]
+    , optional = []
+    , output =
+        [ { key = "success", value = "Whether the write succeeded" }
+        , { key = "bytes_written", value = "Number of bytes written" }
+        ]
+    }
 
 
 fileWriteHelp : Encode.Value
 fileWriteHelp =
-    encodeTool
-        { name = "file.write"
-        , description = "Write content to an existing file. Fails if the file does not exist. Use file.create for new files."
-        , required =
-            [ { key = "path", value = "Relative path to the file to write" }
-            , { key = "content", value = "Content to write to the file" }
-            ]
-        , optional = []
-        , output =
-            [ { key = "success", value = "Whether the write succeeded" }
-            , { key = "bytes_written", value = "Number of bytes written" }
-            ]
-        }
+    encodeTool fileWriteHelpRecord
+
+
+filePatchHelpRecord : ToolHelp
+filePatchHelpRecord =
+    { name = "file.patch"
+    , description = "Apply find-and-replace patches to a file. Each patch finds an exact string and replaces it. Fails if the find string is not found or appears more than once."
+    , required =
+        [ { key = "path", value = "Relative path to the file to patch" }
+        , { key = "patches", value = "Array of patch operations, each with 'find', 'replace', and optional 'startLine'" }
+        ]
+    , optional = []
+    , output =
+        [ { key = "success", value = "Whether the patch succeeded" }
+        , { key = "patches_applied", value = "Number of patches applied" }
+        ]
+    }
 
 
 filePatchHelp : Encode.Value
 filePatchHelp =
-    encodeTool
-        { name = "file.patch"
-        , description = "Apply find-and-replace patches to a file. Each patch finds an exact string and replaces it. Fails if the find string is not found or appears more than once."
-        , required =
-            [ { key = "path", value = "Relative path to the file to patch" }
-            , { key = "patches", value = "Array of patch operations, each with 'find', 'replace', and optional 'startLine'" }
-            ]
-        , optional = []
-        , output =
-            [ { key = "success", value = "Whether the patch succeeded" }
-            , { key = "patches_applied", value = "Number of patches applied" }
-            ]
-        }
+    encodeTool filePatchHelpRecord
+
+
+fileDeleteHelpRecord : ToolHelp
+fileDeleteHelpRecord =
+    { name = "file.delete"
+    , description = "Delete a file. Refuses to delete directories."
+    , required =
+        [ { key = "path", value = "Relative path to the file to delete" }
+        ]
+    , optional = []
+    , output =
+        [ { key = "success", value = "Whether the delete succeeded" }
+        ]
+    }
 
 
 fileDeleteHelp : Encode.Value
 fileDeleteHelp =
-    encodeTool
-        { name = "file.delete"
-        , description = "Delete a file. Refuses to delete directories."
-        , required =
-            [ { key = "path", value = "Relative path to the file to delete" }
-            ]
-        , optional = []
-        , output =
-            [ { key = "success", value = "Whether the delete succeeded" }
-            ]
-        }
+    encodeTool fileDeleteHelpRecord
+
+
+fileListHelpRecord : ToolHelp
+fileListHelpRecord =
+    { name = "file.list"
+    , description = "List files in a directory, optionally filtered by glob pattern"
+    , required = []
+    , optional =
+        [ { key = "path", value = "Relative path to the directory to list (defaults to workspace root)" }
+        , { key = "pattern", value = "Glob pattern to filter files (e.g. '*.gren')" }
+        ]
+    , output =
+        [ { key = "files", value = "Array of file entries, each with path, size, modified, and is_directory" }
+        ]
+    }
 
 
 fileListHelp : Encode.Value
 fileListHelp =
-    encodeTool
-        { name = "file.list"
-        , description = "List files in a directory, optionally filtered by glob pattern"
-        , required = []
-        , optional =
-            [ { key = "path", value = "Relative path to the directory to list (defaults to workspace root)" }
-            , { key = "pattern", value = "Glob pattern to filter files (e.g. '*.gren')" }
-            ]
-        , output =
-            [ { key = "files", value = "Array of file entries, each with path, size, modified, and is_directory" }
-            ]
-        }
+    encodeTool fileListHelpRecord
+
+
+fileSearchHelpRecord : ToolHelp
+fileSearchHelpRecord =
+    { name = "file.search"
+    , description = "Search for a pattern in files using ripgrep (falls back to grep)"
+    , required =
+        [ { key = "pattern", value = "Search pattern (regex)" }
+        ]
+    , optional =
+        [ { key = "path", value = "Relative path to search in (defaults to workspace root)" }
+        , { key = "glob", value = "Glob pattern to filter files (e.g. '*.gren')" }
+        , { key = "case_sensitive", value = "Whether the search is case-sensitive (defaults to true)" }
+        , { key = "context_lines", value = "Number of context lines to show around matches" }
+        , { key = "max_results", value = "Maximum number of results to return (defaults to 100)" }
+        ]
+    , output =
+        [ { key = "matches", value = "Array of matches, each with path, line, and content" }
+        , { key = "truncated", value = "Whether the results were truncated" }
+        ]
+    }
 
 
 fileSearchHelp : Encode.Value
 fileSearchHelp =
-    encodeTool
-        { name = "file.search"
-        , description = "Search for a pattern in files using ripgrep (falls back to grep)"
-        , required =
-            [ { key = "pattern", value = "Search pattern (regex)" }
-            ]
-        , optional =
-            [ { key = "path", value = "Relative path to search in (defaults to workspace root)" }
-            , { key = "glob", value = "Glob pattern to filter files (e.g. '*.gren')" }
-            , { key = "case_sensitive", value = "Whether the search is case-sensitive (defaults to true)" }
-            , { key = "context_lines", value = "Number of context lines to show around matches" }
-            , { key = "max_results", value = "Maximum number of results to return (defaults to 100)" }
-            ]
-        , output =
-            [ { key = "matches", value = "Array of matches, each with path, line, and content" }
-            , { key = "truncated", value = "Whether the results were truncated" }
-            ]
-        }
+    encodeTool fileSearchHelpRecord
+
+
+handoffHelpRecord : ToolHelp
+handoffHelpRecord =
+    { name = "handoff"
+    , description = "Start an agent handoff via the Chorus API and poll until the agent completes"
+    , required =
+        [ { key = "taskId", value = "ID of the task to hand off" }
+        , { key = "agentName", value = "Name of the agent to hand off to" }
+        , { key = "prompt", value = "Prompt to send to the agent" }
+        ]
+    , optional =
+        [ { key = "baseUrl", value = "Base URL of the Chorus API (defaults to http://localhost:8080)" }
+        , { key = "pollIntervalMs", value = "Polling interval in milliseconds (defaults to 5000)" }
+        , { key = "maxWaitMs", value = "Maximum wait time in milliseconds (defaults to 600000)" }
+        ]
+    , output =
+        [ { key = "agent_name", value = "Name of the agent that completed" }
+        , { key = "output", value = "Output from the completed agent" }
+        ]
+    }
 
 
 handoffHelp : Encode.Value
 handoffHelp =
-    encodeTool
-        { name = "handoff"
-        , description = "Start an agent handoff via the Chorus API and poll until the agent completes"
-        , required =
-            [ { key = "taskId", value = "ID of the task to hand off" }
-            , { key = "agentName", value = "Name of the agent to hand off to" }
-            , { key = "prompt", value = "Prompt to send to the agent" }
-            ]
-        , optional =
-            [ { key = "baseUrl", value = "Base URL of the Chorus API (defaults to http://localhost:8080)" }
-            , { key = "pollIntervalMs", value = "Polling interval in milliseconds (defaults to 5000)" }
-            , { key = "maxWaitMs", value = "Maximum wait time in milliseconds (defaults to 600000)" }
-            ]
-        , output =
-            [ { key = "agent_name", value = "Name of the agent that completed" }
-            , { key = "output", value = "Output from the completed agent" }
-            ]
-        }
+    encodeTool handoffHelpRecord
+
+
+taskGetHelpRecord : ToolHelp
+taskGetHelpRecord =
+    { name = "task.get"
+    , description = "Get details for a specific task by ID"
+    , required =
+        [ { key = "taskId", value = "ID of the task to retrieve" }
+        ]
+    , optional = []
+    , output =
+        [ { key = "task", value = "Full task object with id, description, status, and other fields" }
+        ]
+    }
+
+
+taskListHelpRecord : ToolHelp
+taskListHelpRecord =
+    { name = "task.list"
+    , description = "List all tasks, optionally filtered by status"
+    , required = []
+    , optional =
+        [ { key = "status", value = "Filter by status (pending, active, completed, failed, etc.)" }
+        ]
+    , output =
+        [ { key = "tasks", value = "Array of task objects" }
+        ]
+    }
+
+
+webSearchHelpRecord : ToolHelp
+webSearchHelpRecord =
+    { name = "web.search"
+    , description = "Search the web. This is a native Claude tool - use it directly, not via chorus-tools."
+    , required =
+        [ { key = "query", value = "Search query string" }
+        ]
+    , optional = []
+    , output =
+        [ { key = "results", value = "Search results from the web" }
+        ]
+    }
 
 
 

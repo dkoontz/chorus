@@ -1,0 +1,88 @@
+module Agent.ToolContext exposing (toolContextForAgent)
+
+{-| Generates a compact tool context section for agent system prompts.
+
+Given an agent's allowed tool names, produces a text block describing
+each tool's purpose and parameters, along with the chorus-tools
+invocation format.
+-}
+
+import Tools.Help as ToolHelp
+
+
+{-| Generate a compact tool context section for an agent's system prompt.
+
+Takes an array of allowed tool names (from the agent's config) and returns
+a string describing those tools with invocation format. Returns an empty
+string if no tools match (after filtering out completion-report).
+-}
+toolContextForAgent : Array String -> String
+toolContextForAgent allowedTools =
+    let
+        -- Filter out completion-report (has its own instruction) and any empty strings
+        filteredTools =
+            allowedTools
+                |> Array.keepIf (\name -> name /= "completion-report" && not (String.isEmpty name))
+
+        toolSections =
+            filteredTools
+                |> Array.mapAndKeepJust
+                    (\name ->
+                        ToolHelp.toolHelpByName name
+                            |> Maybe.map (toolHelpToText name)
+                    )
+    in
+    if Array.isEmpty toolSections then
+        ""
+    else
+        let
+            header =
+                "\n\n## Available Tools\n\nYou have access to the following tools via the chorus-tools binary. Invoke tools using Bash:\nchorus-tools <workspace-root> '{\"tool\": \"<name>\", <params>}'"
+
+            toolText =
+                toolSections
+                    |> String.join "\n"
+
+            footer =
+                "\n\nFor detailed tool documentation including output formats, run:\nchorus-tools <workspace-root> '{\"tool\": \"help\"}'"
+        in
+        header ++ "\n" ++ toolText ++ footer
+
+
+{-| Convert a ToolHelp record to compact text for the system prompt.
+
+Handles web.search specially since it's a native tool.
+-}
+toolHelpToText : String -> ToolHelp.ToolHelp -> String
+toolHelpToText toolName tool =
+    let
+        heading =
+            "\n### " ++ tool.name ++ "\n" ++ tool.description
+
+        requiredText =
+            if Array.isEmpty tool.required then
+                ""
+            else
+                "\nRequired: "
+                    ++ (tool.required
+                            |> Array.map (\param -> param.key ++ " (" ++ param.value ++ ")")
+                            |> String.join ", "
+                       )
+
+        optionalText =
+            if Array.isEmpty tool.optional then
+                ""
+            else
+                "\nOptional: "
+                    ++ (tool.optional
+                            |> Array.map (\param -> param.key ++ " (" ++ param.value ++ ")")
+                            |> String.join ", "
+                       )
+
+        nativeNote =
+            if toolName == "web.search" then
+                "\nNote: This is a native tool - use it directly, not via chorus-tools."
+            else
+                ""
+    in
+    heading ++ requiredText ++ optionalText ++ nativeNote

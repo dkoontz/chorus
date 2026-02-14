@@ -11,6 +11,7 @@ import ClaudeCodeTests
 import ConfigTests
 import RegistryTests
 import QueueTests
+import ToolContextTests
 
 
 main : Node.SimpleProgram a
@@ -27,6 +28,7 @@ init env =
                 , ConfigTests.tests
                 , RegistryTests.tests
                 , QueueTests.tests
+                , ToolContextTests.tests
                 ]
 
         total =

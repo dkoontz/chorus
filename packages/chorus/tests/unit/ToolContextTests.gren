@@ -1,0 +1,177 @@
+module ToolContextTests exposing (tests)
+
+{-| Unit tests for Agent.ToolContext module.
+-}
+
+import Agent.ToolContext exposing (toolContextForAgent)
+import Task
+
+
+tests : Array { name : String, run : Task.Task String {} }
+tests =
+    [ testEmptyAllowedToolsReturnsEmptyString
+    , testFileReadAndFileSearchReturnsOnlyThoseTools
+    , testWebSearchDescribedAsNativeTool
+    , testHandoffAndFileReadIncludesBoth
+    , testCompletionReportNeverAppears
+    , testCompletionReportWithOtherToolsFiltered
+    , testIncludesInvocationFormat
+    , testIncludesHelpNote
+    , testUnknownToolsIgnored
+    ]
+
+
+
+-- TEST HELPERS
+
+
+expectEqual : a -> a -> Task.Task String {}
+expectEqual expected actual =
+    if expected == actual then
+        Task.succeed {}
+    else
+        Task.fail ("Expected: " ++ Debug.toString expected ++ " but got: " ++ Debug.toString actual)
+
+
+expectTrue : String -> Bool -> Task.Task String {}
+expectTrue message condition =
+    if condition then
+        Task.succeed {}
+    else
+        Task.fail message
+
+
+expectContains : String -> String -> Task.Task String {}
+expectContains substring haystack =
+    if String.contains substring haystack then
+        Task.succeed {}
+    else
+        Task.fail ("Expected string to contain: " ++ Debug.toString substring ++ " but got: " ++ Debug.toString haystack)
+
+
+expectNotContains : String -> String -> Task.Task String {}
+expectNotContains substring haystack =
+    if String.contains substring haystack then
+        Task.fail ("Expected string NOT to contain: " ++ Debug.toString substring ++ " but it was found in: " ++ Debug.toString haystack)
+    else
+        Task.succeed {}
+
+
+
+-- TESTS
+
+
+testEmptyAllowedToolsReturnsEmptyString : { name : String, run : Task.Task String {} }
+testEmptyAllowedToolsReturnsEmptyString =
+    { name = "toolContextForAgent with empty allowedTools returns empty string"
+    , run =
+        expectEqual "" (toolContextForAgent [])
+    }
+
+
+testFileReadAndFileSearchReturnsOnlyThoseTools : { name : String, run : Task.Task String {} }
+testFileReadAndFileSearchReturnsOnlyThoseTools =
+    { name = "toolContextForAgent with [file.read, file.search] returns context with only those two tools"
+    , run =
+        let
+            result =
+                toolContextForAgent [ "file.read", "file.search" ]
+        in
+        expectContains "### file.read" result
+            |> Task.andThen (\_ -> expectContains "### file.search" result)
+            |> Task.andThen (\_ -> expectNotContains "### file.write" result)
+            |> Task.andThen (\_ -> expectNotContains "### file.create" result)
+            |> Task.andThen (\_ -> expectNotContains "### handoff" result)
+            |> Task.andThen (\_ -> expectNotContains "### web.search" result)
+    }
+
+
+testWebSearchDescribedAsNativeTool : { name : String, run : Task.Task String {} }
+testWebSearchDescribedAsNativeTool =
+    { name = "toolContextForAgent with [web.search] describes it as a native tool"
+    , run =
+        let
+            result =
+                toolContextForAgent [ "web.search" ]
+        in
+        expectContains "### web.search" result
+            |> Task.andThen (\_ -> expectContains "native tool" result)
+            |> Task.andThen (\_ -> expectContains "not via chorus-tools" result)
+    }
+
+
+testHandoffAndFileReadIncludesBoth : { name : String, run : Task.Task String {} }
+testHandoffAndFileReadIncludesBoth =
+    { name = "toolContextForAgent with [handoff, file.read] includes both tools"
+    , run =
+        let
+            result =
+                toolContextForAgent [ "handoff", "file.read" ]
+        in
+        expectContains "### handoff" result
+            |> Task.andThen (\_ -> expectContains "### file.read" result)
+            |> Task.andThen (\_ -> expectContains "agentName" result)
+            |> Task.andThen (\_ -> expectContains "prompt" result)
+    }
+
+
+testCompletionReportNeverAppears : { name : String, run : Task.Task String {} }
+testCompletionReportNeverAppears =
+    { name = "completion-report never appears in the output regardless of input"
+    , run =
+        let
+            result =
+                toolContextForAgent [ "completion-report" ]
+        in
+        expectEqual "" result
+    }
+
+
+testCompletionReportWithOtherToolsFiltered : { name : String, run : Task.Task String {} }
+testCompletionReportWithOtherToolsFiltered =
+    { name = "completion-report is filtered out even when other tools are present"
+    , run =
+        let
+            result =
+                toolContextForAgent [ "completion-report", "file.read" ]
+        in
+        expectContains "### file.read" result
+            |> Task.andThen (\_ -> expectNotContains "completion-report" result)
+    }
+
+
+testIncludesInvocationFormat : { name : String, run : Task.Task String {} }
+testIncludesInvocationFormat =
+    { name = "toolContextForAgent includes the chorus-tools invocation format"
+    , run =
+        let
+            result =
+                toolContextForAgent [ "file.read" ]
+        in
+        expectContains "chorus-tools <workspace-root>" result
+            |> Task.andThen (\_ -> expectContains "{\"tool\": \"<name>\"" result)
+    }
+
+
+testIncludesHelpNote : { name : String, run : Task.Task String {} }
+testIncludesHelpNote =
+    { name = "toolContextForAgent includes help note at the end"
+    , run =
+        let
+            result =
+                toolContextForAgent [ "file.read" ]
+        in
+        expectContains "{\"tool\": \"help\"}" result
+    }
+
+
+testUnknownToolsIgnored : { name : String, run : Task.Task String {} }
+testUnknownToolsIgnored =
+    { name = "toolContextForAgent ignores unknown tool names"
+    , run =
+        let
+            result =
+                toolContextForAgent [ "unknown.tool" ]
+        in
+        expectEqual "" result
+    }

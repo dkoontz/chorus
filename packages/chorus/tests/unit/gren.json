@@ -4,7 +4,8 @@
   "source-directories": [
     ".",
     "../../src",
-    "../../../shared"
+    "../../../shared",
+    "../../../tools/src"
   ],
   "gren-version": "0.6.3",
   "dependencies": {

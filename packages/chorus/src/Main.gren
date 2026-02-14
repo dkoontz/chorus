@@ -37,6 +37,7 @@ import Provider.Registry as ProviderRegistry
 import Stream
 import Task as GrenTask
 import Task.Registry as Registry
+import Agent.ToolContext exposing (toolContextForAgent)
 import Types exposing (AgentConfig(..), AgentProvider(..), ProviderType(..), TaskStatus(..), SourceInfo, WorkspaceConfig)
 import Web.Api as Api exposing (indexedArrayToDict)
 import Web.Router as Router
@@ -481,14 +482,22 @@ buildAgentSpawn model taskId prompt agentConfig =
                 UserDefinedAgent r ->
                     r.instructions
 
+        toolContext =
+            when agentConfig is
+                InternalAgent _ ->
+                    ""
+
+                UserDefinedAgent r ->
+                    toolContextForAgent r.allowedTools
+
         completionReportInstruction =
             "\n\nIMPORTANT: Before finishing your work, you MUST call the completion-report tool to submit your results. Use: {\"tool\": \"completion-report\", \"status\": \"complete\", \"summary\": \"Brief summary of what was done\", \"output\": \"Detailed output\"}\nFor blocked work, use status \"blocked\" with a \"blockedReason\". For failures, use status \"failed\"."
 
         systemPrompt =
             if String.isEmpty agentInstructions then
-                Just completionReportInstruction
+                Just (toolContext ++ completionReportInstruction)
             else
-                Just (agentInstructions ++ completionReportInstruction)
+                Just (agentInstructions ++ toolContext ++ completionReportInstruction)
 
         initialDirectory =
             initialAgentDir model
