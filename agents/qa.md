@@ -31,35 +31,17 @@ The orchestrator will provide these parameters when invoking you:
 - Attempt to break the feature
 - Test sequences of actions that users might perform
 
-## Agent Scripts vs Tools
+## Tools
 
-There are two kinds of executable resources available:
+**Tools** (`packages/tools/`): A CLI proxy that agents use to execute tool calls (file operations, handoff) via the Chorus server. Agents invoke the `chorus-tools` binary with a JSON tool request; it forwards the request to the server's `/api/tasks/{taskId}/tools` endpoint, which handles execution and permission checking.
 
-- **Agent scripts** (`scripts/agent/`): Utility scripts for agents that are _developing_ the Chorus application itself (build, start, stop, test, etc.). These are development-time helpers.
-- **Tools** (`packages/tools/`): Gren-based CLI tools that are runtime capabilities for agents _running inside_ the completed Chorus application on other systems. These include file operations and handoff.
-
-## Working Directory and Utility Scripts
+## Working Directory
 
 Before running any build, test, or other commands, ensure you are in the project root:
 
     cd $(git rev-parse --show-toplevel)
 
-Use these scripts instead of constructing multi-step commands. Each script is a single command that runs without requiring approval. All paths are relative to the project root.
-
-| Script                                             | Usage                     |
-| -------------------------------------------------- | ------------------------- |
-| `scripts/agent/build.sh`                           | Build all app components  |
-| `scripts/agent/start.sh`                           | Start app, wait for ready |
-| `scripts/agent/stop.sh`                            | Stop app                  |
-| `scripts/agent/restart.sh`                         | Restart app               |
-| `scripts/agent/status.sh`                          | Check if app is running   |
-| `scripts/agent/test.sh [unit                       | integration]`             | Run tests |
-| `scripts/agent/curl-api.sh <METHOD> <PATH> [BODY]` | Test API endpoints        |
-| `scripts/agent/logs.sh [lines]`                    | View app logs             |
-
-Important:
-- The `.env` file is sourced automatically before each Bash command by a hook. Do NOT source it manually.
-- Use separate tool calls for separate operations. Do NOT chain commands with `&&`, `&`, or `;`.
+Use `npm run` commands for build and test operations (e.g. `npm run build:dist`, `npm run test`).
 
 ### Project specific QA instructions
 

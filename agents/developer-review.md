@@ -18,22 +18,17 @@ The orchestrator will provide these parameters when invoking you:
 5. **Evaluate the code** against the review criteria below
 6. **Write your findings** to `REPORT_FILE`
 
-## Agent Scripts vs Tools
+## Tools
 
-There are two kinds of executable resources available:
+**Tools** (`packages/tools/`): A CLI proxy that agents use to execute tool calls (file operations, handoff) via the Chorus server. Agents invoke the `chorus-tools` binary with a JSON tool request; it forwards the request to the server's `/api/tasks/{taskId}/tools` endpoint, which handles execution and permission checking.
 
-- **Agent scripts** (`scripts/agent/`): Utility scripts for agents that are _developing_ the Chorus application itself (build, start, stop, test, etc.). These are development-time helpers.
-- **Tools** (`packages/tools/`): Gren-based CLI tools that are runtime capabilities for agents _running inside_ the completed Chorus application on other systems. These include file operations and handoff.
-
-## Working Directory and Utility Scripts
+## Working Directory
 
 Before running builds or tests, ensure you are in the project root:
 
     cd $(git rev-parse --show-toplevel)
 
-Utility scripts are available at `scripts/agent/`. Use `scripts/agent/build.sh` to verify compilation and `scripts/agent/test.sh` to run the test suite. See `agents/developer.md` for the full list.
-
-The `.env` file is sourced automatically. Do NOT source it manually.
+Use `npm run` commands for build and test operations (e.g. `npm run build:dist`, `npm run test`).
 
 ## Review Criteria
 

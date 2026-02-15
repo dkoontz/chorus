@@ -7,20 +7,10 @@
     "build:ui": "cd packages/chorus-ui && gren make Main --output=build/app.js",
     "build:tools": "cd packages/tools && gren make ChorusToolsMain --output=build/chorus-tools-tmp && tail -n +2 build/chorus-tools-tmp > build/chorus-tools.js && bun build --compile build/chorus-tools.js --outfile build/chorus-tools && rm build/chorus-tools-tmp build/chorus-tools.js",
     "build:chorus": "cd packages/chorus && gren make Main --output=build/chorus-tmp && tail -n +2 build/chorus-tmp > build/chorus.js && rm build/chorus-tmp && ../../scripts/patch-bun-compat.sh build/chorus.js && bun build --compile build/chorus.js --outfile build/chorus && rm build/chorus.js",
-    "build:app": "npm run build:ui && npm run build:tools && npm run build:chorus",
-    "build:dist": "npm run build:app && scripts/build-dist.sh",
-    "build:all": "npm run build:dist",
-    "start": "scripts/agent/start.sh",
-    "stop": "scripts/agent/stop.sh",
+    "build:all": "npm run build:ui && npm run build:tools && npm run build:chorus",
+    "build:dist": "npm run build:all && scripts/build-dist.sh",
     "kill": "pkill -x chorus",
-    "restart": "scripts/agent/restart.sh",
-    "status": "scripts/agent/status.sh",
-    "logs": "scripts/agent/logs.sh",
-    "logs:follow": "tail -f \"/tmp/$(pwd | tr '/' '-').log\"",
-    "curl-api": "scripts/agent/curl-api.sh",
-    "test:unit": "cd packages/chorus && npm run test:unit",
-    "test:integration": "cd packages/chorus && npm run test:integration",
-    "test": "npm run test:unit && npm run test:integration",
+    "test": "cd packages/chorus/tests/unit && gren make TestRunner --output=../../build/unit-tests.js && cd ../.. && cp build/unit-tests.js build/run-unit-tests.js && echo 'this.Gren.TestRunner.init({});' >> build/run-unit-tests.js && node build/run-unit-tests.js",
     "clean": "rm -rf packages/*/build packages/*/.gren packages/*/gren_packages dist/chorus dist/chorus-tools dist/static"
   }
 }
