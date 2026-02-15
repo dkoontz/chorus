@@ -2854,8 +2854,21 @@ handleDeferredAction model taskId taskIdStr executor action additionalCmd =
                 executorWithProvider =
                     { executor | providerState = deliverResult.state }
 
+                -- Transition executor back to Running with the planner output stored
+                -- so extractPlannerOutput can find it when the agent completes.
+                executorWithOutput =
+                    { executorWithProvider
+                        | executorModel =
+                            Executor.Running
+                                { pendingToolCalls = Dict.empty
+                                , completedResults = []
+                                , completionReport = Nothing
+                                , plannerOutput = Just plannerOutput
+                                }
+                    }
+
                 finalModel =
-                    { model | activeExecutors = Dict.set taskIdStr executorWithProvider model.activeExecutors }
+                    { model | activeExecutors = Dict.set taskIdStr executorWithOutput model.activeExecutors }
             in
             { model = finalModel
             , command =
