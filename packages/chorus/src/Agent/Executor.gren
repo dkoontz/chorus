@@ -1,14 +1,12 @@
 module Agent.Executor exposing
-    ( Model(..)
+    ( Config
     , Msg(..)
-    , ToolExecutionResult
-    , ExecutorError(..)
-    , executorErrorToString
-    , Config
+    , Model(..)
+    , PendingTool
+    , DeferredAction(..)
+    , UpdateEffect(..)
     , init
     , update
-    , subscriptions
-    , executeToolCall
     )
 
 {-| Agent executor that manages the conversation loop.
@@ -16,473 +14,390 @@ module Agent.Executor exposing
 The executor uses the Provider interface to communicate with LLMs,
 making it independent of any specific LLM service.
 
-## Conversation Flow
+The executor (`Model`, `Msg`, `Config`, `init`,
+`update`) is a tool-processing state machine that receives events from a
+Provider (via Main.gren routing) and processes tool calls identically regardless
+of whether they originate from a CLI HTTP callback or an API response.
 
-1. Load agent spec from markdown file
-2. Create or resume session via provider
-3. Send initial message
-4. While response has pending tool calls:
-   a. Execute each tool call
-   b. Submit tool results
-   c. Process next response
-5. Return final response text
-6. Save session ID for resumption
+The executor does not manage Provider communication directly. The Provider
+feeds events in, the executor processes them, and returns an `UpdateEffect` that
+tells Main.gren what action to take next (deliver results to the Provider, handle
+a deferred action, etc.).
+
 -}
 
-import Bytes
-import ChildProcess
-import FileSystem
-import FileSystem.Path as Path exposing (Path)
-import Id exposing (SessionId)
+import Dict exposing (Dict)
 import Json.Decode as Decode
-import Json.Encode as Encode
-import Provider
-    exposing
-        ( AgentSpec
-        , Provider
-        , ProviderError
-        , Response
-        , Session
-        , ToolCall
-        , ToolResult
-        )
-import Task
-
-
--- TYPES
+import Provider exposing (ToolResult)
+import Types
+import Web.Api as Api
+import Web.ToolExecution as ToolExecution
 
 
 {-| Configuration for the executor.
+
+The executor receives tool calls via messages and processes them via
+`executeTool`. It does not know about Providers.
+
 -}
 type alias Config msg =
-    { provider : Provider msg
-    , workspaceRoot : Path
-    , fileToolsPath : Path  -- Path to file-tools binary
-    }
-
-
-{-| Executor state.
--}
-type Model
-    = Loading
-    | Validating
-        { agentSpec : AgentSpec
-        }
-    | WaitingForSession
-        { agentSpec : AgentSpec
-        }
-    | Active
-        { session : Session
-        , pendingToolCalls : Array ToolCall
-        , collectedResults : Array ToolResult
-        }
-    | Complete
-        { session : Session
-        , finalResponse : String
-        }
-    | Failed
-        { error : ExecutorError
-        }
-
-
-{-| Errors that can occur during execution.
--}
-type ExecutorError
-    = ProviderFailed ProviderError
-    | ToolExecutionFailed { tool : String, reason : String }
-    | SessionSaveFailed { reason : String }
-    | NoInitialMessage
-
-
-{-| Convert an executor error to a human-readable string.
--}
-executorErrorToString : ExecutorError -> String
-executorErrorToString error =
-    when error is
-        ProviderFailed providerError ->
-            Provider.providerErrorToString providerError
-
-        ToolExecutionFailed { tool, reason } ->
-            "Tool '" ++ tool ++ "' failed: " ++ reason
-
-        SessionSaveFailed { reason } ->
-            "Failed to save session: " ++ reason
-
-        NoInitialMessage ->
-            "No initial message provided"
-
-
-{-| Result of a tool execution.
--}
-type alias ToolExecutionResult =
-    { toolCall : ToolCall
-    , result : Result String String
+    { executeTool :
+        { id : String, name : String, input : Decode.Value }
+        -> (ToolExecution.ToolCallResult -> msg)
+        -> Cmd msg
+    , toMsg : Msg -> msg
     }
 
 
 {-| Messages for the executor.
+
+These are routed from Provider events by Main.gren:
+
+- `ToolCallReceived`: A tool call arrived from the Provider. The executor
+  dispatches it via `config.executeTool`.
+- `ToolCallCompleted`: Tool execution finished. The executor inspects the
+  result and determines the appropriate effect.
+- `AgentCompleted`: The Provider signals the conversation is finished.
+- `AgentFailed`: The Provider signals the conversation errored.
+
 -}
 type Msg
-    = -- Environment validation
-      EnvironmentValidated (Result ProviderError {})
-      -- Session management
-    | SessionCreated (Result ProviderError Session)
-    | SessionResumed (Result ProviderError (Maybe Session))
-      -- Conversation
-    | MessageSent (Result ProviderError Response)
-    | ToolResultsSubmitted (Result ProviderError Response)
-      -- Tool execution
-    | ToolExecuted ToolExecutionResult
-      -- Session persistence
-    | SessionSaved (Result String {})
-    | SessionIdLoaded (Result String SessionId)
+    = ToolCallReceived { id : String, name : String, input : Decode.Value }
+    | ToolCallCompleted ToolExecution.ToolCallResult
+    | AgentCompleted String
+    | AgentFailed String
 
 
+{-| Executor state.
 
--- INITIALIZATION
+- `Idle`: Executor created but no conversation started yet.
+- `Running`: Conversation active, processing tool calls.
+- `AwaitingDeferredAction`: A tool call produced a deferred result (handoff
+  or planner output) that Main.gren must handle before the executor can
+  continue.
+- `Complete`: Conversation finished successfully.
+- `Failed`: Conversation errored.
 
-
-{-| Initialize the executor with an agent spec.
 -}
-init :
-    AgentSpec
-    -> Model
-init agentSpec =
-    Validating { agentSpec = agentSpec }
+type Model
+    = Idle
+    | Running
+        { pendingToolCalls : Dict String PendingTool
+        , completedResults : Array ToolResult
+        , completionReport : Maybe Types.CompletionReport
+        , plannerOutput : Maybe Types.PlannerOutput
+        }
+    | AwaitingDeferredAction DeferredAction
+    | Complete
+        { output : String
+        , completionReport : Maybe Types.CompletionReport
+        , plannerOutput : Maybe Types.PlannerOutput
+        }
+    | Failed
+        { error : String
+        , completionReport : Maybe Types.CompletionReport
+        , plannerOutput : Maybe Types.PlannerOutput
+        }
 
 
+{-| A tool call that has been dispatched and is awaiting a result.
+-}
+type alias PendingTool =
+    { id : String
+    , name : String
+    , input : Decode.Value
+    }
 
--- UPDATE
+
+{-| A deferred action that requires Main.gren to intervene.
+
+- `Handoff`: An agent invoked the handoff tool. Main.gren should start
+  the target agent and hold the HTTP response until it completes.
+- `PlannerOutputReady`: The planner invoked the planner-output tool.
+  Main.gren should store the structured output and apply it when the
+  planner process exits.
+
+-}
+type DeferredAction
+    = Handoff { toolCallId : String, agentName : String, prompt : String }
+    | PlannerOutputReady { toolCallId : String, plannerOutput : Types.PlannerOutput }
+
+
+{-| Effects produced by the executor's update function.
+
+Main.gren inspects the effect to determine what action to take:
+
+- `NoEffect`: No external action needed.
+- `DeliverToolResults`: All pending tool calls are complete. Main.gren
+  should call `provider.deliverToolResults` with the collected results.
+- `DeferredActionRequired`: A tool call produced a deferred result that
+  Main.gren must handle (handoff or planner output).
+
+-}
+type UpdateEffect
+    = NoEffect
+    | DeliverToolResults (Array ToolResult)
+    | DeferredActionRequired DeferredAction
+
+
+{-| Initialize the executor.
+-}
+init : Model
+init =
+    Idle
 
 
 {-| Update the executor state based on messages.
+
+Returns the updated model, any commands to execute, and an effect that
+tells Main.gren what external action to take.
+
 -}
 update :
     Msg
     -> Model
     -> Config msg
-    -> { model : Model, cmd : Cmd msg, toMsg : Msg -> msg }
-    -> { model : Model, cmd : Cmd msg }
-update msg model config wrapper =
+    -> { model : Model, cmd : Cmd msg, effect : UpdateEffect }
+update msg model config =
     when msg is
-        EnvironmentValidated result ->
-            when { result = result, model = model } is
-                { result = Err providerError } ->
-                    { model = Failed { error = ProviderFailed providerError }
-                    , cmd = Cmd.none
+        ToolCallReceived toolCall ->
+            let
+                pendingTool =
+                    { id = toolCall.id
+                    , name = toolCall.name
+                    , input = toolCall.input
                     }
 
-                { result = Ok _, model = Validating { agentSpec } } ->
-                    -- Validation passed, now create the session
-                    { model = WaitingForSession { agentSpec = agentSpec }
-                    , cmd =
-                        config.provider.createSession
-                            agentSpec
-                            (Path.toPosixString config.workspaceRoot)
-                            (\r -> wrapper.toMsg (SessionCreated r))
-                    }
-
-                _ ->
-                    -- Not in expected state, ignore
-                    { model = model
-                    , cmd = Cmd.none
-                    }
-
-        SessionCreated result ->
-            when result is
-                Err providerError ->
-                    { model = Failed { error = ProviderFailed providerError }
-                    , cmd = Cmd.none
-                    }
-
-                Ok session ->
-                    { model =
-                        Active
-                            { session = session
-                            , pendingToolCalls = []
-                            , collectedResults = []
+                runningState =
+                    when model is
+                        Running state ->
+                            { state
+                                | pendingToolCalls =
+                                    Dict.set toolCall.id pendingTool state.pendingToolCalls
                             }
-                    , cmd = Cmd.none
-                    }
 
-        SessionResumed result ->
-            when { result = result, model = model } is
-                { result = Err providerError } ->
-                    { model = Failed { error = ProviderFailed providerError }
-                    , cmd = Cmd.none
-                    }
-
-                { result = Ok (Just session) } ->
-                    { model =
-                        Active
-                            { session = session
-                            , pendingToolCalls = []
-                            , collectedResults = []
+                        _ ->
+                            -- For Idle, Complete, Failed, or AwaitingDeferredAction,
+                            -- create fresh running state. This handles both the
+                            -- normal first-tool-call case (Idle) and edge cases
+                            -- where a tool call arrives after unexpected state
+                            -- transitions.
+                            { pendingToolCalls =
+                                Dict.singleton toolCall.id pendingTool
+                            , completedResults = []
+                            , completionReport = Nothing
+                            , plannerOutput = Nothing
                             }
-                    , cmd = Cmd.none
-                    }
 
-                { result = Ok Nothing, model = WaitingForSession { agentSpec } } ->
-                    -- Session not found, create new one
-                    { model = model
-                    , cmd =
-                        config.provider.createSession
-                            agentSpec
-                            (Path.toPosixString config.workspaceRoot)
-                            (\r -> wrapper.toMsg (SessionCreated r))
-                    }
+                cmd =
+                    config.executeTool
+                        toolCall
+                        (\result -> config.toMsg (ToolCallCompleted result))
+            in
+            { model = Running runningState
+            , cmd = cmd
+            , effect = NoEffect
+            }
 
-                _ ->
-                    { model = model
-                    , cmd = Cmd.none
-                    }
-
-        MessageSent result ->
-            handleResponse result model config wrapper
-
-        ToolResultsSubmitted result ->
-            handleResponse result model config wrapper
-
-        ToolExecuted { toolCall, result } ->
+        ToolCallCompleted toolCallResult ->
             when model is
-                Active state ->
-                    let
-                        toolResult =
-                            when result is
-                                Ok output ->
-                                    { toolCallId = toolCall.id
-                                    , output = output
-                                    , isError = False
-                                    }
-
-                                Err errorMsg ->
-                                    { toolCallId = toolCall.id
-                                    , output = errorMsg
-                                    , isError = True
-                                    }
-
-                        newResults =
-                            Array.pushLast toolResult state.collectedResults
-
-                        remainingTools =
-                            state.pendingToolCalls
-                                |> Array.keepIf (\tc -> tc.id /= toolCall.id)
-                    in
-                    if Array.isEmpty remainingTools then
-                        -- All tools executed, submit results
-                        { model =
-                            Active
-                                { state
-                                    | pendingToolCalls = []
-                                    , collectedResults = []
-                                }
-                        , cmd =
-                            config.provider.submitToolResults
-                                state.session
-                                newResults
-                                (\r -> wrapper.toMsg (ToolResultsSubmitted r))
-                        }
-                    else
-                        { model =
-                            Active
-                                { state
-                                    | pendingToolCalls = remainingTools
-                                    , collectedResults = newResults
-                                }
-                        , cmd = Cmd.none
-                        }
+                Running state ->
+                    handleToolCallCompleted toolCallResult state
 
                 _ ->
+                    -- Tool result arrived but executor is not in Running state.
+                    -- This should not happen in normal operation; discard.
                     { model = model
                     , cmd = Cmd.none
+                    , effect = NoEffect
                     }
 
-        SessionSaved result ->
-            -- Session save is fire-and-forget, don't change state
-            { model = model
+        AgentCompleted output ->
+            let
+                { completionReport, plannerOutput } =
+                    when model is
+                        Running state ->
+                            { completionReport = state.completionReport
+                            , plannerOutput = state.plannerOutput
+                            }
+
+                        _ ->
+                            { completionReport = Nothing
+                            , plannerOutput = Nothing
+                            }
+            in
+            { model =
+                Complete
+                    { output = output
+                    , completionReport = completionReport
+                    , plannerOutput = plannerOutput
+                    }
             , cmd = Cmd.none
+            , effect = NoEffect
             }
 
-        SessionIdLoaded result ->
-            when { result = result, model = model } is
-                { result = Ok sessionId, model = WaitingForSession _ } ->
-                    { model = model
-                    , cmd =
-                        config.provider.resumeSession
-                            sessionId
-                            (\r -> wrapper.toMsg (SessionResumed r))
+        AgentFailed error ->
+            let
+                { completionReport, plannerOutput } =
+                    when model is
+                        Running state ->
+                            { completionReport = state.completionReport
+                            , plannerOutput = state.plannerOutput
+                            }
+
+                        _ ->
+                            { completionReport = Nothing
+                            , plannerOutput = Nothing
+                            }
+            in
+            { model =
+                Failed
+                    { error = error
+                    , completionReport = completionReport
+                    , plannerOutput = plannerOutput
                     }
-
-                _ ->
-                    -- No saved session or not in right state
-                    { model = model
-                    , cmd = Cmd.none
-                    }
-
-
-{-| Handle a response from the provider.
--}
-handleResponse :
-    Result ProviderError Response
-    -> Model
-    -> Config msg
-    -> { model : Model, cmd : Cmd msg, toMsg : Msg -> msg }
-    -> { model : Model, cmd : Cmd msg }
-handleResponse result model config wrapper =
-    when result is
-        Err providerError ->
-            { model = Failed { error = ProviderFailed providerError }
             , cmd = Cmd.none
+            , effect = NoEffect
             }
 
-        Ok response ->
-            when model is
-                Active state ->
-                    if response.isComplete then
-                        { model =
-                            Complete
-                                { session = state.session
-                                , finalResponse = response.text
-                                }
-                        , cmd = Cmd.none
-                        }
-                    else
-                        -- Has pending tool calls
-                        { model =
-                            Active
-                                { state
-                                    | pendingToolCalls = response.toolCalls
-                                    , collectedResults = []
-                                }
-                        , cmd = Cmd.none
-                        -- Tool execution would be triggered externally
-                        }
 
-                _ ->
-                    { model = model
-                    , cmd = Cmd.none
+{-| Handle a completed tool call in the Running state.
+
+Inspects the `ApiResult` to determine if this is a regular result, a deferred
+action (handoff or planner output), or a completion report. Updates the
+executor state accordingly and produces the appropriate effect.
+
+-}
+handleToolCallCompleted :
+    ToolExecution.ToolCallResult
+    -> { pendingToolCalls : Dict String PendingTool
+       , completedResults : Array ToolResult
+       , completionReport : Maybe Types.CompletionReport
+       , plannerOutput : Maybe Types.PlannerOutput
+       }
+    -> { model : Model, cmd : Cmd msg, effect : UpdateEffect }
+handleToolCallCompleted toolCallResult state =
+    let
+        remainingPending =
+            Dict.remove toolCallResult.toolCallId state.pendingToolCalls
+    in
+    when toolCallResult.result is
+        Api.DeferredHandoff params ->
+            -- A handoff abandons the current agent entirely. Any
+            -- remaining pending tool calls are intentionally discarded
+            -- because the target agent takes over the conversation.
+            let
+                action =
+                    Handoff
+                        { toolCallId = toolCallResult.toolCallId
+                        , agentName = params.agentName
+                        , prompt = params.prompt
+                        }
+            in
+            { model = AwaitingDeferredAction action
+            , cmd = Cmd.none
+            , effect = DeferredActionRequired action
+            }
+
+        Api.DeferredPlannerOutput plannerOutput ->
+            -- Transition away from Running entirely. The running state
+            -- (including any remaining pending tools) is intentionally
+            -- discarded — Main.gren will handle the deferred planner
+            -- output and decide how to proceed.
+            let
+                action =
+                    PlannerOutputReady
+                        { toolCallId = toolCallResult.toolCallId
+                        , plannerOutput = plannerOutput
+                        }
+            in
+            { model = AwaitingDeferredAction action
+            , cmd = Cmd.none
+            , effect = DeferredActionRequired action
+            }
+
+        Api.ApiSuccess { body } ->
+            let
+                -- Check if this is a completion-report result by tool name
+                updatedCompletionReport =
+                    if toolCallResult.toolName == "completion-report" then
+                        -- Parse the completion report from the original request body.
+                        -- If decode succeeds, store the report. If it fails (which
+                        -- should not happen since the tool already validated the
+                        -- input), keep the existing report.
+                        when Decode.decodeString ToolExecution.completionReportInputDecoder toolCallResult.requestBody is
+                            Ok report ->
+                                Just report
+
+                            Err _ ->
+                                state.completionReport
+                    else
+                        state.completionReport
+
+                toolResult =
+                    { toolCallId = toolCallResult.toolCallId
+                    , output = body
+                    , isError = False
                     }
 
+                updatedState =
+                    { state
+                        | completionReport = updatedCompletionReport
+                    }
+            in
+            collectResultAndCheckBatch toolResult remainingPending updatedState
+
+        Api.ApiError { message } ->
+            let
+                toolResult =
+                    { toolCallId = toolCallResult.toolCallId
+                    , output = message
+                    , isError = True
+                    }
+            in
+            collectResultAndCheckBatch toolResult remainingPending state
 
 
--- SUBSCRIPTIONS
+{-| Collect a tool result and check whether all pending tools are done.
 
+If all pending tools are complete, resets `completedResults` and emits
+`DeliverToolResults` so Main.gren can send them to the Provider. Otherwise,
+accumulates the result and waits for more completions.
 
-{-| Subscriptions for the executor.
-
-Currently none, but could be extended for timeouts, etc.
 -}
-subscriptions : Model -> Sub msg
-subscriptions _ =
-    Sub.none
-
-
-
--- TOOL EXECUTION
-
-
-{-| Execute a tool call by invoking the file-tools binary.
--}
-executeToolCall :
-    ChildProcess.Permission
-    -> Path  -- file-tools path
-    -> Path  -- workspace root
-    -> ToolCall
-    -> Task String String
-executeToolCall childProcessPermission fileToolsPath workspaceRoot toolCall =
+collectResultAndCheckBatch :
+    ToolResult
+    -> Dict String PendingTool
+    -> { pendingToolCalls : Dict String PendingTool
+       , completedResults : Array ToolResult
+       , completionReport : Maybe Types.CompletionReport
+       , plannerOutput : Maybe Types.PlannerOutput
+       }
+    -> { model : Model, cmd : Cmd msg, effect : UpdateEffect }
+collectResultAndCheckBatch toolResult remainingPending state =
     let
-        -- Convert tool call to file-tools JSON input format
-        inputJson =
-            Encode.object
-                [ { key = "tool", value = Encode.string toolCall.name }
-                , { key = "input", value = toolCall.input }
-                ]
-                |> Encode.encode 0
-
-        options =
-            { shell = ChildProcess.NoShell
-            , workingDirectory = ChildProcess.InheritWorkingDirectory
-            , environmentVariables = ChildProcess.InheritEnvironmentVariables
-            , maximumBytesWrittenToStreams = 1024 * 1024
-            , runDuration = ChildProcess.Milliseconds 60000
-            }
+        newResults =
+            Array.pushLast toolResult state.completedResults
     in
-    ChildProcess.run childProcessPermission (Path.toPosixString fileToolsPath) [ Path.toPosixString workspaceRoot, inputJson ] options
-        |> Task.mapError
-            (\runError ->
-                when runError is
-                    ChildProcess.ProgramError { exitCode, stderr } ->
-                        "Tool exited with code "
-                            ++ String.fromInt exitCode
-                            ++ ": "
-                            ++ (stderr |> Bytes.toString |> Maybe.withDefault "unknown error")
-
-                    ChildProcess.InitError { errorCode } ->
-                        "Failed to start tool: " ++ errorCode
-            )
-        |> Task.map
-            (\result ->
-                result.stdout
-                    |> Bytes.toString
-                    |> Maybe.withDefault "{}"
-            )
-
-
-
--- SESSION PERSISTENCE
-
-
-{-| Path to the session file in a workspace.
--}
-sessionFilePath : Path -> Path
-sessionFilePath workspaceRoot =
-    Path.append (Path.fromPosixString ".session") workspaceRoot
-
-
-{-| Save a session ID to the workspace.
--}
-saveSessionId :
-    FileSystem.Permission
-    -> Path
-    -> SessionId
-    -> Task String {}
-saveSessionId filesystemPermission workspaceRoot sessionId =
-    let
-        path =
-            sessionFilePath workspaceRoot
-
-        bytes =
-            Bytes.fromString (Id.sessionIdToString sessionId)
-    in
-    FileSystem.writeFile filesystemPermission bytes path
-        |> Task.mapError (\e -> FileSystem.errorToString e)
-        |> Task.map (\_ -> {})
-
-
-{-| Load a session ID from the workspace.
--}
-loadSessionId :
-    FileSystem.Permission
-    -> Path
-    -> Task String SessionId
-loadSessionId filesystemPermission workspaceRoot =
-    let
-        path =
-            sessionFilePath workspaceRoot
-    in
-    FileSystem.readFile filesystemPermission path
-        |> Task.mapError (\e -> FileSystem.errorToString e)
-        |> Task.andThen
-            (\bytes ->
-                when Bytes.toString bytes is
-                    Nothing ->
-                        Task.fail "Could not decode session file"
-
-                    Just raw ->
-                        when Id.sessionIdFromString raw is
-                            Just sid ->
-                                Task.succeed sid
-
-                            Nothing ->
-                                Task.fail "Session file contained empty session ID"
-            )
+    if Dict.isEmpty remainingPending then
+        -- All pending tools done. Reset completedResults since
+        -- they are being delivered via the effect.
+        { model =
+            Running
+                { state
+                    | pendingToolCalls = remainingPending
+                    , completedResults = []
+                }
+        , cmd = Cmd.none
+        , effect = DeliverToolResults newResults
+        }
+    else
+        { model =
+            Running
+                { state
+                    | pendingToolCalls = remainingPending
+                    , completedResults = newResults
+                }
+        , cmd = Cmd.none
+        , effect = NoEffect
+        }

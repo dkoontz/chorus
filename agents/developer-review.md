@@ -35,7 +35,9 @@ Use `npm run` commands for build and test operations (e.g. `npm run build:dist`,
 ### 1. Naming Accuracy
 - Do variable/function/class names accurately describe what they contain or do?
 - Are names misleading or too generic?
+- Do names and comments describe **purpose** rather than referencing the task or change that introduced them? A name like `newLayoutParser` or a comment like `-- Added for the config migration task` will be meaningless after the change is old. Names and comments should make sense to someone who has no knowledge of this particular task — they should explain **what** something does or **why** it exists, not **when** or **why it was added**.
 - Example issue: A function named `validateUser` that also saves to the database or a type named `Audit` when there are multiple forms of audits in the app.
+- Example issue: A variable named `updatedHandler` or a comment like `-- handles the new format` — "updated" and "new" are relative to the current change and will be confusing later. Prefer names like `jsonHandler` and comments like `-- handles the JSON format`.
 
 ### 2. Duplication
 - Is there code that repeats logic already present elsewhere?

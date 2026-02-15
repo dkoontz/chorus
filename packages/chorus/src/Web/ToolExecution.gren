@@ -1,8 +1,10 @@
 module Web.ToolExecution exposing
-    ( ToolExecutionContext
+    ( ToolCallResult
+    , ToolExecutionContext
     , ToolPermission(..)
     , checkPermission
     , completionReportInputDecoder
+    , executeToolCall
     , requestExecuteTool
     )
 
@@ -52,6 +54,20 @@ type alias ToolExecutionContext =
     , allowedTools : Array String
     , apiContext : Api.ApiContext
     , taskId : TaskId
+    }
+
+
+{-| Result of executing a single tool call.
+
+Contains the tool call ID and name for correlation, the encoded request body
+that was sent to the tool dispatcher, and the execution result.
+
+-}
+type alias ToolCallResult =
+    { toolCallId : String
+    , toolName : String
+    , requestBody : String
+    , result : Api.ApiResult
     }
 
 
@@ -113,6 +129,68 @@ requestExecuteTool ctx requestBody toMsg =
 
                     Allowed ->
                         dispatchTool ctx toolName requestBody toMsg
+
+
+{-| Execute a single tool call from a provider response.
+
+Takes a structured tool call (with id, name, and JSON input), encodes it into
+the request body format expected by the tool dispatcher, checks permissions,
+and dispatches. The result is wrapped in a `ToolCallResult` that carries the
+tool call ID and name for correlation by the caller.
+
+This function is the entry point for the Executor's tool processing pipeline,
+used by both CLI and API providers.
+
+-}
+executeToolCall :
+    ToolExecutionContext
+    -> { id : String, name : String, input : Decode.Value }
+    -> (ToolCallResult -> msg)
+    -> Cmd msg
+executeToolCall ctx toolCall toMsg =
+    let
+        -- Build the request body by merging {"tool": name} into the input object.
+        -- The input value is expected to be a JSON object; its fields become
+        -- top-level fields alongside "tool" in the request body, matching the
+        -- format expected by dispatchTool and downstream decoders.
+        requestBody =
+            let
+                inputFields =
+                    Decode.decodeValue (Decode.keyValuePairs Decode.value) toolCall.input
+                        |> Result.withDefault []
+
+                allFields =
+                    Array.pushFirst
+                        { key = "tool", value = Encode.string toolCall.name }
+                        inputFields
+            in
+            Encode.encode 0 (Encode.object allFields)
+
+        wrapResult apiResult =
+            toMsg
+                { toolCallId = toolCall.id
+                , toolName = toolCall.name
+                , requestBody = requestBody
+                , result = apiResult
+                }
+    in
+    -- completion-report and planner-output are always allowed (auto-granted)
+    if toolCall.name == "completion-report" || toolCall.name == "planner-output" then
+        dispatchTool ctx toolCall.name requestBody wrapResult
+    else
+        when checkPermission ctx.allowedTools toolCall.name is
+            Denied reason ->
+                GrenTask.succeed
+                    (Api.ApiError
+                        { statusCode = 403
+                        , code = "FORBIDDEN"
+                        , message = reason
+                        }
+                    )
+                    |> GrenTask.perform wrapResult
+
+            Allowed ->
+                dispatchTool ctx toolCall.name requestBody wrapResult
 
 
 {-| Dispatch a tool request to the appropriate handler based on tool name.

@@ -15,17 +15,20 @@ It implements the Provider interface for LLM communication.
 
 import Bytes
 import ChildProcess
-import Id exposing (SessionId)
-import Json.Decode as Decode exposing (Decoder)
+import Dict
+import HttpServer.Response as HttpResponse
+import Json.Decode as Decode
 import Json.Encode as Encode
 import Provider
     exposing
         ( AgentSpec
+        , HttpToolCallContext
         , Provider
         , ProviderError(..)
+        , ProviderEvent(..)
         , ProviderKind(..)
-        , Response
-        , Session
+        , ProviderState(..)
+        , StartConfig
         , ToolCall
         , ToolResult
         )
@@ -50,17 +53,204 @@ type alias Config =
 
 {-| The Claude Code provider.
 
-This implements the Provider interface by spawning the claude CLI.
+This implements the `Provider` interface. For CLI providers:
+
+- `startAgent` spawns the CLI process. On exit, emits `AgentCompleted` or
+  `AgentFailed` via the `onEvent` callback.
+- `handleHttpToolCall` stores the HTTP response handle in `CliProviderState`
+  and emits `ToolCallReceived` so the Executor can process the tool call.
+- `deliverToolResults` sends HTTP responses to the stored response handles,
+  one per tool result.
+
 -}
 provider : Config -> Provider msg
 provider config =
     { kind = CliProvider
     , validateEnvironment = validateEnvironment config
-    , createSession = createSession config
-    , sendMessage = sendMessage config
-    , submitToolResults = submitToolResults config
-    , resumeSession = resumeSession config
+    , startAgent = startAgent config
+    , deliverToolResults = deliverToolResults
+    , handleHttpToolCall = handleHttpToolCall
+    , initState = CliProviderState { pendingHttpResponses = Dict.empty }
     }
+
+
+{-| Start an agent by spawning the CLI process.
+
+Builds the shell command, spawns the process, and on exit emits
+`AgentCompleted` or `AgentFailed` via `onEvent`.
+-}
+startAgent :
+    Config
+    -> ProviderState
+    -> StartConfig msg
+    -> { state : ProviderState, cmd : Cmd msg }
+startAgent config state startConfig =
+    let
+        agentSpec =
+            startConfig.agentSpec
+
+        cliArgs =
+            { systemPrompt = Just agentSpec.systemPrompt
+            , resumeSessionId = Nothing
+            , workspaceRoot = startConfig.workspaceRoot
+            , chorusToolsPath = config.chorusToolsPath
+            , message = startConfig.message
+            , allowedTools = startConfig.allowedTools
+            , taskId = startConfig.taskId
+            , baseUrl = Just config.baseUrl
+            }
+
+        shellCommand =
+            buildShellCommand cliArgs
+
+        options =
+            { shell = ChildProcess.NoShell
+            , workingDirectory = ChildProcess.InheritWorkingDirectory
+            , environmentVariables = ChildProcess.InheritEnvironmentVariables
+            , maximumBytesWrittenToStreams = 10 * 1024 * 1024
+            , runDuration = ChildProcess.Milliseconds 600000
+            }
+
+        cmd =
+            ChildProcess.run config.childProcessPermission "bash" [ "-c", shellCommand ] options
+                |> Task.map
+                    (\cliResult ->
+                        let
+                            output =
+                                cliResult.stdout
+                                    |> Bytes.toString
+                                    |> Maybe.withDefault ""
+
+                            resultText =
+                                when Decode.decodeString (Decode.field "result" Decode.string) output is
+                                    Ok text ->
+                                        text
+
+                                    Err _ ->
+                                        output
+                        in
+                        startConfig.onEvent (AgentCompleted resultText)
+                    )
+                |> Task.onError
+                    (\runError ->
+                        let
+                            errMsg =
+                                when runError is
+                                    ChildProcess.InitError { errorCode } ->
+                                        "Failed to start agent CLI: " ++ errorCode
+
+                                    ChildProcess.ProgramError { exitCode, stderr } ->
+                                        let
+                                            stderrStr =
+                                                stderr
+                                                    |> Bytes.toString
+                                                    |> Maybe.withDefault ""
+                                        in
+                                        "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                        in
+                        Task.succeed (startConfig.onEvent (AgentFailed errMsg))
+                    )
+                |> Task.perform identity
+    in
+    { state = state
+    , cmd = cmd
+    }
+
+
+{-| Deliver tool results back to the agent by sending HTTP responses.
+
+For each tool result, looks up the stored HTTP response handle by tool call ID
+and sends the response. Removes handled responses from state.
+-}
+deliverToolResults :
+    ProviderState
+    -> Array ToolResult
+    -> { state : ProviderState, cmd : Cmd msg }
+deliverToolResults state results =
+    when state is
+        CliProviderState cliState ->
+            let
+                foldResult =
+                    Array.foldl
+                        (\toolResult acc ->
+                            when Dict.get toolResult.toolCallId acc.pending is
+                                Just httpResponse ->
+                                    let
+                                        responseBody =
+                                            if toolResult.isError then
+                                                Encode.object
+                                                    [ { key = "error"
+                                                      , value =
+                                                            Encode.object
+                                                                [ { key = "code", value = Encode.string "TOOL_ERROR" }
+                                                                , { key = "message", value = Encode.string toolResult.output }
+                                                                ]
+                                                      }
+                                                    ]
+                                                    |> Encode.encode 0
+                                            else
+                                                toolResult.output
+
+                                        statusCode =
+                                            if toolResult.isError then
+                                                500
+                                            else
+                                                200
+
+                                        sendCmd =
+                                            httpResponse
+                                                |> HttpResponse.setStatus statusCode
+                                                |> HttpResponse.setHeader "Content-Type" "application/json"
+                                                |> HttpResponse.setBody responseBody
+                                                |> HttpResponse.send
+                                    in
+                                    { pending = Dict.remove toolResult.toolCallId acc.pending
+                                    , cmds = Array.pushLast sendCmd acc.cmds
+                                    }
+
+                                Nothing ->
+                                    -- No pending response for this tool call ID; skip
+                                    acc
+                        )
+                        { pending = cliState.pendingHttpResponses, cmds = [] }
+                        results
+            in
+            { state = CliProviderState { pendingHttpResponses = foldResult.pending }
+            , cmd = Cmd.batch foldResult.cmds
+            }
+
+        _ ->
+            -- Not in CLI provider state; no-op
+            { state = state
+            , cmd = Cmd.none
+            }
+
+
+{-| Handle an incoming chorus-tools HTTP callback.
+
+Stores the HTTP response handle in state (keyed by tool call ID). The caller
+is responsible for emitting the `ToolCallReceived` event to the Executor.
+-}
+handleHttpToolCall :
+    ProviderState
+    -> HttpToolCallContext
+    -> { state : ProviderState, cmd : Cmd msg }
+handleHttpToolCall state context =
+    when state is
+        CliProviderState cliState ->
+            let
+                updatedPending =
+                    Dict.set context.toolCall.id context.httpResponse cliState.pendingHttpResponses
+            in
+            { state = CliProviderState { pendingHttpResponses = updatedPending }
+            , cmd = Cmd.none
+            }
+
+        _ ->
+            -- Not in CLI provider state; no-op
+            { state = state
+            , cmd = Cmd.none
+            }
 
 
 
@@ -128,172 +318,6 @@ validateEnvironment config toMsg =
 
 
 
--- SESSION OPERATIONS
-
-
-{-| Create a new session by invoking the claude CLI.
-
-The session ID is extracted from the system.init message in the response.
--}
-createSession :
-    Config
-    -> AgentSpec
-    -> String
-    -> (Result ProviderError Session -> msg)
-    -> Cmd msg
-createSession config agentSpec workspaceRoot toMsg =
-    -- For session creation, we send an initial "hello" message to establish the session
-    -- The CLI will return a session_id in the system.init message
-    let
-        cliArgs =
-            { systemPrompt = Just agentSpec.systemPrompt
-            , resumeSessionId = Nothing
-            , workspaceRoot = workspaceRoot
-            , chorusToolsPath = config.chorusToolsPath
-            , message = "Session initialized. Awaiting instructions."
-            , allowedTools = Nothing
-            , taskId = Nothing
-            , baseUrl = Nothing
-            }
-
-        -- Build shell command with stdin redirected from /dev/null
-        -- This is necessary because Gren's ChildProcess.run uses execFile which
-        -- inherits stdin, causing the claude CLI to hang waiting for input
-        shellCommand =
-            buildShellCommand cliArgs
-
-        args =
-            [ "-c", shellCommand ]
-
-        options =
-            { shell = ChildProcess.NoShell
-            , workingDirectory = ChildProcess.InheritWorkingDirectory
-            , environmentVariables = ChildProcess.InheritEnvironmentVariables
-            , maximumBytesWrittenToStreams = 1024 * 1024  -- 1MB
-            , runDuration = ChildProcess.Milliseconds 120000  -- 2 minutes
-            }
-    in
-    ChildProcess.run config.childProcessPermission "bash" args options
-        |> Task.mapError (cliErrorToProviderError (buildCliArgs cliArgs))
-        |> Task.andThen
-            (\result ->
-                let
-                    output =
-                        result.stdout |> Bytes.toString |> Maybe.withDefault ""
-                in
-                when parseSessionId output is
-                    Just sessionId ->
-                        Task.succeed
-                            { id = sessionId
-                            , agentSpec = agentSpec
-                            }
-
-                    Nothing ->
-                        Task.fail (InvalidResponseError { message = "Could not extract session ID from CLI output" })
-            )
-        |> Task.attempt toMsg
-
-
-{-| Send a message in an existing session.
--}
-sendMessage :
-    Config
-    -> Session
-    -> String
-    -> (Result ProviderError Response -> msg)
-    -> Cmd msg
-sendMessage config session message toMsg =
-    let
-        cliArgs =
-            { systemPrompt = Nothing
-            , resumeSessionId = Just (Id.sessionIdToString session.id)
-            , workspaceRoot = ""  -- Not needed for resume
-            , chorusToolsPath = config.chorusToolsPath
-            , message = message
-            , allowedTools = Nothing
-            , taskId = Nothing
-            , baseUrl = Nothing
-            }
-
-        -- Build shell command with stdin redirected from /dev/null
-        shellCommand =
-            buildShellCommand cliArgs
-
-        args =
-            [ "-c", shellCommand ]
-
-        options =
-            { shell = ChildProcess.NoShell
-            , workingDirectory = ChildProcess.InheritWorkingDirectory
-            , environmentVariables = ChildProcess.InheritEnvironmentVariables
-            , maximumBytesWrittenToStreams = 10 * 1024 * 1024  -- 10MB
-            , runDuration = ChildProcess.Milliseconds 600000  -- 10 minutes for longer tasks
-            }
-    in
-    ChildProcess.run config.childProcessPermission "bash" args options
-        |> Task.mapError (cliErrorToProviderError (buildCliArgs cliArgs))
-        |> Task.andThen
-            (\result ->
-                let
-                    output =
-                        result.stdout |> Bytes.toString |> Maybe.withDefault ""
-                in
-                when parseCliResponse output is
-                    Ok response ->
-                        Task.succeed response
-
-                    Err errMsg ->
-                        Task.fail (InvalidResponseError { message = errMsg })
-            )
-        |> Task.attempt toMsg
-
-
-{-| Submit tool results - with CLI, tools are executed internally.
-
-The Claude CLI handles tool execution internally, so this function
-should not normally be called. It's provided for interface compatibility.
--}
-submitToolResults :
-    Config
-    -> Session
-    -> Array ToolResult
-    -> (Result ProviderError Response -> msg)
-    -> Cmd msg
-submitToolResults config session results toMsg =
-    -- The CLI handles tool execution internally, so we don't need to submit results.
-    -- This function exists for interface compatibility.
-    -- If called, we return an error explaining the situation.
-    Task.fail
-        (InvalidResponseError
-            { message = "Tool results are handled internally by the claude CLI. This function should not be called."
-            }
-        )
-        |> Task.attempt toMsg
-
-
-{-| Resume an existing session.
--}
-resumeSession :
-    Config
-    -> SessionId
-    -> (Result ProviderError (Maybe Session) -> msg)
-    -> Cmd msg
-resumeSession config sessionId toMsg =
-    -- We can't easily verify if a session exists without making a call.
-    -- For now, we assume the session exists and let sendMessage handle any errors.
-    Task.succeed
-        (Just
-            { id = sessionId
-            , agentSpec =
-                { name = "Resumed"
-                , systemPrompt = ""  -- Not available on resume
-                }
-            }
-        )
-        |> Task.attempt toMsg
-
-
-
 -- CLI ARGUMENT BUILDING
 
 
@@ -309,71 +333,6 @@ type alias CliArgs =
     , taskId : Maybe String
     , baseUrl : Maybe String
     }
-
-
-{-| Build command line arguments for the claude CLI.
--}
-buildCliArgs : CliArgs -> Array String
-buildCliArgs args =
-    let
-        baseArgs =
-            [ "-p"  -- Non-interactive mode
-            , "--output-format", "json"  -- Use batch JSON for simpler parsing
-            ]
-
-        sessionArgs =
-            when args.resumeSessionId is
-                Just sessionId ->
-                    [ "--resume", sessionId ]
-
-                Nothing ->
-                    []
-
-        promptArgs =
-            when args.systemPrompt is
-                Just prompt ->
-                    [ "--system-prompt", prompt ]
-
-                Nothing ->
-                    []
-
-        cliFlags =
-            when args.allowedTools is
-                Just chorusToolNames ->
-                    chorusToolsToCliFlags args.chorusToolsPath chorusToolNames
-
-                Nothing ->
-                    let
-                        defaultValue =
-                            "Bash(" ++ args.chorusToolsPath ++ " *)"
-                    in
-                    { tools = toolCliFlagFromAllowedTools defaultValue
-                    , allowedTools = defaultValue
-                    }
-
-        toolArgs =
-            [ "--tools", cliFlags.tools
-            , "--allowedTools", cliFlags.allowedTools
-            ]
-
-        dirArgs =
-            if String.isEmpty args.workspaceRoot then
-                []
-            else
-                [ "--add-dir", args.workspaceRoot ]
-
-        -- Use "--" to separate options from the message argument
-        messageArg =
-            [ "--", args.message ]
-    in
-    Array.flatten
-        [ baseArgs
-        , sessionArgs
-        , promptArgs
-        , toolArgs
-        , dirArgs
-        , messageArg
-        ]
 
 
 {-| Build a shell command string for the claude CLI.
@@ -602,257 +561,3 @@ deduplicateStrings arr =
 
 
 
--- RESPONSE PARSING
-
-
-{-| Extract session ID from CLI output.
-
-Looks for the session_id in the JSON result message.
-Wraps the parsed string as a SessionId via the smart constructor.
--}
-parseSessionId : String -> Maybe SessionId
-parseSessionId output =
-    let
-        decoder =
-            Decode.field "session_id" Decode.string
-    in
-    when Decode.decodeString decoder output is
-        Ok rawSessionId ->
-            Id.sessionIdFromString rawSessionId
-
-        Err _ ->
-            -- Try parsing as NDJSON (stream format) and look for system.init
-            output
-                |> String.lines
-                |> Array.mapAndKeepJust
-                    (\line ->
-                        when Decode.decodeString systemInitDecoder line is
-                            Ok sid ->
-                                Id.sessionIdFromString sid
-
-                            Err _ ->
-                                Nothing
-                    )
-                |> Array.first
-
-
-{-| Decoder for system.init message session_id.
--}
-systemInitDecoder : Decoder String
-systemInitDecoder =
-    Decode.map2
-        (\msgType subtype ->
-            { msgType = msgType
-            , subtype = subtype
-            }
-        )
-        (Decode.field "type" Decode.string)
-        (Decode.maybe (Decode.field "subtype" Decode.string))
-        |> Decode.andThen
-            (\info ->
-                if info.msgType == "system" && info.subtype == Just "init" then
-                    Decode.field "session_id" Decode.string
-                else
-                    Decode.fail "Not a system.init message"
-            )
-
-
-{-| Parse CLI response into Response type.
--}
-parseCliResponse : String -> Result String Response
-parseCliResponse output =
-    let
-        -- For batch JSON output, parse the result message
-        resultDecoder =
-            Decode.map4
-                (\msgType isError result sessionId ->
-                    { msgType = msgType
-                    , isError = isError
-                    , result = result
-                    , sessionId = sessionId
-                    }
-                )
-                (Decode.field "type" Decode.string)
-                (Decode.field "is_error" Decode.bool)
-                (Decode.field "result" Decode.string)
-                (Decode.field "session_id" Decode.string)
-    in
-    when Decode.decodeString resultDecoder output is
-        Ok parsed ->
-            if parsed.isError then
-                Err ("CLI returned error: " ++ parsed.result)
-            else
-                Ok
-                    { text = parsed.result
-                    , toolCalls = []  -- Tools are executed internally by CLI
-                    , isComplete = True  -- CLI completes tool execution before returning
-                    }
-
-        Err decodeError ->
-            -- Try parsing as stream-json format
-            parseStreamJsonResponse output
-
-
-{-| Parse streaming JSON (NDJSON) response.
--}
-parseStreamJsonResponse : String -> Result String Response
-parseStreamJsonResponse output =
-    let
-        lines =
-            String.lines output
-
-        -- Find the result message (last message of type "result")
-        resultLine =
-            lines
-                |> Array.reverse
-                |> Array.mapAndKeepJust
-                    (\line ->
-                        let
-                            typeDecoder =
-                                Decode.field "type" Decode.string
-                        in
-                        when Decode.decodeString typeDecoder line is
-                            Ok "result" ->
-                                Just line
-
-                            _ ->
-                                Nothing
-                    )
-                |> Array.first
-    in
-    when resultLine is
-        Nothing ->
-            -- No result message found, try to extract text from assistant messages
-            extractAssistantText lines
-
-        Just line ->
-            let
-                resultDecoder =
-                    Decode.map2
-                        (\isError result ->
-                            { isError = isError
-                            , result = result
-                            }
-                        )
-                        (Decode.field "is_error" Decode.bool)
-                        (Decode.field "result" Decode.string)
-            in
-            when Decode.decodeString resultDecoder line is
-                Ok parsed ->
-                    if parsed.isError then
-                        Err ("CLI returned error: " ++ parsed.result)
-                    else
-                        Ok
-                            { text = parsed.result
-                            , toolCalls = []
-                            , isComplete = True
-                            }
-
-                Err _ ->
-                    Err "Could not parse result message"
-
-
-{-| Extract text from assistant messages when no result message is found.
--}
-extractAssistantText : Array String -> Result String Response
-extractAssistantText lines =
-    let
-        textContentDecoder =
-            Decode.map2
-                (\contentType text ->
-                    { contentType = contentType
-                    , text = text
-                    }
-                )
-                (Decode.field "type" Decode.string)
-                (Decode.field "text" Decode.string)
-
-        contentDecoder =
-            Decode.field "message"
-                (Decode.field "content"
-                    (Decode.array textContentDecoder)
-                )
-
-        assistantDecoder =
-            Decode.field "type" Decode.string
-                |> Decode.andThen
-                    (\msgType ->
-                        if msgType == "assistant" then
-                            contentDecoder
-                        else
-                            Decode.fail "Not an assistant message"
-                    )
-
-        extractedTexts =
-            lines
-                |> Array.mapAndKeepJust
-                    (\line ->
-                        when Decode.decodeString assistantDecoder line is
-                            Ok contents ->
-                                contents
-                                    |> Array.mapAndKeepJust
-                                        (\c ->
-                                            if c.contentType == "text" then
-                                                Just c.text
-                                            else
-                                                Nothing
-                                        )
-                                    |> String.join "\n"
-                                    |> Just
-
-                            Err _ ->
-                                Nothing
-                    )
-    in
-    if Array.isEmpty extractedTexts then
-        Err "No assistant response found in CLI output"
-    else
-        Ok
-            { text = String.join "\n" extractedTexts
-            , toolCalls = []
-            , isComplete = True
-            }
-
-
-
--- ERROR HANDLING
-
-
-{-| Convert CLI execution errors to ProviderError.
-
-The args parameter is included in error messages for debugging.
--}
-cliErrorToProviderError : Array String -> ChildProcess.FailedRun -> ProviderError
-cliErrorToProviderError args runError =
-    let
-        argsDebug =
-            "CLI args: claude " ++ String.join " " args
-    in
-    when runError is
-        ChildProcess.InitError { errorCode } ->
-            if String.contains "ENOENT" errorCode then
-                EnvironmentError
-                    { message = "claude CLI not found. Install from https://claude.ai/code"
-                    }
-            else
-                NetworkError
-                    { message = "Failed to start claude CLI: " ++ errorCode ++ " | " ++ argsDebug
-                    }
-
-        ChildProcess.ProgramError { exitCode, stderr } ->
-            let
-                stderrStr =
-                    stderr |> Bytes.toString |> Maybe.withDefault ""
-            in
-            if String.contains "auth" (String.toLower stderrStr) || String.contains "unauthorized" (String.toLower stderrStr) then
-                AuthenticationError
-                    { message = stderrStr ++ " | " ++ argsDebug
-                    }
-            else if String.contains "rate limit" (String.toLower stderrStr) then
-                RateLimitError
-                    { message = stderrStr ++ " | " ++ argsDebug
-                    }
-            else
-                InvalidResponseError
-                    { message = "CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr ++ " | " ++ argsDebug
-                    }

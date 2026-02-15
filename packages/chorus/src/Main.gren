@@ -11,8 +11,10 @@ The server exposes:
 
 -}
 
+import Agent.Executor as Executor
 import Agent.Manager as AgentManager
 import Agent.Registry as AgentRegistry
+import Agent.ToolContext exposing (toolContextForAgent)
 import Bytes
 import ChildProcess
 import Config exposing (Config)
@@ -32,13 +34,11 @@ import Logging exposing (LogLevel(..))
 import Node
 import Provider exposing (ProviderKind(..))
 import Provider.ClaudeCode as ClaudeCode
-import Provider.OpenAiCompatible as OpenAiCompatible
 import Provider.OpenCode as OpenCode
 import Provider.Registry as ProviderRegistry
 import Stream
 import Task as GrenTask
 import Task.Registry as Registry
-import Agent.ToolContext exposing (toolContextForAgent)
 import Types exposing (AgentConfig(..), AgentProvider(..), EventType(..), PlannerOutput(..), ProviderType(..), TaskStatus(..), SourceInfo, WorkspaceConfig)
 import Web.Api as Api exposing (indexedArrayToDict)
 import Web.Router as Router
@@ -91,31 +91,24 @@ type alias Model =
 
 {-| State of an active agent executor, keyed by task ID.
 
-The `retryCount` and `sessionId` fields are scaffolding for Phase 5 (CLI
-provider retry for missing output tool). They are initialized but not yet
-wired into the completion flow. When retry is implemented, `sessionId` will
-hold the CLI session ID for `--resume` and `retryCount` will track attempts.
+Combines the Executor model (tool processing state machine) with
+the Provider state (pending HTTP responses for CLI, session for API) and
+the Provider record (functions for communicating with the agent).
+
+The `retryCount` and `sessionId` fields are scaffolding for future retry
+support. They are initialized but not yet wired into the completion flow.
 -}
 type alias ExecutorState =
     { taskId : TaskId
     , agentName : String
     , agentConfig : Types.AgentConfig
-    , status : ExecutorStatus
-    , completionReport : Maybe Types.CompletionReport
-    , plannerOutput : Maybe Types.PlannerOutput
+    , executorModel : Executor.Model
+    , providerState : Provider.ProviderState
+    , provider : Provider.Provider Msg
     , isSystemAgent : Bool
     , retryCount : Int
     , sessionId : Maybe String
     }
-
-
-{-| Status of an agent executor.
--}
-type ExecutorStatus
-    = ExecStarting
-    | ExecRunning
-    | ExecCompleted String
-    | ExecFailed String
 
 
 type alias PendingConfigResponse =
@@ -150,6 +143,9 @@ type Msg
     | GotDeferredHandoffStarted { taskId : TaskId, prompt : String, response : Response, agentConfig : Types.AgentConfig, apiResult : Api.ApiResult }
     | GotAgentComplete { taskId : TaskId, result : Result String String }
     | GotToolResult { taskId : TaskId, toolName : String, requestBody : String, response : Response, result : Api.ApiResult }
+    | GotProviderEvent { taskId : TaskId, event : Provider.ProviderEvent }
+    | GotExecutorMsg { taskId : TaskId, msg : Executor.Msg }
+    | GotProviderResolved { taskId : TaskId, prompt : String, agentConfig : Types.AgentConfig, providerConfig : Types.ProviderConfig, isSystemAgent : Bool }
     | GotInternalApiResult Api.ApiResult
     | GotMutatingApiResult { broadcastType : String, response : Response, result : Api.ApiResult }
     | GotTaskCreated { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
@@ -321,95 +317,129 @@ init env =
 
 {-| Create a provider for the given agent configuration.
 
-Dispatches based on the agent's `provider` field. Supports:
-- "claude-code": CLI-based provider that spawns the claude CLI
-- "opencode": CLI-based provider that spawns the opencode CLI
-- "openai-compat": OpenAI-compatible API provider (OpenRouter, Ollama, etc.)
-
-Returns Nothing if the provider name is not recognized or the agent is internal.
+Dispatches based on the agent's `provider` field and creates a `Provider`
+that implements the event-driven interface. Returns Nothing if the provider
+name is not recognized or the agent is internal.
 -}
-makeProvider : Model -> Types.AgentConfig -> Maybe Types.ProviderConfig -> Maybe (Provider.Provider Msg)
-makeProvider model agentConfig maybeProviderConfig =
+makeProvider : Model -> Types.AgentConfig -> Types.ProviderConfig -> Maybe (Provider.Provider Msg)
+makeProvider model agentConfig providerConfig =
     when agentConfig is
         InternalAgent _ ->
-            Nothing
+            -- Internal agents use the system agent provider
+            let
+                baseUrl =
+                    "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
+            in
+            when providerConfig.providerType is
+                Types.ClaudeCode ->
+                    Just
+                        (ClaudeCode.provider
+                            { childProcessPermission = model.childProcessPermission
+                            , chorusToolsPath = model.config.chorusToolsPath
+                            , baseUrl = baseUrl
+                            }
+                        )
 
-        UserDefinedAgent r ->
-            when r.provider is
-                NotConfigured ->
+                Types.OpenCode ->
+                    Just
+                        (OpenCode.provider
+                            { childProcessPermission = model.childProcessPermission
+                            , filesystemPermission = model.filesystemPermission
+                            , chorusToolsPath = model.config.chorusToolsPath
+                            , baseUrl = baseUrl
+                            }
+                        )
+
+                Types.OpenAiCompatible _ ->
                     Nothing
 
-                ProviderRef _ ->
-                    when maybeProviderConfig is
-                        Nothing ->
-                            Nothing
+        UserDefinedAgent _ ->
+            let
+                baseUrl =
+                    "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
+            in
+            when providerConfig.providerType is
+                Types.ClaudeCode ->
+                    Just
+                        (ClaudeCode.provider
+                            { childProcessPermission = model.childProcessPermission
+                            , chorusToolsPath = model.config.chorusToolsPath
+                            , baseUrl = baseUrl
+                            }
+                        )
 
-                        Just providerConfig ->
-                            let
-                                baseUrl =
-                                    "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
-                            in
-                            when providerConfig.providerType is
-                                Types.ClaudeCode ->
-                                    Just
-                                        (ClaudeCode.provider
-                                            { childProcessPermission = model.childProcessPermission
-                                            , chorusToolsPath = model.config.chorusToolsPath
-                                            , baseUrl = baseUrl
-                                            }
-                                        )
+                Types.OpenCode ->
+                    Just
+                        (OpenCode.provider
+                            { childProcessPermission = model.childProcessPermission
+                            , filesystemPermission = model.filesystemPermission
+                            , chorusToolsPath = model.config.chorusToolsPath
+                            , baseUrl = baseUrl
+                            }
+                        )
 
-                                Types.OpenCode ->
-                                    Just
-                                        (OpenCode.provider
-                                            { childProcessPermission = model.childProcessPermission
-                                            , filesystemPermission = model.filesystemPermission
-                                            , chorusToolsPath = model.config.chorusToolsPath
-                                            , baseUrl = baseUrl
-                                            }
-                                        )
-
-                                Types.OpenAiCompatible config ->
-                                    let
-                                        conversationsDir =
-                                            when model.workspaceConfigPath is
-                                                Just configPath ->
-                                                    parentDirectory configPath ++ "/conversations"
-
-                                                Nothing ->
-                                                    Debug.todo "conversationsDir called without a loaded workspace config"
-                                    in
-                                    Just
-                                        (OpenAiCompatible.provider
-                                            { httpClientPermission = model.httpClientPermission
-                                            , filesystemPermission = model.filesystemPermission
-                                            , secureContext = model.secureContext
-                                            , apiBaseUrl = config.apiBaseUrl
-                                            , apiKey = config.apiKey
-                                            , model = Maybe.withDefault config.defaultModel r.model
-                                            , conversationsDir = conversationsDir
-                                            }
-                                        )
+                Types.OpenAiCompatible _ ->
+                    -- API providers not yet supported
+                    Nothing
 
 
+{-| Spawn an agent.
 
-{-| Build a shell command for the given provider type.
+1. Resolves the provider config for the agent
+2. Creates a Provider instance
+3. Builds the system prompt (agent instructions + tool context + output tool instruction)
+4. Initializes the Executor model and Provider state
+5. Calls provider.startAgent with the message
+6. Returns the executor state and spawn command
 
-Dispatches to the correct CLI command builder based on the provider type.
-Returns Err for API providers since they require a different execution path.
+For system agents (planners), uses the planner-output tool instruction
+instead of the completion-report instruction.
 -}
-buildShellCommandForProvider :
+spawnAgent :
     Model
-    -> Types.ProviderConfig
+    -> TaskId
+    -> String
     -> Types.AgentConfig
-    -> { systemPrompt : Maybe String, initialDirectory : String, message : String, taskId : Maybe String }
-    -> Result String String
-buildShellCommandForProvider model providerConfig agentConfig args =
+    -> Types.ProviderConfig
+    -> Bool
+    -> { executorState : ExecutorState, spawnCmd : Cmd Msg }
+spawnAgent model taskId prompt agentConfig providerConfig isSystemAgent =
     let
-        baseUrl =
-            "http://" ++ model.config.host ++ ":" ++ String.fromInt model.config.serverPort
+        agentName =
+            Types.agentConfigName agentConfig
 
-        allowedTools =
+        taskIdStr =
+            Id.taskIdToString taskId
+
+        agentInstructions =
+            when agentConfig is
+                InternalAgent r ->
+                    r.instructions
+
+                UserDefinedAgent r ->
+                    r.instructions
+
+        toolContext =
+            when agentConfig is
+                InternalAgent _ ->
+                    ""
+
+                UserDefinedAgent r ->
+                    toolContextForAgent r.allowedTools
+
+        outputToolInstruction =
+            if isSystemAgent then
+                "\n\nRemember: you must call the planner-output tool before finishing."
+            else
+                "\n\nIMPORTANT: Before finishing your work, you MUST call the completion-report tool to submit your results. Use: {\"tool\": \"completion-report\", \"status\": \"complete\", \"summary\": \"Brief summary of what was done\", \"output\": \"Detailed output\"}\nFor blocked work, use status \"blocked\" with a \"blockedReason\". For failures, use status \"failed\"."
+
+        systemPrompt =
+            if String.isEmpty agentInstructions then
+                toolContext ++ outputToolInstruction
+            else
+                agentInstructions ++ toolContext ++ outputToolInstruction
+
+        allowedToolsFlag =
             when agentConfig is
                 UserDefinedAgent r ->
                     when r.allowedTools is
@@ -421,36 +451,184 @@ buildShellCommandForProvider model providerConfig agentConfig args =
 
                 InternalAgent _ ->
                     Nothing
+
+        maybeProvider =
+            makeProvider model agentConfig providerConfig
     in
-    when providerConfig.providerType is
-        Types.ClaudeCode ->
-            Ok
-                (ClaudeCode.buildShellCommand
-                    { systemPrompt = args.systemPrompt
-                    , resumeSessionId = Nothing
-                    , workspaceRoot = args.initialDirectory
-                    , chorusToolsPath = model.config.chorusToolsPath
-                    , message = args.message
-                    , allowedTools = allowedTools
-                    , taskId = args.taskId
-                    , baseUrl = Just baseUrl
+    when maybeProvider is
+        Nothing ->
+            -- Provider could not be created; return a failed executor state
+            { executorState =
+                { taskId = taskId
+                , agentName = agentName
+                , agentConfig = agentConfig
+                , executorModel = Executor.Failed { error = "Could not create provider for agent: " ++ agentName, completionReport = Nothing, plannerOutput = Nothing }
+                , providerState = Provider.NoProviderState
+                , provider =
+                    -- Placeholder provider that does nothing; the executor is already in Failed state
+                    { kind = CliProvider
+                    , validateEnvironment = \_ -> Cmd.none
+                    , startAgent = \s _ -> { state = s, cmd = Cmd.none }
+                    , deliverToolResults = \s _ -> { state = s, cmd = Cmd.none }
+                    , handleHttpToolCall = \s _ -> { state = s, cmd = Cmd.none }
+                    , initState = Provider.NoProviderState
                     }
-                )
+                , isSystemAgent = isSystemAgent
+                , retryCount = 0
+                , sessionId = Nothing
+                }
+            , spawnCmd = Logging.logError model.logger ("Could not create provider for agent: " ++ agentName) NoOp
+            }
 
-        Types.OpenCode ->
-            Ok
-                (OpenCode.buildShellCommand
-                    { sessionId = Nothing
-                    , workspaceRoot = args.initialDirectory
-                    , message = args.message
-                    , chorusToolsPath = model.config.chorusToolsPath
-                    , taskId = args.taskId
-                    , baseUrl = Just baseUrl
+        Just resolvedProvider ->
+            let
+                startConfig =
+                    { agentSpec =
+                        { name = agentName
+                        , systemPrompt = systemPrompt
+                        }
+                    , message = prompt
+                    , workspaceRoot = initialAgentDir model
+                    , taskId = Just taskIdStr
+                    , allowedTools = allowedToolsFlag
+                    , onEvent = \event -> GotProviderEvent { taskId = taskId, event = event }
                     }
-                )
 
-        Types.OpenAiCompatible _ ->
-            Err ("Provider '" ++ providerConfig.name ++ "' is an OpenAI-compatible API provider. API-based agent execution through handoff is not yet implemented. Use a CLI provider (Claude Code or OpenCode) instead.")
+                startResult =
+                    resolvedProvider.startAgent resolvedProvider.initState startConfig
+
+                executorState =
+                    { taskId = taskId
+                    , agentName = agentName
+                    , agentConfig = agentConfig
+                    , executorModel = Executor.Idle
+                    , providerState = startResult.state
+                    , provider = resolvedProvider
+                    , isSystemAgent = isSystemAgent
+                    , retryCount = 0
+                    , sessionId = Nothing
+                    }
+            in
+            { executorState = executorState
+            , spawnCmd = startResult.cmd
+            }
+
+
+{-| Resolve the provider config and spawn an agent.
+
+Creates a placeholder executor state immediately, then asynchronously resolves
+the provider config. On success, emits `GotProviderResolved` which creates
+the provider and starts the agent. On failure, emits
+`GotProviderEvent AgentFailed`.
+-}
+resolveAndSpawnAgent :
+    Model
+    -> TaskId
+    -> String
+    -> Types.AgentConfig
+    -> Bool
+    -> { executorState : ExecutorState, spawnCmd : Cmd Msg }
+resolveAndSpawnAgent model taskId prompt agentConfig isSystemAgent =
+    let
+        agentName =
+            Types.agentConfigName agentConfig
+
+        taskIdStr =
+            Id.taskIdToString taskId
+
+        noopProvider =
+            { kind = CliProvider
+            , validateEnvironment = \_ -> Cmd.none
+            , startAgent = \s _ -> { state = s, cmd = Cmd.none }
+            , deliverToolResults = \s _ -> { state = s, cmd = Cmd.none }
+            , handleHttpToolCall = \s _ -> { state = s, cmd = Cmd.none }
+            , initState = Provider.NoProviderState
+            }
+
+        executorState =
+            { taskId = taskId
+            , agentName = agentName
+            , agentConfig = agentConfig
+            , executorModel = Executor.Idle
+            , providerState = Provider.NoProviderState
+            , provider = noopProvider
+            , isSystemAgent = isSystemAgent
+            , retryCount = 0
+            , sessionId = Nothing
+            }
+
+        -- Resolve the provider config asynchronously. On success, emit
+        -- GotProviderResolved to trigger the agent start. On failure, emit
+        -- GotProviderEvent AgentFailed.
+        spawnCmd =
+            resolveProviderConfig model agentConfig
+                |> GrenTask.map Ok
+                |> GrenTask.onError
+                    (\errMsg ->
+                        GrenTask.succeed (Err errMsg)
+                    )
+                |> GrenTask.perform
+                    (\result ->
+                        when result is
+                            Err errMsg ->
+                                GotProviderEvent
+                                    { taskId = taskId
+                                    , event = Provider.AgentFailed ("Provider resolution failed: " ++ errMsg)
+                                    }
+
+                            Ok providerConfig ->
+                                GotProviderResolved
+                                    { taskId = taskId
+                                    , prompt = prompt
+                                    , agentConfig = agentConfig
+                                    , providerConfig = providerConfig
+                                    , isSystemAgent = isSystemAgent
+                                    }
+                    )
+    in
+    { executorState = executorState
+    , spawnCmd = spawnCmd
+    }
+
+
+{-| Build the ToolExecutionContext for the executor.
+
+Used when creating an `Executor.Config` for processing tool calls.
+-}
+makeToolExecutionContext : Model -> TaskId -> Types.AgentConfig -> ToolExecution.ToolExecutionContext
+makeToolExecutionContext model taskId agentConfig =
+    let
+        allowedTools =
+            when agentConfig is
+                UserDefinedAgent r ->
+                    r.allowedTools
+
+                InternalAgent _ ->
+                    []
+
+        allowedDirs =
+            when model.workspaceConfig is
+                Just wc ->
+                    wc.allowedAgentDirectories
+
+                Nothing ->
+                    []
+    in
+    when model.registry is
+        Just reg ->
+            { filesystemPermission = model.filesystemPermission
+            , childProcessPermission = model.childProcessPermission
+            , allowedDirectories = allowedDirs
+            , allowedTools = allowedTools
+            , apiContext = makeApiContext model reg
+            , taskId = taskId
+            }
+
+        Nothing ->
+            -- This should not happen since spawnAgent is only called when registry is available.
+            -- But we need a complete record, so provide a minimal context.
+            Debug.todo "makeToolExecutionContext called without a loaded registry"
+
 
 
 
@@ -483,144 +661,6 @@ resolveProviderConfig model agentConfig =
                                     )
 
 
--- AGENT SPAWNING
-
-
-{-| Build the executor state and spawn command for a handoff agent.
-
-Both the immediate handoff (GotHandoffRecorded) and the deferred handoff
-(GotDeferredHandoffStarted) need to resolve the provider, build a shell command,
-and spawn the agent process. This helper encapsulates that shared logic.
--}
-buildAgentSpawn :
-    Model
-    -> TaskId
-    -> String
-    -> Types.AgentConfig
-    -> { executorState : ExecutorState, spawnCmd : Cmd Msg }
-buildAgentSpawn model taskId prompt agentConfig =
-    let
-        agentName =
-            Types.agentConfigName agentConfig
-
-        agentInstructions =
-            when agentConfig is
-                InternalAgent r ->
-                    r.instructions
-
-                UserDefinedAgent r ->
-                    r.instructions
-
-        toolContext =
-            when agentConfig is
-                InternalAgent _ ->
-                    ""
-
-                UserDefinedAgent r ->
-                    toolContextForAgent r.allowedTools
-
-        completionReportInstruction =
-            "\n\nIMPORTANT: Before finishing your work, you MUST call the completion-report tool to submit your results. Use: {\"tool\": \"completion-report\", \"status\": \"complete\", \"summary\": \"Brief summary of what was done\", \"output\": \"Detailed output\"}\nFor blocked work, use status \"blocked\" with a \"blockedReason\". For failures, use status \"failed\"."
-
-        systemPrompt =
-            if String.isEmpty agentInstructions then
-                Just (toolContext ++ completionReportInstruction)
-            else
-                Just (agentInstructions ++ toolContext ++ completionReportInstruction)
-
-        initialDirectory =
-            initialAgentDir model
-
-        taskIdStr =
-            Id.taskIdToString taskId
-
-        executorState =
-            { taskId = taskId
-            , agentName = agentName
-            , agentConfig = agentConfig
-            , status = ExecRunning
-            , completionReport = Nothing
-            , plannerOutput = Nothing
-            , isSystemAgent = False
-            , retryCount = 0
-            , sessionId = Nothing
-            }
-
-        options =
-            { shell = ChildProcess.NoShell
-            , workingDirectory = ChildProcess.InheritWorkingDirectory
-            , environmentVariables = ChildProcess.InheritEnvironmentVariables
-            , maximumBytesWrittenToStreams = 10 * 1024 * 1024
-            , runDuration = ChildProcess.Milliseconds 600000
-            }
-
-        spawnCmd =
-            resolveProviderConfig model agentConfig
-                |> GrenTask.andThen
-                    (\providerConfig ->
-                        let
-                            shellCommand =
-                                buildShellCommandForProvider model providerConfig agentConfig
-                                    { systemPrompt = systemPrompt
-                                    , initialDirectory = initialDirectory
-                                    , message = prompt
-                                    , taskId = Just taskIdStr
-                                    }
-                        in
-                        when shellCommand is
-                            Err errMsg ->
-                                GrenTask.fail errMsg
-
-                            Ok cmd ->
-                                ChildProcess.run model.childProcessPermission "bash" [ "-c", cmd ] options
-                                    |> GrenTask.map
-                                        (\cliResult ->
-                                            let
-                                                output =
-                                                    cliResult.stdout
-                                                        |> Bytes.toString
-                                                        |> Maybe.withDefault ""
-
-                                                -- Extract the result text from CLI JSON output
-                                                resultText =
-                                                    when Decode.decodeString (Decode.field "result" Decode.string) output is
-                                                        Ok text ->
-                                                            text
-
-                                                        Err _ ->
-                                                            output
-                                            in
-                                            Ok resultText
-                                        )
-                                    |> GrenTask.onError
-                                        (\runError ->
-                                            let
-                                                errMsg =
-                                                    when runError is
-                                                        ChildProcess.InitError { errorCode } ->
-                                                            "Failed to start agent CLI: " ++ errorCode
-
-                                                        ChildProcess.ProgramError { exitCode, stderr } ->
-                                                            let
-                                                                stderrStr =
-                                                                    stderr
-                                                                        |> Bytes.toString
-                                                                        |> Maybe.withDefault ""
-                                                            in
-                                                            "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
-                                            in
-                                            GrenTask.succeed (Err errMsg)
-                                        )
-                    )
-                |> GrenTask.onError
-                    (\errMsg ->
-                        GrenTask.succeed (Err errMsg)
-                    )
-                |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
-    in
-    { executorState = executorState
-    , spawnCmd = spawnCmd
-    }
 
 
 
@@ -764,52 +804,50 @@ update msg model =
                     }
 
                 Ok { agentConfig } ->
-                    when model.registry is
+                    let
+                        taskIdStr =
+                            Id.taskIdToString taskId
+
+                        maybeExecutor =
+                            Dict.get taskIdStr model.activeExecutors
+                    in
+                    when maybeExecutor is
                         Nothing ->
-                            { model = model
-                            , command = Cmd.none
-                            }
-
-                        Just reg ->
-                            let
-                                allowedTools =
-                                    when agentConfig is
-                                        UserDefinedAgent r ->
-                                            r.allowedTools
-
-                                        InternalAgent _ ->
-                                            []
-
-                                allowedDirs =
-                                    when model.workspaceConfig is
-                                        Just wc ->
-                                            wc.allowedAgentDirectories
-
-                                        Nothing ->
-                                            []
-
-                                toolCtx =
-                                    { filesystemPermission = model.filesystemPermission
-                                    , childProcessPermission = model.childProcessPermission
-                                    , allowedDirectories = allowedDirs
-                                    , allowedTools = allowedTools
-                                    , apiContext = makeApiContext model reg
-                                    , taskId = taskId
+                            -- No active executor - fall back to direct tool execution
+                            when model.registry is
+                                Nothing ->
+                                    { model = model
+                                    , command = Cmd.none
                                     }
 
+                                Just reg ->
+                                    let
+                                        toolCtx =
+                                            makeToolExecutionContext model taskId agentConfig
+
+                                        toolName =
+                                            Decode.decodeString (Decode.field "tool" Decode.string) requestBody
+                                                |> Result.withDefault "unknown"
+
+                                        toMsg =
+                                            \apiResult -> GotToolResult { taskId = taskId, toolName = toolName, requestBody = requestBody, response = response, result = apiResult }
+                                    in
+                                    { model = model
+                                    , command = ToolExecution.requestExecuteTool toolCtx requestBody toMsg
+                                    }
+
+                        Just executor ->
+                            -- Route through the Provider -> Executor path
+                            let
+                                -- Parse the tool call from the request body
                                 toolName =
                                     Decode.decodeString (Decode.field "tool" Decode.string) requestBody
                                         |> Result.withDefault "unknown"
 
-                                toMsg =
-                                    \apiResult -> GotToolResult { taskId = taskId, toolName = toolName, requestBody = requestBody, response = response, result = apiResult }
-
-                                -- Exactly-once check for completion-report: prevent duplicate side effects
-                                -- by checking executor state before dispatching to ToolExecution
+                                -- Exactly-once check for completion-report
                                 alreadySubmitted =
                                     if toolName == "completion-report" then
-                                        Dict.get (Id.taskIdToString taskId) model.activeExecutors
-                                            |> Maybe.andThen .completionReport
+                                        extractCompletionReport executor.executorModel
                                             |> isJust
                                     else
                                         False
@@ -819,8 +857,67 @@ update msg model =
                                 , command = Api.sendApiResponse response (Api.ApiError { statusCode = 409, code = "CONFLICT", message = "Completion report already submitted for this task" })
                                 }
                             else
-                                { model = model
-                                , command = ToolExecution.requestExecuteTool toolCtx requestBody toMsg
+                                let
+                                    -- Parse the tool input from the request body
+                                    toolInput =
+                                        Decode.decodeString Decode.value requestBody
+                                            |> Result.withDefault Encode.null
+
+                                    -- Generate a unique tool call ID from the tool name and task ID.
+                                    -- Uses the count of pending HTTP responses to avoid collisions.
+                                    pendingCount =
+                                        when executor.providerState is
+                                            Provider.CliProviderState cliState ->
+                                                Array.length (Dict.keys cliState.pendingHttpResponses)
+
+                                            _ ->
+                                                0
+
+                                    toolCallId =
+                                        taskIdStr ++ "-" ++ toolName ++ "-" ++ String.fromInt pendingCount
+
+                                    toolCall =
+                                        { id = toolCallId
+                                        , name = toolName
+                                        , input = toolInput
+                                        }
+
+                                    -- Store the HTTP response handle via the provider
+                                    handleResult =
+                                        executor.provider.handleHttpToolCall
+                                            executor.providerState
+                                            { toolCall = toolCall
+                                            , httpResponse = response
+                                            }
+
+                                    updatedExecutor =
+                                        { executor | providerState = handleResult.state }
+
+                                    updatedModel =
+                                        { model | activeExecutors = Dict.set taskIdStr updatedExecutor model.activeExecutors }
+
+                                    -- Forward the tool call to the Executor
+                                    executorCmd =
+                                        GrenTask.succeed {}
+                                            |> GrenTask.perform
+                                                (\_ ->
+                                                    GotExecutorMsg
+                                                        { taskId = taskId
+                                                        , msg =
+                                                            Executor.ToolCallReceived
+                                                                { id = toolCallId
+                                                                , name = toolName
+                                                                , input = toolInput
+                                                                }
+                                                        }
+                                                )
+                                in
+                                { model = updatedModel
+                                , command =
+                                    Cmd.batch
+                                        [ handleResult.cmd
+                                        , executorCmd
+                                        ]
                                 }
 
         GotAgentLookup { taskId, prompt, response, result } ->
@@ -894,19 +991,19 @@ update msg model =
                 Api.ApiSuccess { body } ->
                     -- Task updated successfully. Resolve the provider and spawn the agent.
                     let
-                        { executorState, spawnCmd } =
-                            buildAgentSpawn model taskId prompt agentConfig
-
                         taskIdStr =
                             Id.taskIdToString taskId
+
+                        spawnResult =
+                            resolveAndSpawnAgent model taskId prompt agentConfig False
                     in
-                    { model = { model | activeExecutors = Dict.set taskIdStr executorState model.activeExecutors }
+                    { model = { model | activeExecutors = Dict.set taskIdStr spawnResult.executorState model.activeExecutors }
                     , command =
                         Cmd.batch
                             [ sendResponseCmd
-                            , spawnCmd
+                            , spawnResult.spawnCmd
                             , broadcastToClients model "tasks_changed" (Encode.string body)
-                            , Logging.logInfo model.logger ("Spawned agent " ++ executorState.agentName ++ " for task " ++ taskIdStr) NoOp
+                            , Logging.logInfo model.logger ("Spawned agent " ++ spawnResult.executorState.agentName ++ " for task " ++ taskIdStr) NoOp
                             ]
                     }
 
@@ -968,27 +1065,27 @@ update msg model =
                     -- Handoff started successfully. Store the HTTP response for later resolution.
                     -- Note: The deferred response is implicitly timed out by the ChildProcess
                     -- runDuration of 600 seconds (10 minutes). If the agent process is killed
-                    -- by that timeout, GotAgentComplete fires with an error and resolves
+                    -- by that timeout, GotProviderEvent fires with AgentFailed and resolves
                     -- the pending response. No separate timeout mechanism is needed as long
                     -- as the ChildProcess timeout remains in place.
                     let
-                        { executorState, spawnCmd } =
-                            buildAgentSpawn model taskId prompt agentConfig
+                        spawnResult =
+                            resolveAndSpawnAgent model taskId prompt agentConfig False
 
                         taskIdStr =
                             Id.taskIdToString taskId
 
                         updatedModel =
                             { model
-                                | activeExecutors = Dict.set taskIdStr executorState model.activeExecutors
+                                | activeExecutors = Dict.set taskIdStr spawnResult.executorState model.activeExecutors
                                 , pendingHandoffResponses = Dict.set taskIdStr response model.pendingHandoffResponses
                             }
                     in
                     { model = updatedModel
                     , command =
                         Cmd.batch
-                            [ spawnCmd
-                            , Logging.logInfo model.logger ("Spawned deferred handoff agent " ++ executorState.agentName ++ " for task " ++ taskIdStr) NoOp
+                            [ spawnResult.spawnCmd
+                            , Logging.logInfo model.logger ("Spawned deferred handoff agent " ++ spawnResult.executorState.agentName ++ " for task " ++ taskIdStr) NoOp
                             ]
                     }
 
@@ -1011,6 +1108,29 @@ update msg model =
                         handlePlannerComplete model taskId taskIdStr executor result
                     else
                         handleUserAgentComplete model taskId taskIdStr executor result
+
+        GotProviderEvent { taskId, event } ->
+            handleProviderEvent model taskId event
+
+        GotExecutorMsg { taskId, msg = executorMsg } ->
+            handleExecutorMsg model taskId executorMsg
+
+        GotProviderResolved { taskId, prompt, agentConfig, providerConfig, isSystemAgent } ->
+            -- Provider config resolved. Create the provider and start the agent.
+            let
+                taskIdStr =
+                    Id.taskIdToString taskId
+
+                spawnResult =
+                    spawnAgent model taskId prompt agentConfig providerConfig isSystemAgent
+
+                -- Update the executor state with the resolved provider and model
+                updatedModel =
+                    { model | activeExecutors = Dict.set taskIdStr spawnResult.executorState model.activeExecutors }
+            in
+            { model = updatedModel
+            , command = spawnResult.spawnCmd
+            }
 
         GotRequest { request, response } ->
             let
@@ -1124,7 +1244,9 @@ update msg model =
                             }
 
                 Api.DeferredPlannerOutput plannerOutput ->
-                    -- Planner output submitted via tool: store on executor state, enforce exactly-once
+                    -- Planner output submitted without an active executor. This path is
+                    -- a fallback; the primary path is through the Executor's
+                    -- DeferredActionRequired effect.
                     let
                         taskIdStr =
                             Id.taskIdToString taskId
@@ -1136,7 +1258,7 @@ update msg model =
                             }
 
                         Just executor ->
-                            when executor.plannerOutput is
+                            when extractPlannerOutput executor.executorModel is
                                 Just _ ->
                                     -- Already received - exactly-once enforcement
                                     { model = model
@@ -1145,12 +1267,6 @@ update msg model =
 
                                 Nothing ->
                                     let
-                                        updatedExecutor =
-                                            { executor | plannerOutput = Just plannerOutput }
-
-                                        updatedModel =
-                                            { model | activeExecutors = Dict.set taskIdStr updatedExecutor model.activeExecutors }
-
                                         successResponse =
                                             Api.ApiSuccess
                                                 { statusCode = 200
@@ -1178,7 +1294,7 @@ update msg model =
                                                         |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                                         |> GrenTask.perform (\_ -> NoOp)
                                     in
-                                    { model = updatedModel
+                                    { model = model
                                     , command =
                                         Cmd.batch
                                             [ Api.sendApiResponse response successResponse
@@ -1234,38 +1350,11 @@ update msg model =
                                         |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                         |> GrenTask.perform (\_ -> NoOp)
 
-                        -- Track successful completion-report submissions with stored report data.
-                        -- The exactly-once check in GotToolAgentLookup prevents duplicate calls
-                        -- from reaching this point, so we can safely store without re-checking.
+                        -- Completion reports are tracked by the Executor state machine.
+                        -- This GotToolResult path runs for tool calls that arrived when
+                        -- no active executor existed, so there is no executor to update.
                         updatedModel =
-                            if toolName == "completion-report" && toolStatus == "success" then
-                                let
-                                    taskIdStr =
-                                        Id.taskIdToString taskId
-
-                                    decodeResult =
-                                        requestBody
-                                            |> Decode.decodeString ToolExecution.completionReportInputDecoder
-
-                                    updatedExecutors =
-                                        when Dict.get taskIdStr model.activeExecutors is
-                                            Just executor ->
-                                                when decodeResult is
-                                                    Ok report ->
-                                                        Dict.set taskIdStr { executor | completionReport = Just report } model.activeExecutors
-
-                                                    Err _ ->
-                                                        -- Decode should not fail here since dispatchCompletionReport
-                                                        -- already validated the same body, but we preserve the error
-                                                        -- rather than silently discarding it via Result.toMaybe
-                                                        model.activeExecutors
-
-                                            Nothing ->
-                                                model.activeExecutors
-                                in
-                                { model | activeExecutors = updatedExecutors }
-                            else
-                                model
+                            model
                     in
                     { model = updatedModel
                     , command =
@@ -2437,6 +2526,384 @@ broadcastToClients model messageType data =
 
 
 
+-- PROVIDER/EXECUTOR EVENT HANDLING
+
+
+{-| Handle a ProviderEvent from a running agent.
+
+Provider events are emitted asynchronously by the Provider during agent
+execution. This function routes each event to the appropriate Executor
+message.
+
+- `ToolCallReceived`: A tool call arrived (for CLI agents, from an HTTP
+  callback). Forward to the Executor for tool processing.
+- `AgentCompleted`: The agent finished. Forward to the Executor and
+  then delegate to the appropriate completion handler.
+- `AgentFailed`: The agent errored. Forward to the Executor and then
+  delegate to the appropriate failure handler.
+-}
+handleProviderEvent : Model -> TaskId -> Provider.ProviderEvent -> { model : Model, command : Cmd Msg }
+handleProviderEvent model taskId event =
+    let
+        taskIdStr =
+            Id.taskIdToString taskId
+    in
+    when Dict.get taskIdStr model.activeExecutors is
+        Nothing ->
+            { model = model
+            , command = Logging.logWarn model.logger ("ProviderEvent for unknown executor: " ++ taskIdStr) NoOp
+            }
+
+        Just executor ->
+            -- Convert ProviderEvent to an Executor message and process it
+            let
+                executorMsg =
+                    when event is
+                        Provider.ToolCallReceived toolCall ->
+                            Executor.ToolCallReceived
+                                { id = toolCall.id
+                                , name = toolCall.name
+                                , input = toolCall.input
+                                }
+
+                        Provider.AgentCompleted output ->
+                            Executor.AgentCompleted output
+
+                        Provider.AgentFailed error ->
+                            Executor.AgentFailed error
+            in
+            handleExecutorMsg model taskId executorMsg
+
+
+{-| Handle a message for the Executor.
+
+Runs `Executor.update` with the message, then inspects the returned
+`UpdateEffect` to determine what action to take:
+
+- `NoEffect`: Just update the executor state.
+- `DeliverToolResults`: All pending tool calls are complete. Call
+  `provider.deliverToolResults` to send results back to the agent.
+- `DeferredActionRequired`: A tool call produced a deferred result
+  (handoff or planner output) that needs special handling.
+
+When the Executor transitions to `Complete` or `Failed`,
+delegates to the appropriate completion handler.
+-}
+handleExecutorMsg : Model -> TaskId -> Executor.Msg -> { model : Model, command : Cmd Msg }
+handleExecutorMsg model taskId executorMsg =
+    let
+        taskIdStr =
+            Id.taskIdToString taskId
+    in
+    when Dict.get taskIdStr model.activeExecutors is
+        Nothing ->
+            { model = model
+            , command = Logging.logWarn model.logger ("ExecutorMsg for unknown executor: " ++ taskIdStr) NoOp
+            }
+
+        Just executor ->
+            let
+                toolExecutionContext =
+                    makeToolExecutionContext model taskId executor.agentConfig
+
+                executorConfig =
+                    { executeTool =
+                        ToolExecution.executeToolCall toolExecutionContext
+                    , toMsg =
+                        \msg -> GotExecutorMsg { taskId = taskId, msg = msg }
+                    }
+
+                updateResult =
+                    Executor.update executorMsg executor.executorModel executorConfig
+
+                updatedExecutor =
+                    { executor | executorModel = updateResult.model }
+
+                updatedModel =
+                    { model | activeExecutors = Dict.set taskIdStr updatedExecutor model.activeExecutors }
+            in
+            -- Handle the effect
+            when updateResult.effect is
+                Executor.NoEffect ->
+                    -- Check if executor transitioned to complete/failed
+                    handleExecutorStateTransition updatedModel taskId taskIdStr updatedExecutor updateResult.cmd
+
+                Executor.DeliverToolResults results ->
+                    -- Send results back to the agent via the provider
+                    let
+                        deliverResult =
+                            executor.provider.deliverToolResults updatedExecutor.providerState results
+
+                        executorWithUpdatedProvider =
+                            { updatedExecutor | providerState = deliverResult.state }
+
+                        finalModel =
+                            { model | activeExecutors = Dict.set taskIdStr executorWithUpdatedProvider model.activeExecutors }
+
+                        -- Record tool events for each result
+                        logToolEvents =
+                            results
+                                |> Array.map
+                                    (\toolResult ->
+                                        when model.registry is
+                                            Just reg ->
+                                                Registry.recordEvent reg taskId
+                                                    { eventType = ToolExecuted
+                                                    , data =
+                                                        Dict.empty
+                                                            |> Dict.set "tool" toolResult.toolCallId
+                                                            |> Dict.set "status" (if toolResult.isError then "error" else "success")
+                                                            |> Dict.set "output" toolResult.output
+                                                    }
+                                                    |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                                    |> GrenTask.perform (\_ -> NoOp)
+
+                                            Nothing ->
+                                                Cmd.none
+                                    )
+                                |> Cmd.batch
+                    in
+                    { model = finalModel
+                    , command =
+                        Cmd.batch
+                            [ updateResult.cmd
+                            , deliverResult.cmd
+                            , logToolEvents
+                            , broadcastToClients finalModel "tasks_changed" Encode.null
+                            ]
+                    }
+
+                Executor.DeferredActionRequired action ->
+                    handleDeferredAction updatedModel taskId taskIdStr updatedExecutor action updateResult.cmd
+
+
+{-| Check if the executor has transitioned to a terminal state and handle it.
+-}
+handleExecutorStateTransition :
+    Model
+    -> TaskId
+    -> String
+    -> ExecutorState
+    -> Cmd Msg
+    -> { model : Model, command : Cmd Msg }
+handleExecutorStateTransition model taskId taskIdStr executor additionalCmd =
+    when executor.executorModel is
+        Executor.Complete { output } ->
+            let
+                result =
+                    Ok output
+            in
+            if executor.isSystemAgent then
+                let
+                    completionResult =
+                        handlePlannerComplete model taskId taskIdStr executor result
+                in
+                { model = completionResult.model
+                , command = Cmd.batch [ completionResult.command, additionalCmd ]
+                }
+            else
+                let
+                    completionResult =
+                        handleUserAgentComplete model taskId taskIdStr executor result
+                in
+                { model = completionResult.model
+                , command = Cmd.batch [ completionResult.command, additionalCmd ]
+                }
+
+        Executor.Failed { error } ->
+            let
+                result =
+                    Err error
+            in
+            if executor.isSystemAgent then
+                let
+                    completionResult =
+                        handlePlannerComplete model taskId taskIdStr executor result
+                in
+                { model = completionResult.model
+                , command = Cmd.batch [ completionResult.command, additionalCmd ]
+                }
+            else
+                let
+                    completionResult =
+                        handleUserAgentComplete model taskId taskIdStr executor result
+                in
+                { model = completionResult.model
+                , command = Cmd.batch [ completionResult.command, additionalCmd ]
+                }
+
+        _ ->
+            -- Executor is still running or idle
+            { model = model
+            , command = additionalCmd
+            }
+
+
+{-| Handle a deferred action from the Executor.
+
+Deferred actions require Main.gren to intervene before the executor can
+continue (or before the conversation ends):
+
+- `Handoff`: Look up the target agent and start a deferred handoff.
+- `PlannerOutputReady`: Store the planner output and acknowledge it.
+-}
+handleDeferredAction :
+    Model
+    -> TaskId
+    -> String
+    -> ExecutorState
+    -> Executor.DeferredAction
+    -> Cmd Msg
+    -> { model : Model, command : Cmd Msg }
+handleDeferredAction model taskId taskIdStr executor action additionalCmd =
+    when action is
+        Executor.Handoff { toolCallId, agentName, prompt } ->
+            -- Look up the target agent for the deferred handoff
+            when model.agentRegistry is
+                Nothing ->
+                    { model = model
+                    , command =
+                        Cmd.batch
+                            [ Logging.logError model.logger ("Deferred handoff failed: Agent registry not available") NoOp
+                            , additionalCmd
+                            ]
+                    }
+
+                Just agentReg ->
+                    -- Look up the pending HTTP response for the handoff tool call
+                    -- by its tool call ID from the provider state.
+                    let
+                        pendingResponse =
+                            when executor.providerState is
+                                Provider.CliProviderState cliState ->
+                                    Dict.get toolCallId cliState.pendingHttpResponses
+
+                                _ ->
+                                    Nothing
+                    in
+                    when pendingResponse is
+                        Nothing ->
+                            { model = model
+                            , command =
+                                Cmd.batch
+                                    [ Logging.logError model.logger ("Deferred handoff: no pending HTTP response for tool call") NoOp
+                                    , additionalCmd
+                                    ]
+                            }
+
+                        Just response ->
+                            { model = model
+                            , command =
+                                Cmd.batch
+                                    [ AgentRegistry.getAgent agentReg agentName
+                                        |> GrenTask.mapError AgentRegistry.errorToString
+                                        |> GrenTask.andThen
+                                            (\agentConfig ->
+                                                if Types.isInternalAgent agentConfig then
+                                                    GrenTask.fail ("Cannot hand off to internal agent: " ++ Types.agentConfigName agentConfig)
+                                                else
+                                                    GrenTask.succeed agentConfig
+                                            )
+                                        |> GrenTask.attempt
+                                            (\lookupResult ->
+                                                when lookupResult is
+                                                    Err errMsg ->
+                                                        GotApiResult { response = response, result = Api.ApiError { statusCode = 400, code = "BAD_REQUEST", message = errMsg } }
+
+                                                    Ok agentConfig ->
+                                                        GotDeferredHandoffLookup
+                                                            { taskId = taskId
+                                                            , prompt = prompt
+                                                            , response = response
+                                                            , agentConfig = agentConfig
+                                                            }
+                                            )
+                                    , additionalCmd
+                                    ]
+                            }
+
+        Executor.PlannerOutputReady { toolCallId, plannerOutput } ->
+            -- Store the planner output on the executor state and acknowledge
+            -- the tool call by sending a success response back to chorus-tools.
+            let
+                -- Record the planner output event
+                recordEventCmd =
+                    when model.registry is
+                        Nothing ->
+                            Cmd.none
+
+                        Just reg ->
+                            Registry.recordEvent reg taskId
+                                { eventType = PlannerOutputSubmitted
+                                , data =
+                                    Dict.empty
+                                        |> Dict.set "tool" "planner-output"
+                                }
+                                |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                |> GrenTask.perform (\_ -> NoOp)
+
+                -- Deliver a success result back to the provider for the planner-output tool
+                deliverResult =
+                    executor.provider.deliverToolResults executor.providerState
+                        [ { toolCallId = toolCallId
+                          , output = Encode.encode 0 (Encode.object [ { key = "success", value = Encode.bool True } ])
+                          , isError = False
+                          }
+                        ]
+
+                executorWithProvider =
+                    { executor | providerState = deliverResult.state }
+
+                finalModel =
+                    { model | activeExecutors = Dict.set taskIdStr executorWithProvider model.activeExecutors }
+            in
+            { model = finalModel
+            , command =
+                Cmd.batch
+                    [ recordEventCmd
+                    , deliverResult.cmd
+                    , additionalCmd
+                    ]
+            }
+
+
+{-| Extract the completion report from an executor model, if available.
+-}
+extractCompletionReport : Executor.Model -> Maybe Types.CompletionReport
+extractCompletionReport executorModel =
+    when executorModel is
+        Executor.Running state ->
+            state.completionReport
+
+        Executor.Complete state ->
+            state.completionReport
+
+        Executor.Failed state ->
+            state.completionReport
+
+        _ ->
+            Nothing
+
+
+{-| Extract the planner output from an executor model, if available.
+-}
+extractPlannerOutput : Executor.Model -> Maybe Types.PlannerOutput
+extractPlannerOutput executorModel =
+    when executorModel is
+        Executor.Running state ->
+            state.plannerOutput
+
+        Executor.Complete state ->
+            state.plannerOutput
+
+        Executor.Failed state ->
+            state.plannerOutput
+
+        _ ->
+            Nothing
+
+
+
 -- PLANNER
 
 
@@ -2465,10 +2932,11 @@ dispatchPlanner model agentReg taskId description =
 
                 ProviderRef providerName ->
                     let
-                        -- Build the planner-output tool instruction
-                        plannerOutputInstruction =
-                            "\n\nRemember: you must call the planner-output tool before finishing."
-
+                        -- Async task chain:
+                        -- 1. Look up "task-validator" agent config
+                        -- 2. Set task status to Planning, set currentAgent, record PlanningStarted event
+                        -- 3. Resolve the system agent provider config
+                        -- 4. Emit GotProviderResolved to trigger spawn
                         spawnCmd =
                             AgentRegistry.getAgent agentReg "task-validator"
                                 |> GrenTask.mapError AgentRegistry.errorToString
@@ -2509,103 +2977,50 @@ dispatchPlanner model agentReg taskId description =
                                             Just providerReg ->
                                                 ProviderRegistry.getProvider providerReg providerName
                                                     |> GrenTask.mapError (\_ -> "System agent provider '" ++ providerName ++ "' not found in provider registry")
-                                                    |> GrenTask.andThen
-                                                        (\providerConfig ->
-                                                            let
-                                                                agentInstructions =
-                                                                    when agentConfig is
-                                                                        InternalAgent r ->
-                                                                            r.instructions
-
-                                                                        UserDefinedAgent r ->
-                                                                            r.instructions
-
-                                                                systemPrompt =
-                                                                    if String.isEmpty agentInstructions then
-                                                                        Just plannerOutputInstruction
-                                                                    else
-                                                                        Just (agentInstructions ++ plannerOutputInstruction)
-
-                                                                shellCommandResult =
-                                                                    buildShellCommandForProvider model providerConfig agentConfig
-                                                                        { systemPrompt = systemPrompt
-                                                                        , initialDirectory = initialAgentDir model
-                                                                        , message = description
-                                                                        , taskId = Just taskIdStr
-                                                                        }
-
-                                                                options =
-                                                                    { shell = ChildProcess.NoShell
-                                                                    , workingDirectory = ChildProcess.InheritWorkingDirectory
-                                                                    , environmentVariables = ChildProcess.InheritEnvironmentVariables
-                                                                    , maximumBytesWrittenToStreams = 10 * 1024 * 1024
-                                                                    , runDuration = ChildProcess.Milliseconds 300000
-                                                                    }
-                                                            in
-                                                            when shellCommandResult is
-                                                                Err errMsg ->
-                                                                    GrenTask.fail errMsg
-
-                                                                Ok shellCommand ->
-                                                                    ChildProcess.run model.childProcessPermission "bash" [ "-c", shellCommand ] options
-                                                                        |> GrenTask.map
-                                                                            (\cliResult ->
-                                                                                let
-                                                                                    output =
-                                                                                        cliResult.stdout
-                                                                                            |> Bytes.toString
-                                                                                            |> Maybe.withDefault ""
-
-                                                                                    resultText =
-                                                                                        when Decode.decodeString (Decode.field "result" Decode.string) output is
-                                                                                            Ok text ->
-                                                                                                text
-
-                                                                                            Err _ ->
-                                                                                                output
-                                                                                in
-                                                                                Ok resultText
-                                                                            )
-                                                                        |> GrenTask.onError
-                                                                            (\runError ->
-                                                                                let
-                                                                                    errMsg =
-                                                                                        when runError is
-                                                                                            ChildProcess.InitError { errorCode } ->
-                                                                                                "Failed to start planner CLI: " ++ errorCode
-
-                                                                                            ChildProcess.ProgramError { exitCode, stderr } ->
-                                                                                                let
-                                                                                                    stderrStr =
-                                                                                                        stderr
-                                                                                                            |> Bytes.toString
-                                                                                                            |> Maybe.withDefault ""
-                                                                                                in
-                                                                                                "Planner CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
-                                                                                in
-                                                                                GrenTask.succeed (Err errMsg)
-                                                                            )
-                                                        )
+                                                    |> GrenTask.map (\providerConfig -> { agentConfig = agentConfig, providerConfig = providerConfig })
                                     )
+                                |> GrenTask.map Ok
                                 |> GrenTask.onError
                                     (\errMsg ->
                                         GrenTask.succeed (Err errMsg)
                                     )
-                                |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
+                                |> GrenTask.perform
+                                    (\result ->
+                                        when result is
+                                            Err errMsg ->
+                                                GotProviderEvent
+                                                    { taskId = taskId
+                                                    , event = Provider.AgentFailed ("Planner dispatch failed: " ++ errMsg)
+                                                    }
 
-                        -- Register executor as a system agent.
-                        -- Note: agentConfig is a placeholder with empty instructions because the
-                        -- real config is only available inside the GrenTask chain above. The planner
-                        -- completion path (handlePlannerComplete) does not inspect agentConfig, so
-                        -- this is safe. If future code needs the real config, dispatchPlanner would
-                        -- need restructuring to separate executor creation from command creation.
+                                            Ok { agentConfig, providerConfig } ->
+                                                GotProviderResolved
+                                                    { taskId = taskId
+                                                    , prompt = description
+                                                    , agentConfig = agentConfig
+                                                    , providerConfig = providerConfig
+                                                    , isSystemAgent = True
+                                                    }
+                                    )
+
+                        -- Register a placeholder executor state immediately so that
+                        -- tool calls arriving before GotProviderResolved can find it.
+                        noopProvider =
+                            { kind = CliProvider
+                            , validateEnvironment = \_ -> Cmd.none
+                            , startAgent = \s _ -> { state = s, cmd = Cmd.none }
+                            , deliverToolResults = \s _ -> { state = s, cmd = Cmd.none }
+                            , handleHttpToolCall = \s _ -> { state = s, cmd = Cmd.none }
+                            , initState = Provider.NoProviderState
+                            }
+
                         executorState =
                             { taskId = taskId
                             , agentName = "task-validator"
                             , agentConfig = InternalAgent { name = "task-validator", instructions = "" }
-                            , status = ExecRunning
-                            , completionReport = Nothing
-                            , plannerOutput = Nothing
+                            , executorModel = Executor.Idle
+                            , providerState = Provider.NoProviderState
+                            , provider = noopProvider
                             , isSystemAgent = True
                             , retryCount = 0
                             , sessionId = Nothing
@@ -2678,10 +3093,13 @@ handlePlannerComplete model taskId taskIdStr executor result =
         exitResult =
             result
 
+        plannerOutput =
+            extractPlannerOutput executor.executorModel
+
         completionResult =
             AgentManager.processPlannerCompletion
                 { exitResult = exitResult
-                , plannerOutput = executor.plannerOutput
+                , plannerOutput = plannerOutput
                 }
 
         -- Remove executor from active state
@@ -2828,10 +3246,13 @@ handleUserAgentComplete :
     -> { model : Model, command : Cmd Msg }
 handleUserAgentComplete model taskId taskIdStr executor result =
     let
+        completionReport =
+            extractCompletionReport executor.executorModel
+
         completionResult =
             AgentManager.processAgentCompletion
                 { exitResult = result
-                , completionReport = executor.completionReport
+                , completionReport = completionReport
                 }
 
         -- Check for pending deferred handoff response

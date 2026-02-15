@@ -24,7 +24,6 @@ import Json.Encode as Encode
 import Provider
     exposing
         ( AgentSpec
-        , Provider
         , ProviderError(..)
         , ProviderKind(..)
         , Response
@@ -79,8 +78,11 @@ type alias ApiToolCall =
 
 
 {-| The OpenAI-compatible API provider.
+
+NOTE: This provider uses the legacy session-based interface and has not yet
+been migrated to the event-driven Provider interface. It is currently unused
+(not wired into Main.gren).
 -}
-provider : Config -> Provider msg
 provider config =
     { kind = ApiProvider
     , validateEnvironment = validateEnvironment config

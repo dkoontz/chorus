@@ -12,18 +12,36 @@ module Provider exposing
     , providerErrorToString
       -- Provider kinds
     , ProviderKind(..)
-      -- Provider interface
     , Provider
-      -- Validation result
     , ValidationResult
+    , StartConfig
+    , ProviderEvent(..)
+    , ProviderState(..)
+    , HttpToolCallContext
     )
 
 {-| Provider interface for LLM communication.
 
 This module defines the abstract interface that all LLM providers must implement.
 The executor uses this interface without knowing which provider is active.
+
+## Event-Driven Provider Interface
+
+The `Provider` type defines the event-driven interface for provider
+communication. It models providers as event-driven systems:
+
+- `startAgent` begins a conversation (spawns CLI or sends first API message)
+- Events arrive asynchronously via `onEvent` callback in `StartConfig`
+- `deliverToolResults` sends processed results back to the agent
+- `handleHttpToolCall` receives chorus-tools HTTP callbacks (CLI providers only)
+
+Provider state is threaded explicitly through each function call via
+`ProviderState`, which uses variants for CLI and API providers.
+
 -}
 
+import Dict exposing (Dict)
+import HttpServer.Response as HttpResponse
 import Id exposing (SessionId)
 import Json.Decode
 
@@ -148,9 +166,22 @@ type ProviderKind
 -- PROVIDER INTERFACE
 
 
-{-| The provider interface that all LLM providers must implement.
+{-| The provider interface that all providers implement.
 
-Each function returns a Cmd that delivers results via messages.
+Key characteristics:
+
+- **Event-driven**: Providers emit `ProviderEvent` values asynchronously via
+  the `onEvent` callback in `StartConfig`, rather than returning results
+  through individual callback functions.
+- **Explicit state**: Provider state is threaded through function calls via
+  `ProviderState`, stored on the ExecutorState in Main.gren.
+- **Tool execution**: The Executor owns tool execution for all
+  providers. Tool calls flow through the Executor regardless of whether
+  they originate from a CLI HTTP callback or an API response.
+
+Each function takes the current `ProviderState` and returns an updated state
+along with a command to execute.
+
 -}
 type alias Provider msg =
     { -- What kind of provider this is
@@ -159,27 +190,82 @@ type alias Provider msg =
       validateEnvironment :
             (Result ProviderError {} -> msg)
             -> Cmd msg
-    , -- Create a new session for an agent
-      createSession :
-            AgentSpec
-            -> String  -- workspace root
-            -> (Result ProviderError Session -> msg)
-            -> Cmd msg
-    , -- Send a message in a session
-      sendMessage :
-            Session
-            -> String  -- message
-            -> (Result ProviderError Response -> msg)
-            -> Cmd msg
-    , -- Submit tool results and get the next response
-      submitToolResults :
-            Session
+    , -- Start an agent conversation.
+      -- CLI providers spawn the process; API providers send the first message.
+      -- Events arrive asynchronously via onEvent in StartConfig.
+      startAgent :
+            ProviderState
+            -> StartConfig msg
+            -> { state : ProviderState, cmd : Cmd msg }
+    , -- Deliver processed tool results back to the agent.
+      -- CLI providers send HTTP responses to pending chorus-tools requests.
+      -- API providers call submitToolResults on the LLM API.
+      deliverToolResults :
+            ProviderState
             -> Array ToolResult
-            -> (Result ProviderError Response -> msg)
-            -> Cmd msg
-    , -- Resume an existing session
-      resumeSession :
-            SessionId
-            -> (Result ProviderError (Maybe Session) -> msg)
-            -> Cmd msg
+            -> { state : ProviderState, cmd : Cmd msg }
+    , -- Receive a chorus-tools HTTP callback.
+      -- Stores the HTTP response handle in state and emits a ToolCallReceived
+      -- event. Only meaningful for CLI providers; API providers return state unchanged.
+      handleHttpToolCall :
+            ProviderState
+            -> HttpToolCallContext
+            -> { state : ProviderState, cmd : Cmd msg }
+    , -- The initial provider state for a new executor.
+      initState : ProviderState
+    }
+
+
+{-| Configuration for starting an agent conversation.
+-}
+type alias StartConfig msg =
+    { agentSpec : AgentSpec
+    , message : String
+    , workspaceRoot : String
+    , taskId : Maybe String
+    , allowedTools : Maybe String
+    , onEvent : ProviderEvent -> msg
+    }
+
+
+{-| Events emitted by a provider during agent execution.
+
+These are delivered asynchronously via the `onEvent` callback.
+-}
+type ProviderEvent
+    = ToolCallReceived ToolCall
+    | AgentCompleted String
+    | AgentFailed String
+
+
+{-| Opaque provider state threaded through provider function calls.
+
+Each variant holds the state specific to its provider kind:
+
+- `CliProviderState`: Pending HTTP response handles for chorus-tools callbacks,
+  keyed by tool call ID.
+- `ApiProviderState`: The active session and any provider-specific data needed
+  to continue the conversation.
+- `NoProviderState`: Initial state before a provider is started.
+
+-}
+type ProviderState
+    = CliProviderState
+        { pendingHttpResponses : Dict String HttpResponse.Response
+        }
+    | ApiProviderState
+        { session : Maybe Session
+        }
+    | NoProviderState
+
+
+{-| Context for an incoming chorus-tools HTTP tool call callback.
+
+When a CLI agent invokes a tool via chorus-tools, the HTTP request
+arrives at Main.gren, which resolves the agent and passes this context
+to the provider via `handleHttpToolCall`.
+-}
+type alias HttpToolCallContext =
+    { toolCall : ToolCall
+    , httpResponse : HttpResponse.Response
     }
