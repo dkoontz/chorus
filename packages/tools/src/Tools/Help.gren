@@ -83,6 +83,7 @@ allToolHelp =
     , taskGetHelpRecord
     , taskListHelpRecord
     , webSearchHelpRecord
+    , plannerOutputHelpRecord
     ]
 
 
@@ -309,6 +310,28 @@ webSearchHelpRecord =
         ]
     }
 
+
+
+plannerOutputHelpRecord : ToolHelp
+plannerOutputHelpRecord =
+    { name = "planner-output"
+    , description = "Submit structured planning results. Must be called exactly once before finishing."
+    , required =
+        [ { key = "type", value = "Output type: 'plan', 'questions', or 'error'" }
+        ]
+    , optional =
+        [ { key = "summary", value = "Plan summary (required for type 'plan')" }
+        , { key = "requirements", value = "Array of requirement strings (required for type 'plan')" }
+        , { key = "acceptanceCriteria", value = "Array of acceptance criteria (required for type 'plan')" }
+        , { key = "plan", value = "Array of plan step strings (required for type 'plan')" }
+        , { key = "assignedAgent", value = "Name of agent to assign (optional, for type 'plan')" }
+        , { key = "questions", value = "Array of question strings (required for type 'questions')" }
+        , { key = "error", value = "Error message (required for type 'error')" }
+        ]
+    , output =
+        [ { key = "success", value = "Whether the planner output was accepted" }
+        ]
+    }
 
 
 -- ENCODING HELPERS

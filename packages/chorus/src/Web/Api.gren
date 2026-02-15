@@ -62,7 +62,7 @@ import Task as GrenTask exposing (Task)
 import Task.Queue as Queue
 import Task.Registry as Registry
 import Time
-import Types exposing (Task(..), TaskStatus(..), EventType(..), SourceInfo, PlanningFields, PlanningQuestion, HandoffRecord, AgentConfig(..), encodeAgentConfig, setAgentChain)
+import Types exposing (Task(..), TaskStatus(..), EventType(..), PlannerOutput(..), SourceInfo, PlanningFields, PlanningQuestion, HandoffRecord, AgentConfig(..), encodeAgentConfig, setAgentChain)
 import Web.Router exposing (Route(..))
 
 
@@ -85,6 +85,7 @@ type ApiResult
     = ApiSuccess { statusCode : Int, body : String }
     | ApiError { statusCode : Int, code : String, message : String }
     | DeferredHandoff { agentName : String, prompt : String }
+    | DeferredPlannerOutput Types.PlannerOutput
 
 
 {-| Parameters for creating a task.
@@ -1685,6 +1686,15 @@ sendApiResponse response result =
                 |> Response.setStatus 500
                 |> Response.setHeader "Content-Type" "application/json"
                 |> Response.setBody "{\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Unexpected deferred handoff in sendApiResponse\"}}"
+                |> Response.send
+
+        DeferredPlannerOutput _ ->
+            -- DeferredPlannerOutput should never reach sendApiResponse.
+            -- It is handled by Main.gren before reaching this point.
+            response
+                |> Response.setStatus 500
+                |> Response.setHeader "Content-Type" "application/json"
+                |> Response.setBody "{\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Unexpected deferred planner output in sendApiResponse\"}}"
                 |> Response.send
 
 

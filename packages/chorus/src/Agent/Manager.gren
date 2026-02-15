@@ -1,0 +1,100 @@
+module Agent.Manager exposing
+    ( AgentCompletionResult(..)
+    , PlannerCompletionResult(..)
+    , RetryContext
+    , processAgentCompletion
+    , processPlannerCompletion
+    , shouldRetry
+    )
+
+{-| Agent lifecycle business logic as pure functions.
+
+This module contains zero imports of provider, HTTP, process, or ChildProcess
+modules. It operates purely on typed data and returns decisions. This keeps
+business logic testable and separate from transport.
+
+-}
+
+import Types exposing (CompletionReport, PlannerOutput(..), PlanningFields)
+
+
+{-| Result of processing an agent's completion.
+-}
+type AgentCompletionResult
+    = CompletedWithReport CompletionReport
+    | CompletedWithoutReport String
+    | AgentExitError String
+
+
+{-| Result of processing a planner's completion.
+-}
+type PlannerCompletionResult
+    = PlanReady PlanningFields
+    | QuestionsReady (Array String)
+    | PlannerExitError String
+    | PlannerOutputMissing
+
+
+{-| Context for retry decisions.
+-}
+type alias RetryContext =
+    { retryCount : Int
+    , maxRetries : Int
+    }
+
+
+{-| Process an agent's completion, determining the result based on
+whether a completion report was received and the exit result.
+-}
+processAgentCompletion :
+    { exitResult : Result String String
+    , completionReport : Maybe CompletionReport
+    }
+    -> AgentCompletionResult
+processAgentCompletion { exitResult, completionReport } =
+    when completionReport is
+        Just report ->
+            CompletedWithReport report
+
+        Nothing ->
+            when exitResult is
+                Ok output ->
+                    CompletedWithoutReport output
+
+                Err errMsg ->
+                    AgentExitError errMsg
+
+
+{-| Process a planner's completion, determining the result based on
+whether a planner output was received and the exit result.
+-}
+processPlannerCompletion :
+    { exitResult : Result String String
+    , plannerOutput : Maybe PlannerOutput
+    }
+    -> PlannerCompletionResult
+processPlannerCompletion { exitResult, plannerOutput } =
+    when plannerOutput is
+        Just (PlanOutput fields) ->
+            PlanReady fields
+
+        Just (QuestionsOutput questions) ->
+            QuestionsReady questions
+
+        Just (PlannerError errMsg) ->
+            PlannerExitError errMsg
+
+        Nothing ->
+            when exitResult is
+                Ok _ ->
+                    PlannerOutputMissing
+
+                Err errMsg ->
+                    PlannerExitError errMsg
+
+
+{-| Determine whether a retry should be attempted based on the retry count.
+-}
+shouldRetry : RetryContext -> Bool
+shouldRetry ctx =
+    ctx.retryCount < ctx.maxRetries

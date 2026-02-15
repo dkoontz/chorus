@@ -19,10 +19,10 @@ string if no tools match (after filtering out completion-report).
 toolContextForAgent : Array String -> String
 toolContextForAgent allowedTools =
     let
-        -- Filter out completion-report (has its own instruction) and any empty strings
+        -- Filter out completion-report and planner-output (have their own instructions) and any empty strings
         filteredTools =
             allowedTools
-                |> Array.keepIf (\name -> name /= "completion-report" && not (String.isEmpty name))
+                |> Array.keepIf (\name -> name /= "completion-report" && name /= "planner-output" && not (String.isEmpty name))
 
         toolSections =
             filteredTools

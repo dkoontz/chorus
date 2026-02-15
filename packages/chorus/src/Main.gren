@@ -11,6 +11,7 @@ The server exposes:
 
 -}
 
+import Agent.Manager as AgentManager
 import Agent.Registry as AgentRegistry
 import Bytes
 import ChildProcess
@@ -38,7 +39,7 @@ import Stream
 import Task as GrenTask
 import Task.Registry as Registry
 import Agent.ToolContext exposing (toolContextForAgent)
-import Types exposing (AgentConfig(..), AgentProvider(..), EventType(..), ProviderType(..), TaskStatus(..), SourceInfo, WorkspaceConfig)
+import Types exposing (AgentConfig(..), AgentProvider(..), EventType(..), PlannerOutput(..), ProviderType(..), TaskStatus(..), SourceInfo, WorkspaceConfig)
 import Web.Api as Api exposing (indexedArrayToDict)
 import Web.Router as Router
 import Web.Server as Server
@@ -89,13 +90,22 @@ type alias Model =
 
 
 {-| State of an active agent executor, keyed by task ID.
+
+The `retryCount` and `sessionId` fields are scaffolding for Phase 5 (CLI
+provider retry for missing output tool). They are initialized but not yet
+wired into the completion flow. When retry is implemented, `sessionId` will
+hold the CLI session ID for `--resume` and `retryCount` will track attempts.
 -}
 type alias ExecutorState =
     { taskId : TaskId
     , agentName : String
     , agentConfig : Types.AgentConfig
     , status : ExecutorStatus
-    , completionReportReceived : Bool
+    , completionReport : Maybe Types.CompletionReport
+    , plannerOutput : Maybe Types.PlannerOutput
+    , isSystemAgent : Bool
+    , retryCount : Int
+    , sessionId : Maybe String
     }
 
 
@@ -144,7 +154,6 @@ type Msg
     | GotMutatingApiResult { broadcastType : String, response : Response, result : Api.ApiResult }
     | GotTaskCreated { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
     | GotPlanTaskResult { response : Response, taskId : TaskId, description : String, result : Api.ApiResult }
-    | GotPlannerComplete { taskId : TaskId, result : Result String String }
     | GotAnswersSubmitted { response : Response, taskId : TaskId, enrichedPrompt : String, result : Api.ApiResult }
     | GotToolGrant { taskId : TaskId, addTools : Array String, removeTools : Array String, response : Response }
     | GotConfigLoaded { response : Maybe Response, deferResponse : Bool, result : Result String { config : WorkspaceConfig, configPath : String } }
@@ -530,7 +539,11 @@ buildAgentSpawn model taskId prompt agentConfig =
             , agentName = agentName
             , agentConfig = agentConfig
             , status = ExecRunning
-            , completionReportReceived = False
+            , completionReport = Nothing
+            , plannerOutput = Nothing
+            , isSystemAgent = False
+            , retryCount = 0
+            , sessionId = Nothing
             }
 
         options =
@@ -775,25 +788,12 @@ update msg model =
                                         Nothing ->
                                             []
 
-                                registryRoot =
-                                    when model.workspaceConfigPath is
-                                        Just configPath ->
-                                            parentDirectory configPath ++ "/registry"
-
-                                        Nothing ->
-                                            Debug.todo "registryRoot called without a loaded workspace config"
-
                                 toolCtx =
                                     { filesystemPermission = model.filesystemPermission
                                     , childProcessPermission = model.childProcessPermission
                                     , allowedDirectories = allowedDirs
                                     , allowedTools = allowedTools
-                                    , apiContext =
-                                        { registry = reg
-                                        , filesystemPermission = model.filesystemPermission
-                                        , secureContext = model.secureContext
-                                        , registryRoot = Path.fromPosixString registryRoot
-                                        }
+                                    , apiContext = makeApiContext model reg
                                     , taskId = taskId
                                     }
 
@@ -803,10 +803,25 @@ update msg model =
 
                                 toMsg =
                                     \apiResult -> GotToolResult { taskId = taskId, toolName = toolName, requestBody = requestBody, response = response, result = apiResult }
+
+                                -- Exactly-once check for completion-report: prevent duplicate side effects
+                                -- by checking executor state before dispatching to ToolExecution
+                                alreadySubmitted =
+                                    if toolName == "completion-report" then
+                                        Dict.get (Id.taskIdToString taskId) model.activeExecutors
+                                            |> Maybe.andThen .completionReport
+                                            |> isJust
+                                    else
+                                        False
                             in
-                            { model = model
-                            , command = ToolExecution.requestExecuteTool toolCtx requestBody toMsg
-                            }
+                            if alreadySubmitted then
+                                { model = model
+                                , command = Api.sendApiResponse response (Api.ApiError { statusCode = 409, code = "CONFLICT", message = "Completion report already submitted for this task" })
+                                }
+                            else
+                                { model = model
+                                , command = ToolExecution.requestExecuteTool toolCtx requestBody toMsg
+                                }
 
         GotAgentLookup { taskId, prompt, response, result } ->
             when result is
@@ -834,11 +849,7 @@ update msg model =
                         Just registry ->
                             let
                                 ctx =
-                                    { registry = registry
-                                    , filesystemPermission = model.filesystemPermission
-                                    , secureContext = model.secureContext
-                                    , registryRoot = registryRootPath model
-                                    }
+                                    makeApiContext model registry
 
                                 toMsg =
                                     \apiResult ->
@@ -874,6 +885,12 @@ update msg model =
                     , command = sendResponseCmd
                     }
 
+                Api.DeferredPlannerOutput _ ->
+                    -- Should not happen in this handler
+                    { model = model
+                    , command = sendResponseCmd
+                    }
+
                 Api.ApiSuccess { body } ->
                     -- Task updated successfully. Resolve the provider and spawn the agent.
                     let
@@ -904,11 +921,7 @@ update msg model =
                 Just registry ->
                     let
                         ctx =
-                            { registry = registry
-                            , filesystemPermission = model.filesystemPermission
-                            , secureContext = model.secureContext
-                            , registryRoot = registryRootPath model
-                            }
+                            makeApiContext model registry
 
                         toMsg =
                             \apiResult ->
@@ -941,6 +954,14 @@ update msg model =
                     , command =
                         Api.sendApiResponse response
                             (Api.ApiError { statusCode = 500, code = "INTERNAL_ERROR", message = "Unexpected DeferredHandoff result in GotDeferredHandoffStarted" })
+                    }
+
+                Api.DeferredPlannerOutput _ ->
+                    -- Should not happen in this handler
+                    { model = model
+                    , command =
+                        Api.sendApiResponse response
+                            (Api.ApiError { statusCode = 500, code = "INTERNAL_ERROR", message = "Unexpected DeferredPlannerOutput result in GotDeferredHandoffStarted" })
                     }
 
                 Api.ApiSuccess _ ->
@@ -976,165 +997,20 @@ update msg model =
                 taskIdStr =
                     Id.taskIdToString taskId
 
-                -- Check if completion report was already received
-                hadCompletionReport =
+                maybeExecutor =
                     Dict.get taskIdStr model.activeExecutors
-                        |> Maybe.map .completionReportReceived
-                        |> Maybe.withDefault False
-
-                -- Check for pending deferred handoff response
-                maybeDeferredResponse =
-                    Dict.get taskIdStr model.pendingHandoffResponses
-
-                -- Use the appropriate complete function based on whether this was a handoff
-                requestComplete =
-                    when maybeDeferredResponse is
-                        Just _ ->
-                            Api.requestCompleteHandoff
-
-                        Nothing ->
-                            Api.requestCompleteAgent
-
-                -- Remove executor from active and clear pending response
-                updatedExecutors =
-                    Dict.remove taskIdStr model.activeExecutors
-
-                updatedPendingResponses =
-                    Dict.remove taskIdStr model.pendingHandoffResponses
-
-                updatedModel =
-                    { model
-                        | activeExecutors = updatedExecutors
-                        , pendingHandoffResponses = updatedPendingResponses
+            in
+            when maybeExecutor is
+                Nothing ->
+                    { model = model
+                    , command = Logging.logWarn model.logger ("GotAgentComplete for unknown executor: " ++ taskIdStr) NoOp
                     }
 
-                -- Build the deferred response command if there's a pending response
-                deferredResponseCmd =
-                    when maybeDeferredResponse is
-                        Nothing ->
-                            Cmd.none
-
-                        Just deferredResponse ->
-                            let
-                                rawOutput =
-                                    when result is
-                                        Ok text ->
-                                            text
-
-                                        Err errMsg ->
-                                            "Agent failed: " ++ errMsg
-
-                                agentName =
-                                    Dict.get taskIdStr model.activeExecutors
-                                        |> Maybe.map .agentName
-                                        |> Maybe.withDefault "unknown"
-
-                                responseBody =
-                                    Encode.object
-                                        [ { key = "agent_name", value = Encode.string agentName }
-                                        , { key = "output", value = Encode.string rawOutput }
-                                        ]
-                                        |> Encode.encode 0
-                            in
-                            Api.sendApiResponse deferredResponse
-                                (Api.ApiSuccess { statusCode = 200, body = responseBody })
-            in
-            if hadCompletionReport then
-                -- Completion report already handled status/output; just complete the handoff record timestamps
-                when model.registry is
-                    Nothing ->
-                        { model = updatedModel
-                        , command = deferredResponseCmd
-                        }
-
-                    Just registry ->
-                        let
-                            ctx =
-                                { registry = registry
-                                , filesystemPermission = model.filesystemPermission
-                                , secureContext = model.secureContext
-                                , registryRoot = registryRootPath model
-                                }
-
-                            rawOutput =
-                                when result is
-                                    Ok text ->
-                                        text
-
-                                    Err errMsg ->
-                                        "Agent exited with error: " ++ errMsg
-                        in
-                        { model = updatedModel
-                        , command =
-                            Cmd.batch
-                                [ requestComplete ctx taskId { output = rawOutput }
-                                    (\apiResult -> GotInternalApiResult apiResult)
-                                , Logging.logInfo model.logger ("Agent completed for task " ++ taskIdStr ++ " (completion report received)") NoOp
-                                , deferredResponseCmd
-                                ]
-                        }
-            else
-                -- No completion report - fall back to raw output
-                when result is
-                    Ok outputText ->
-                        when model.registry is
-                            Nothing ->
-                                { model = updatedModel
-                                , command =
-                                    Cmd.batch
-                                        [ Logging.logError model.logger "Agent completed but registry not available" NoOp
-                                        , deferredResponseCmd
-                                        ]
-                                }
-
-                            Just registry ->
-                                let
-                                    ctx =
-                                        { registry = registry
-                                        , filesystemPermission = model.filesystemPermission
-                                        , secureContext = model.secureContext
-                                        , registryRoot = registryRootPath model
-                                        }
-                                in
-                                { model = updatedModel
-                                , command =
-                                    Cmd.batch
-                                        [ requestComplete ctx taskId { output = outputText }
-                                            (\apiResult -> GotInternalApiResult apiResult)
-                                        , Logging.logInfo model.logger ("Agent completed for task " ++ taskIdStr ++ " without completion report (output length: " ++ String.fromInt (String.unitLength outputText) ++ ")") NoOp
-                                        , deferredResponseCmd
-                                        ]
-                                }
-
-                    Err errMsg ->
-                        when model.registry is
-                            Nothing ->
-                                { model = updatedModel
-                                , command =
-                                    Cmd.batch
-                                        [ Logging.logError model.logger ("Agent failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
-                                        , deferredResponseCmd
-                                        ]
-                                }
-
-                            Just registry ->
-                                let
-                                    ctx =
-                                        { registry = registry
-                                        , filesystemPermission = model.filesystemPermission
-                                        , secureContext = model.secureContext
-                                        , registryRoot = registryRootPath model
-                                        }
-                                in
-                                { model = updatedModel
-                                , command =
-                                    Cmd.batch
-                                        [ requestComplete ctx taskId { output = "Agent failed: " ++ errMsg }
-                                            (\apiResult -> GotInternalApiResult apiResult)
-                                        , Logging.logError model.logger ("Agent failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
-                                        , deferredResponseCmd
-                                        ]
-                                }
+                Just executor ->
+                    if executor.isSystemAgent then
+                        handlePlannerComplete model taskId taskIdStr executor result
+                    else
+                        handleUserAgentComplete model taskId taskIdStr executor result
 
         GotRequest { request, response } ->
             let
@@ -1247,9 +1123,72 @@ update msg model =
                                         )
                             }
 
+                Api.DeferredPlannerOutput plannerOutput ->
+                    -- Planner output submitted via tool: store on executor state, enforce exactly-once
+                    let
+                        taskIdStr =
+                            Id.taskIdToString taskId
+                    in
+                    when Dict.get taskIdStr model.activeExecutors is
+                        Nothing ->
+                            { model = model
+                            , command = Api.sendApiResponse response (Api.ApiError { statusCode = 400, code = "BAD_REQUEST", message = "No active executor for task: " ++ taskIdStr })
+                            }
+
+                        Just executor ->
+                            when executor.plannerOutput is
+                                Just _ ->
+                                    -- Already received - exactly-once enforcement
+                                    { model = model
+                                    , command = Api.sendApiResponse response (Api.ApiError { statusCode = 409, code = "CONFLICT", message = "Planner output already submitted for this task" })
+                                    }
+
+                                Nothing ->
+                                    let
+                                        updatedExecutor =
+                                            { executor | plannerOutput = Just plannerOutput }
+
+                                        updatedModel =
+                                            { model | activeExecutors = Dict.set taskIdStr updatedExecutor model.activeExecutors }
+
+                                        successResponse =
+                                            Api.ApiSuccess
+                                                { statusCode = 200
+                                                , body =
+                                                    Encode.encode 0
+                                                        (Encode.object
+                                                            [ { key = "success", value = Encode.bool True }
+                                                            ]
+                                                        )
+                                                }
+
+                                        recordEventCmd =
+                                            when model.registry is
+                                                Nothing ->
+                                                    Cmd.none
+
+                                                Just reg ->
+                                                    Registry.recordEvent reg taskId
+                                                        { eventType = PlannerOutputSubmitted
+                                                        , data =
+                                                            Dict.empty
+                                                                |> Dict.set "tool" "planner-output"
+                                                                |> Dict.set "input" requestBody
+                                                        }
+                                                        |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                                        |> GrenTask.perform (\_ -> NoOp)
+                                    in
+                                    { model = updatedModel
+                                    , command =
+                                        Cmd.batch
+                                            [ Api.sendApiResponse response successResponse
+                                            , recordEventCmd
+                                            ]
+                                    }
+
                 _ ->
                     let
-                        status =
+                        toolStatus =
                             when result is
                                 Api.ApiSuccess _ ->
                                     "success"
@@ -1260,7 +1199,10 @@ update msg model =
                                 Api.DeferredHandoff _ ->
                                     "deferred"
 
-                        output =
+                                Api.DeferredPlannerOutput _ ->
+                                    "deferred"
+
+                        toolOutput =
                             when result is
                                 Api.ApiSuccess { body } ->
                                     body
@@ -1269,6 +1211,9 @@ update msg model =
                                     message
 
                                 Api.DeferredHandoff _ ->
+                                    ""
+
+                                Api.DeferredPlannerOutput _ ->
                                     ""
 
                         logCmd =
@@ -1282,24 +1227,38 @@ update msg model =
                                         , data =
                                             Dict.empty
                                                 |> Dict.set "tool" toolName
-                                                |> Dict.set "status" status
+                                                |> Dict.set "status" toolStatus
                                                 |> Dict.set "input" requestBody
-                                                |> Dict.set "output" output
+                                                |> Dict.set "output" toolOutput
                                         }
                                         |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                         |> GrenTask.perform (\_ -> NoOp)
 
-                        -- Track successful completion-report submissions
+                        -- Track successful completion-report submissions with stored report data.
+                        -- The exactly-once check in GotToolAgentLookup prevents duplicate calls
+                        -- from reaching this point, so we can safely store without re-checking.
                         updatedModel =
-                            if toolName == "completion-report" && status == "success" then
+                            if toolName == "completion-report" && toolStatus == "success" then
                                 let
                                     taskIdStr =
                                         Id.taskIdToString taskId
 
+                                    decodeResult =
+                                        requestBody
+                                            |> Decode.decodeString ToolExecution.completionReportInputDecoder
+
                                     updatedExecutors =
                                         when Dict.get taskIdStr model.activeExecutors is
                                             Just executor ->
-                                                Dict.set taskIdStr { executor | completionReportReceived = True } model.activeExecutors
+                                                when decodeResult is
+                                                    Ok report ->
+                                                        Dict.set taskIdStr { executor | completionReport = Just report } model.activeExecutors
+
+                                                    Err _ ->
+                                                        -- Decode should not fail here since dispatchCompletionReport
+                                                        -- already validated the same body, but we preserve the error
+                                                        -- rather than silently discarding it via Result.toMaybe
+                                                        model.activeExecutors
 
                                             Nothing ->
                                                 model.activeExecutors
@@ -1357,12 +1316,16 @@ update msg model =
                     -- Plan endpoint succeeded. Dispatch the task-validator agent.
                     when model.agentRegistry is
                         Just agentReg ->
-                            { model = model
+                            let
+                                plannerResult =
+                                    dispatchPlanner model agentReg taskId description
+                            in
+                            { model = plannerResult.model
                             , command =
                                 Cmd.batch
                                     [ sendResponseCmd
-                                    , dispatchPlanner model agentReg taskId description
-                                    , broadcastToClients model "tasks_changed" (Encode.string body)
+                                    , plannerResult.command
+                                    , broadcastToClients plannerResult.model "tasks_changed" (Encode.string body)
                                     ]
                             }
 
@@ -1375,105 +1338,8 @@ update msg model =
                 Api.DeferredHandoff _ ->
                     { model = model, command = sendResponseCmd }
 
-        GotPlannerComplete { taskId, result } ->
-            let
-                taskIdStr =
-                    Id.taskIdToString taskId
-            in
-            when model.registry is
-                Nothing ->
-                    { model = model, command = Cmd.none }
-
-                Just registry ->
-                    let
-                        ctx =
-                            { registry = registry
-                            , filesystemPermission = model.filesystemPermission
-                            , secureContext = model.secureContext
-                            , registryRoot = registryRootPath model
-                            }
-                    in
-                    when result is
-                        Ok output ->
-                            when parsePlannerOutput output is
-                                PlanResult fields ->
-                                    let
-                                        mergeInto =
-                                            \source target -> Dict.foldl Dict.set target source
-
-                                        baseDict =
-                                            Dict.empty
-                                                |> Dict.set "summary" fields.summary
-                                                |> mergeInto (indexedArrayToDict "requirement_" fields.requirements)
-                                                |> mergeInto (indexedArrayToDict "acceptance_criteria_" fields.acceptanceCriteria)
-                                                |> mergeInto (indexedArrayToDict "plan_step_" fields.plan)
-
-                                        planningCompletedData =
-                                            when fields.assignedAgent is
-                                                Just agent ->
-                                                    baseDict
-                                                        |> Dict.set "assigned_agent" agent
-
-                                                Nothing ->
-                                                    baseDict
-                                    in
-                                    { model = model
-                                    , command =
-                                        Cmd.batch
-                                            [ Api.requestApplyPlan ctx taskId fields planningCompletedData (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
-                                            , Logging.logInfo model.logger ("Planner produced plan for task " ++ taskIdStr) NoOp
-                                            ]
-                                    }
-
-                                QuestionsResult questions ->
-                                    let
-                                        questionsEventData =
-                                            indexedArrayToDict "question_" questions
-                                                |> Dict.set "questionCount" (String.fromInt (Array.length questions))
-                                    in
-                                    { model = model
-                                    , command =
-                                        Cmd.batch
-                                            [ Api.requestSetQuestions ctx taskId questions questionsEventData (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
-                                            , Logging.logInfo model.logger ("Planner asked " ++ String.fromInt (Array.length questions) ++ " questions for task " ++ taskIdStr) NoOp
-                                            ]
-                                    }
-
-                                PlannerParseError errMsg ->
-                                    let
-                                        planningFailedEvent =
-                                            Just
-                                                { eventType = PlanningFailed
-                                                , data =
-                                                    Dict.empty
-                                                        |> Dict.set "error" ("Planner output parse error: " ++ errMsg)
-                                                }
-                                    in
-                                    { model = model
-                                    , command =
-                                        Cmd.batch
-                                            [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner output parse error: " ++ errMsg)) planningFailedEvent (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
-                                            , Logging.logError model.logger ("Planner parse error for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
-                                            ]
-                                    }
-
-                        Err errMsg ->
-                            let
-                                planningFailedEvent =
-                                    Just
-                                        { eventType = PlanningFailed
-                                        , data =
-                                            Dict.empty
-                                                |> Dict.set "error" ("Planner failed: " ++ errMsg)
-                                        }
-                            in
-                            { model = model
-                            , command =
-                                Cmd.batch
-                                    [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner failed: " ++ errMsg)) planningFailedEvent (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
-                                    , Logging.logError model.logger ("Planner failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
-                                    ]
-                            }
+                Api.DeferredPlannerOutput _ ->
+                    { model = model, command = sendResponseCmd }
 
         GotAnswersSubmitted { response, taskId, enrichedPrompt, result } ->
             let
@@ -1484,12 +1350,16 @@ update msg model =
                 Api.ApiSuccess { body } ->
                     when model.agentRegistry is
                         Just agentReg ->
-                            { model = model
+                            let
+                                plannerResult =
+                                    dispatchPlanner model agentReg taskId enrichedPrompt
+                            in
+                            { model = plannerResult.model
                             , command =
                                 Cmd.batch
                                     [ sendResponseCmd
-                                    , dispatchPlanner model agentReg taskId enrichedPrompt
-                                    , broadcastToClients model "tasks_changed" (Encode.string body)
+                                    , plannerResult.command
+                                    , broadcastToClients plannerResult.model "tasks_changed" (Encode.string body)
                                     ]
                             }
 
@@ -1500,6 +1370,9 @@ update msg model =
                     { model = model, command = sendResponseCmd }
 
                 Api.DeferredHandoff _ ->
+                    { model = model, command = sendResponseCmd }
+
+                Api.DeferredPlannerOutput _ ->
                     { model = model, command = sendResponseCmd }
 
         GotToolGrant { taskId, addTools, removeTools, response } ->
@@ -1798,11 +1671,7 @@ handleRoute model route request response =
                 Just registry ->
                     let
                         ctx =
-                            { registry = registry
-                            , filesystemPermission = model.filesystemPermission
-                            , secureContext = model.secureContext
-                            , registryRoot = registryRootPath model
-                            }
+                            makeApiContext model registry
 
                         toMsg =
                             \apiResult -> GotApiResult { response = response, result = apiResult }
@@ -2571,251 +2440,532 @@ broadcastToClients model messageType data =
 -- PLANNER
 
 
-{-| Parsed output from the system planner agent.
--}
-type PlannerOutput
-    = PlanResult Types.PlanningFields
-    | QuestionsResult (Array String)
-    | PlannerParseError String
-
-
 {-| Spawn the task-validator agent for a newly created task.
 
-Uses the system agent provider from workspace config instead of
-hardcoded ClaudeCode.
+Registers the planner as an active executor with isSystemAgent=True,
+sets the task's currentAgent to "task-validator", and emits GotAgentComplete
+when the planner process exits. The planner submits its structured output
+via the planner-output tool during execution.
 -}
-dispatchPlanner : Model -> AgentRegistry.AgentRegistry -> TaskId -> String -> Cmd Msg
+dispatchPlanner : Model -> AgentRegistry.AgentRegistry -> TaskId -> String -> { model : Model, command : Cmd Msg }
 dispatchPlanner model agentReg taskId description =
+    let
+        taskIdStr =
+            Id.taskIdToString taskId
+    in
     -- First check if system agent provider is configured
     when model.workspaceConfig is
         Nothing ->
-            GrenTask.succeed (Err "No workspace config loaded - cannot run system agent")
-                |> GrenTask.perform (\r -> GotPlannerComplete { taskId = taskId, result = r })
+            failPlannerEarly model taskId "No workspace config loaded - cannot run system agent"
 
         Just wc ->
             when wc.systemAgentProvider is
                 NotConfigured ->
-                    GrenTask.succeed (Err "System agent provider is not configured. Please configure it in System Settings.")
-                        |> GrenTask.perform (\r -> GotPlannerComplete { taskId = taskId, result = r })
+                    failPlannerEarly model taskId "System agent provider is not configured. Please configure it in System Settings."
 
                 ProviderRef providerName ->
-                    AgentRegistry.getAgent agentReg "task-validator"
-                        |> GrenTask.mapError AgentRegistry.errorToString
-                        |> GrenTask.andThen
-                            (\agentConfig ->
-                                -- Set task status to Planning and record planning_started event
-                                when model.registry is
-                                    Nothing ->
-                                        GrenTask.succeed agentConfig
-
-                                    Just registry ->
-                                        Registry.updateStatus registry taskId Types.Planning
-                                            |> GrenTask.andThen
-                                                (\_ ->
-                                                    Registry.recordEvent registry taskId
-                                                        { eventType = PlanningStarted
-                                                        , data =
-                                                            Dict.empty
-                                                                |> Dict.set "description" description
-                                                        }
-                                                        |> GrenTask.map (\_ -> agentConfig)
-                                                )
-                                            |> GrenTask.onError (\_ -> GrenTask.succeed agentConfig)
-                            )
-                        |> GrenTask.andThen
-                            (\agentConfig ->
-                                -- Resolve the system agent provider
-                                when model.providerRegistry is
-                                    Nothing ->
-                                        GrenTask.fail "Provider registry not available"
-
-                                    Just providerReg ->
-                                        ProviderRegistry.getProvider providerReg providerName
-                                            |> GrenTask.mapError (\_ -> "System agent provider '" ++ providerName ++ "' not found in provider registry")
-                                            |> GrenTask.andThen
-                                                (\providerConfig ->
-                                                    let
-                                                        agentInstructions =
-                                                            when agentConfig is
-                                                                InternalAgent r ->
-                                                                    r.instructions
-
-                                                                UserDefinedAgent r ->
-                                                                    r.instructions
-
-                                                        systemPrompt =
-                                                            if String.isEmpty agentInstructions then
-                                                                Nothing
-                                                            else
-                                                                Just agentInstructions
-
-                                                        shellCommandResult =
-                                                            buildShellCommandForProvider model providerConfig agentConfig
-                                                                { systemPrompt = systemPrompt
-                                                                , initialDirectory = initialAgentDir model
-                                                                , message = description
-                                                                , taskId = Just (Id.taskIdToString taskId)
-                                                                }
-
-                                                        options =
-                                                            { shell = ChildProcess.NoShell
-                                                            , workingDirectory = ChildProcess.InheritWorkingDirectory
-                                                            , environmentVariables = ChildProcess.InheritEnvironmentVariables
-                                                            , maximumBytesWrittenToStreams = 10 * 1024 * 1024
-                                                            , runDuration = ChildProcess.Milliseconds 300000
-                                                            }
-                                                    in
-                                                    when shellCommandResult is
-                                                        Err errMsg ->
-                                                            GrenTask.fail errMsg
-
-                                                        Ok shellCommand ->
-                                                            ChildProcess.run model.childProcessPermission "bash" [ "-c", shellCommand ] options
-                                                                |> GrenTask.map
-                                                                    (\cliResult ->
-                                                                        let
-                                                                            output =
-                                                                                cliResult.stdout
-                                                                                    |> Bytes.toString
-                                                                                    |> Maybe.withDefault ""
-
-                                                                            resultText =
-                                                                                when Decode.decodeString (Decode.field "result" Decode.string) output is
-                                                                                    Ok text ->
-                                                                                        text
-
-                                                                                    Err _ ->
-                                                                                        output
-                                                                        in
-                                                                        Ok resultText
-                                                                    )
-                                                                |> GrenTask.onError
-                                                                    (\runError ->
-                                                                        let
-                                                                            errMsg =
-                                                                                when runError is
-                                                                                    ChildProcess.InitError { errorCode } ->
-                                                                                        "Failed to start planner CLI: " ++ errorCode
-
-                                                                                    ChildProcess.ProgramError { exitCode, stderr } ->
-                                                                                        let
-                                                                                            stderrStr =
-                                                                                                stderr
-                                                                                                    |> Bytes.toString
-                                                                                                    |> Maybe.withDefault ""
-                                                                                        in
-                                                                                        "Planner CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
-                                                                        in
-                                                                        GrenTask.succeed (Err errMsg)
-                                                                    )
-                                                )
-                            )
-                        |> GrenTask.onError
-                            (\errMsg ->
-                                GrenTask.succeed (Err errMsg)
-                            )
-                        |> GrenTask.perform (\r -> GotPlannerComplete { taskId = taskId, result = r })
-
-
-{-| Parse planner output. Extracts JSON from a code fence in the output.
--}
-parsePlannerOutput : String -> PlannerOutput
-parsePlannerOutput output =
-    let
-        -- Extract JSON from ```json ... ``` code fence
-        jsonStr =
-            extractJsonCodeFence output
-    in
-    when jsonStr is
-        Nothing ->
-            PlannerParseError "No JSON code fence found in planner output"
-
-        Just json ->
-            when Decode.decodeString (Decode.field "type" Decode.string) json is
-                Err _ ->
-                    PlannerParseError "Missing 'type' field in planner JSON"
-
-                Ok planType ->
-                    when planType is
-                        "plan" ->
-                            when Decode.decodeString planResultDecoder json is
-                                Ok fields ->
-                                    PlanResult fields
-
-                                Err err ->
-                                    PlannerParseError ("Invalid plan JSON: " ++ Decode.errorToString err)
-
-                        "questions" ->
-                            when Decode.decodeString questionsResultDecoder json is
-                                Ok questions ->
-                                    QuestionsResult questions
-
-                                Err err ->
-                                    PlannerParseError ("Invalid questions JSON: " ++ Decode.errorToString err)
-
-                        _ ->
-                            PlannerParseError ("Unknown planner output type: " ++ planType)
-
-
-{-| Extract the first JSON code fence from text.
--}
-extractJsonCodeFence : String -> Maybe String
-extractJsonCodeFence text =
-    let
-        lines =
-            String.split "\n" text
-
-        findStart remainingLines =
-            when Array.first remainingLines is
-                Nothing ->
-                    Nothing
-
-                Just line ->
                     let
-                        trimmed =
-                            String.trim line
+                        -- Build the planner-output tool instruction
+                        plannerOutputInstruction =
+                            "\n\nRemember: you must call the planner-output tool before finishing."
+
+                        spawnCmd =
+                            AgentRegistry.getAgent agentReg "task-validator"
+                                |> GrenTask.mapError AgentRegistry.errorToString
+                                |> GrenTask.andThen
+                                    (\agentConfig ->
+                                        -- Set task status to Planning and record planning_started event
+                                        when model.registry is
+                                            Nothing ->
+                                                GrenTask.succeed agentConfig
+
+                                            Just registry ->
+                                                Registry.updateStatus registry taskId Types.Planning
+                                                    |> GrenTask.andThen
+                                                        (\_ ->
+                                                            -- Set currentAgent to "task-validator"
+                                                            Registry.updateTask registry taskId
+                                                                (Types.setCurrentAgent (Just "task-validator"))
+                                                                |> GrenTask.andThen
+                                                                    (\_ ->
+                                                                        Registry.recordEvent registry taskId
+                                                                            { eventType = PlanningStarted
+                                                                            , data =
+                                                                                Dict.empty
+                                                                                    |> Dict.set "description" description
+                                                                            }
+                                                                            |> GrenTask.map (\_ -> agentConfig)
+                                                                    )
+                                                        )
+                                                    |> GrenTask.onError (\_ -> GrenTask.succeed agentConfig)
+                                    )
+                                |> GrenTask.andThen
+                                    (\agentConfig ->
+                                        -- Resolve the system agent provider
+                                        when model.providerRegistry is
+                                            Nothing ->
+                                                GrenTask.fail "Provider registry not available"
+
+                                            Just providerReg ->
+                                                ProviderRegistry.getProvider providerReg providerName
+                                                    |> GrenTask.mapError (\_ -> "System agent provider '" ++ providerName ++ "' not found in provider registry")
+                                                    |> GrenTask.andThen
+                                                        (\providerConfig ->
+                                                            let
+                                                                agentInstructions =
+                                                                    when agentConfig is
+                                                                        InternalAgent r ->
+                                                                            r.instructions
+
+                                                                        UserDefinedAgent r ->
+                                                                            r.instructions
+
+                                                                systemPrompt =
+                                                                    if String.isEmpty agentInstructions then
+                                                                        Just plannerOutputInstruction
+                                                                    else
+                                                                        Just (agentInstructions ++ plannerOutputInstruction)
+
+                                                                shellCommandResult =
+                                                                    buildShellCommandForProvider model providerConfig agentConfig
+                                                                        { systemPrompt = systemPrompt
+                                                                        , initialDirectory = initialAgentDir model
+                                                                        , message = description
+                                                                        , taskId = Just taskIdStr
+                                                                        }
+
+                                                                options =
+                                                                    { shell = ChildProcess.NoShell
+                                                                    , workingDirectory = ChildProcess.InheritWorkingDirectory
+                                                                    , environmentVariables = ChildProcess.InheritEnvironmentVariables
+                                                                    , maximumBytesWrittenToStreams = 10 * 1024 * 1024
+                                                                    , runDuration = ChildProcess.Milliseconds 300000
+                                                                    }
+                                                            in
+                                                            when shellCommandResult is
+                                                                Err errMsg ->
+                                                                    GrenTask.fail errMsg
+
+                                                                Ok shellCommand ->
+                                                                    ChildProcess.run model.childProcessPermission "bash" [ "-c", shellCommand ] options
+                                                                        |> GrenTask.map
+                                                                            (\cliResult ->
+                                                                                let
+                                                                                    output =
+                                                                                        cliResult.stdout
+                                                                                            |> Bytes.toString
+                                                                                            |> Maybe.withDefault ""
+
+                                                                                    resultText =
+                                                                                        when Decode.decodeString (Decode.field "result" Decode.string) output is
+                                                                                            Ok text ->
+                                                                                                text
+
+                                                                                            Err _ ->
+                                                                                                output
+                                                                                in
+                                                                                Ok resultText
+                                                                            )
+                                                                        |> GrenTask.onError
+                                                                            (\runError ->
+                                                                                let
+                                                                                    errMsg =
+                                                                                        when runError is
+                                                                                            ChildProcess.InitError { errorCode } ->
+                                                                                                "Failed to start planner CLI: " ++ errorCode
+
+                                                                                            ChildProcess.ProgramError { exitCode, stderr } ->
+                                                                                                let
+                                                                                                    stderrStr =
+                                                                                                        stderr
+                                                                                                            |> Bytes.toString
+                                                                                                            |> Maybe.withDefault ""
+                                                                                                in
+                                                                                                "Planner CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                                                                                in
+                                                                                GrenTask.succeed (Err errMsg)
+                                                                            )
+                                                        )
+                                    )
+                                |> GrenTask.onError
+                                    (\errMsg ->
+                                        GrenTask.succeed (Err errMsg)
+                                    )
+                                |> GrenTask.perform (\r -> GotAgentComplete { taskId = taskId, result = r })
+
+                        -- Register executor as a system agent.
+                        -- Note: agentConfig is a placeholder with empty instructions because the
+                        -- real config is only available inside the GrenTask chain above. The planner
+                        -- completion path (handlePlannerComplete) does not inspect agentConfig, so
+                        -- this is safe. If future code needs the real config, dispatchPlanner would
+                        -- need restructuring to separate executor creation from command creation.
+                        executorState =
+                            { taskId = taskId
+                            , agentName = "task-validator"
+                            , agentConfig = InternalAgent { name = "task-validator", instructions = "" }
+                            , status = ExecRunning
+                            , completionReport = Nothing
+                            , plannerOutput = Nothing
+                            , isSystemAgent = True
+                            , retryCount = 0
+                            , sessionId = Nothing
+                            }
                     in
-                    if trimmed == "```json" || trimmed == "```" then
-                        findEnd (Array.dropFirst 1 remainingLines) []
-                    else
-                        findStart (Array.dropFirst 1 remainingLines)
+                    { model =
+                        { model
+                            | activeExecutors = Dict.set taskIdStr executorState model.activeExecutors
+                        }
+                    , command = spawnCmd
+                    }
 
-        findEnd remainingLines acc =
-            when Array.first remainingLines is
-                Nothing ->
-                    Nothing
 
-                Just line ->
-                    if String.trim line == "```" then
-                        Just (String.join "\n" acc)
-                    else
-                        findEnd (Array.dropFirst 1 remainingLines) (Array.pushLast line acc)
+{-| Fail a planner dispatch early due to a configuration error.
+
+When the workspace config is missing or the system agent provider is not
+configured, we cannot spawn a planner. Instead of emitting GotAgentComplete
+(which would fail to find an executor in activeExecutors), we fail the task
+directly with a descriptive error.
+-}
+failPlannerEarly : Model -> TaskId -> String -> { model : Model, command : Cmd Msg }
+failPlannerEarly model taskId errorMessage =
+    let
+        taskIdStr =
+            Id.taskIdToString taskId
     in
-    findStart lines
-
-
-planResultDecoder : Decode.Decoder Types.PlanningFields
-planResultDecoder =
-    Decode.map5
-        (\summary requirements acceptanceCriteria plan assignedAgent ->
-            { summary = summary
-            , requirements = requirements
-            , acceptanceCriteria = acceptanceCriteria
-            , plan = plan
-            , questions = []
-            , assignedAgent = assignedAgent
+    when model.registry is
+        Nothing ->
+            { model = model
+            , command = Logging.logError model.logger ("Planner failed for task " ++ taskIdStr ++ ": " ++ errorMessage) NoOp
             }
-        )
-        (Decode.field "summary" Decode.string)
-        (Decode.field "requirements" (Decode.array Decode.string))
-        (Decode.field "acceptanceCriteria" (Decode.array Decode.string))
-        (Decode.field "plan" (Decode.array Decode.string))
-        (Decode.maybe (Decode.field "assignedAgent" Decode.string))
+
+        Just registry ->
+            let
+                planningFailedEvent =
+                    Just
+                        { eventType = PlanningFailed
+                        , data =
+                            Dict.empty
+                                |> Dict.set "error" ("Planner failed: " ++ errorMessage)
+                        }
+
+                ctx =
+                    makeApiContext model registry
+            in
+            { model = model
+            , command =
+                Cmd.batch
+                    [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner failed: " ++ errorMessage)) planningFailedEvent (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                    , Logging.logError model.logger ("Planner failed for task " ++ taskIdStr ++ ": " ++ errorMessage) NoOp
+                    , broadcastToClients model "tasks_changed" Encode.null
+                    ]
+            }
 
 
-questionsResultDecoder : Decode.Decoder (Array String)
-questionsResultDecoder =
-    Decode.field "questions" (Decode.array Decode.string)
+{-| Handle planner (system agent) completion.
+
+Uses AgentManager.processPlannerCompletion to determine the result, then
+applies the plan, sets questions, retries, or records a failure.
+-}
+handlePlannerComplete :
+    Model
+    -> TaskId
+    -> String
+    -> ExecutorState
+    -> Result String String
+    -> { model : Model, command : Cmd Msg }
+handlePlannerComplete model taskId taskIdStr executor result =
+    let
+        exitResult =
+            result
+
+        completionResult =
+            AgentManager.processPlannerCompletion
+                { exitResult = exitResult
+                , plannerOutput = executor.plannerOutput
+                }
+
+        -- Remove executor from active state
+        updatedModel =
+            { model | activeExecutors = Dict.remove taskIdStr model.activeExecutors }
+    in
+    when completionResult is
+        AgentManager.PlanReady fields ->
+            when model.registry is
+                Nothing ->
+                    { model = updatedModel
+                    , command = Logging.logError model.logger "Planner completed but registry not available" NoOp
+                    }
+
+                Just registry ->
+                    let
+                        mergeInto =
+                            \source target -> Dict.foldl Dict.set target source
+
+                        baseDict =
+                            Dict.empty
+                                |> Dict.set "summary" fields.summary
+                                |> mergeInto (indexedArrayToDict "requirement_" fields.requirements)
+                                |> mergeInto (indexedArrayToDict "acceptance_criteria_" fields.acceptanceCriteria)
+                                |> mergeInto (indexedArrayToDict "plan_step_" fields.plan)
+
+                        planningCompletedData =
+                            when fields.assignedAgent is
+                                Just agent ->
+                                    baseDict
+                                        |> Dict.set "assigned_agent" agent
+
+                                Nothing ->
+                                    baseDict
+
+                        ctx =
+                            makeApiContext model registry
+                    in
+                    { model = updatedModel
+                    , command =
+                        Cmd.batch
+                            [ Api.requestApplyPlan ctx taskId fields planningCompletedData (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                            , Logging.logInfo model.logger ("Planner produced plan for task " ++ taskIdStr) NoOp
+                            , broadcastToClients updatedModel "tasks_changed" Encode.null
+                            ]
+                    }
+
+        AgentManager.QuestionsReady questions ->
+            when model.registry is
+                Nothing ->
+                    { model = updatedModel
+                    , command = Logging.logError model.logger "Planner completed but registry not available" NoOp
+                    }
+
+                Just registry ->
+                    let
+                        questionsEventData =
+                            indexedArrayToDict "question_" questions
+                                |> Dict.set "questionCount" (String.fromInt (Array.length questions))
+
+                        ctx =
+                            makeApiContext model registry
+                    in
+                    { model = updatedModel
+                    , command =
+                        Cmd.batch
+                            [ Api.requestSetQuestions ctx taskId questions questionsEventData (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                            , Logging.logInfo model.logger ("Planner asked " ++ String.fromInt (Array.length questions) ++ " questions for task " ++ taskIdStr) NoOp
+                            , broadcastToClients updatedModel "tasks_changed" Encode.null
+                            ]
+                    }
+
+        AgentManager.PlannerExitError errMsg ->
+            when model.registry is
+                Nothing ->
+                    { model = updatedModel
+                    , command = Logging.logError model.logger ("Planner failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                    }
+
+                Just registry ->
+                    let
+                        planningFailedEvent =
+                            Just
+                                { eventType = PlanningFailed
+                                , data =
+                                    Dict.empty
+                                        |> Dict.set "error" ("Planner failed: " ++ errMsg)
+                                }
+
+                        ctx =
+                            makeApiContext model registry
+                    in
+                    { model = updatedModel
+                    , command =
+                        Cmd.batch
+                            [ Api.requestUpdateStatus ctx taskId (Types.Failed ("Planner failed: " ++ errMsg)) planningFailedEvent (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                            , Logging.logError model.logger ("Planner failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                            , broadcastToClients updatedModel "tasks_changed" Encode.null
+                            ]
+                    }
+
+        AgentManager.PlannerOutputMissing ->
+            -- Planner exited without calling planner-output tool - record failure
+            when model.registry is
+                Nothing ->
+                    { model = updatedModel
+                    , command = Logging.logError model.logger ("Planner exited without calling planner-output tool for task " ++ taskIdStr) NoOp
+                    }
+
+                Just registry ->
+                    let
+                        planningFailedEvent =
+                            Just
+                                { eventType = PlanningFailed
+                                , data =
+                                    Dict.empty
+                                        |> Dict.set "error" "Planner exited without calling planner-output tool"
+                                }
+
+                        ctx =
+                            makeApiContext model registry
+                    in
+                    { model = updatedModel
+                    , command =
+                        Cmd.batch
+                            [ Api.requestUpdateStatus ctx taskId (Types.Failed "Planner exited without calling planner-output tool") planningFailedEvent (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                            , Logging.logError model.logger ("Planner exited without calling planner-output tool for task " ++ taskIdStr) NoOp
+                            , broadcastToClients updatedModel "tasks_changed" Encode.null
+                            ]
+                    }
+
+
+{-| Handle user agent (non-system) completion.
+
+Uses AgentManager.processAgentCompletion to determine the result, then
+completes the handoff record and resolves any deferred responses.
+-}
+handleUserAgentComplete :
+    Model
+    -> TaskId
+    -> String
+    -> ExecutorState
+    -> Result String String
+    -> { model : Model, command : Cmd Msg }
+handleUserAgentComplete model taskId taskIdStr executor result =
+    let
+        completionResult =
+            AgentManager.processAgentCompletion
+                { exitResult = result
+                , completionReport = executor.completionReport
+                }
+
+        -- Check for pending deferred handoff response
+        maybeDeferredResponse =
+            Dict.get taskIdStr model.pendingHandoffResponses
+
+        -- Use the appropriate complete function based on whether this was a handoff
+        requestComplete =
+            when maybeDeferredResponse is
+                Just _ ->
+                    Api.requestCompleteHandoff
+
+                Nothing ->
+                    Api.requestCompleteAgent
+
+        -- Remove executor from active and clear pending response
+        updatedModel =
+            { model
+                | activeExecutors = Dict.remove taskIdStr model.activeExecutors
+                , pendingHandoffResponses = Dict.remove taskIdStr model.pendingHandoffResponses
+            }
+
+        -- Build the deferred response command if there's a pending response
+        deferredResponseCmd =
+            when maybeDeferredResponse is
+                Nothing ->
+                    Cmd.none
+
+                Just deferredResponse ->
+                    let
+                        rawOutput =
+                            when result is
+                                Ok text ->
+                                    text
+
+                                Err errMsg ->
+                                    "Agent failed: " ++ errMsg
+
+                        responseBody =
+                            Encode.object
+                                [ { key = "agent_name", value = Encode.string executor.agentName }
+                                , { key = "output", value = Encode.string rawOutput }
+                                ]
+                                |> Encode.encode 0
+                    in
+                    Api.sendApiResponse deferredResponse
+                        (Api.ApiSuccess { statusCode = 200, body = responseBody })
+    in
+    when completionResult is
+        AgentManager.CompletedWithReport _ ->
+            -- Completion report already handled status/output via tool; just complete handoff record timestamps
+            when model.registry is
+                Nothing ->
+                    { model = updatedModel
+                    , command = deferredResponseCmd
+                    }
+
+                Just registry ->
+                    let
+                        ctx =
+                            makeApiContext model registry
+
+                        rawOutput =
+                            when result is
+                                Ok text ->
+                                    text
+
+                                Err errMsg ->
+                                    "Agent exited with error: " ++ errMsg
+                    in
+                    { model = updatedModel
+                    , command =
+                        Cmd.batch
+                            [ requestComplete ctx taskId { output = rawOutput }
+                                (\apiResult -> GotInternalApiResult apiResult)
+                            , Logging.logInfo model.logger ("Agent completed for task " ++ taskIdStr ++ " (completion report received)") NoOp
+                            , deferredResponseCmd
+                            , broadcastToClients updatedModel "tasks_changed" Encode.null
+                            ]
+                    }
+
+        AgentManager.CompletedWithoutReport outputText ->
+            when model.registry is
+                Nothing ->
+                    { model = updatedModel
+                    , command =
+                        Cmd.batch
+                            [ Logging.logError model.logger "Agent completed but registry not available" NoOp
+                            , deferredResponseCmd
+                            ]
+                    }
+
+                Just registry ->
+                    let
+                        ctx =
+                            makeApiContext model registry
+                    in
+                    { model = updatedModel
+                    , command =
+                        Cmd.batch
+                            [ requestComplete ctx taskId { output = outputText }
+                                (\apiResult -> GotInternalApiResult apiResult)
+                            , Logging.logInfo model.logger ("Agent completed for task " ++ taskIdStr ++ " without completion report (output length: " ++ String.fromInt (String.unitLength outputText) ++ ")") NoOp
+                            , deferredResponseCmd
+                            , broadcastToClients updatedModel "tasks_changed" Encode.null
+                            ]
+                    }
+
+        AgentManager.AgentExitError errMsg ->
+            when model.registry is
+                Nothing ->
+                    { model = updatedModel
+                    , command =
+                        Cmd.batch
+                            [ Logging.logError model.logger ("Agent failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                            , deferredResponseCmd
+                            ]
+                    }
+
+                Just registry ->
+                    let
+                        ctx =
+                            makeApiContext model registry
+                    in
+                    { model = updatedModel
+                    , command =
+                        Cmd.batch
+                            [ requestComplete ctx taskId { output = "Agent failed: " ++ errMsg }
+                                (\apiResult -> GotInternalApiResult apiResult)
+                            , Logging.logError model.logger ("Agent failed for task " ++ taskIdStr ++ ": " ++ errMsg) NoOp
+                            , deferredResponseCmd
+                            , broadcastToClients updatedModel "tasks_changed" Encode.null
+                            ]
+                    }
 
 
 
@@ -2858,6 +3008,20 @@ This function is only called in code paths where a workspace config is loaded
 registryRootPath : Model -> Path
 registryRootPath model =
     Path.fromPosixString (workspaceRoot model ++ "/registry")
+
+
+{-| Build an ApiContext from the model and a registry.
+
+This is a convenience helper to avoid repeating the same record construction
+in every branch that needs a registry context.
+-}
+makeApiContext : Model -> Registry.Registry -> Api.ApiContext
+makeApiContext model registry =
+    { registry = registry
+    , filesystemPermission = model.filesystemPermission
+    , secureContext = model.secureContext
+    , registryRoot = registryRootPath model
+    }
 
 
 {-| Derive the upload directory from workspace root.
@@ -3154,3 +3318,15 @@ getSecureContext : GrenTask.Task Never SecureContext
 getSecureContext =
     Crypto.getSecureContext
         |> GrenTask.mapError (\{} -> Debug.todo "SecureContext failed")
+
+
+{-| Check whether a Maybe value is Just (contains a value).
+-}
+isJust : Maybe a -> Bool
+isJust maybe =
+    when maybe is
+        Just _ ->
+            True
+
+        Nothing ->
+            False

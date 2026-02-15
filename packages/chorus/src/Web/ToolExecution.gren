@@ -2,6 +2,7 @@ module Web.ToolExecution exposing
     ( ToolExecutionContext
     , ToolPermission(..)
     , checkPermission
+    , completionReportInputDecoder
     , requestExecuteTool
     )
 
@@ -38,7 +39,7 @@ import Tools.Json as ToolsJson
         , encodeAllToolsHelp
         )
 import Tools.Validation as Validation
-import Types exposing (EventType(..))
+import Types exposing (EventType(..), PlannerOutput(..))
 import Web.Api as Api
 
 
@@ -95,8 +96,8 @@ requestExecuteTool ctx requestBody toMsg =
                 |> GrenTask.perform toMsg
 
         Ok toolName ->
-            -- completion-report is always allowed (auto-granted)
-            if toolName == "completion-report" then
+            -- completion-report and planner-output are always allowed (auto-granted)
+            if toolName == "completion-report" || toolName == "planner-output" then
                 dispatchTool ctx toolName requestBody toMsg
             else
                 when checkPermission ctx.allowedTools toolName is
@@ -127,6 +128,9 @@ dispatchTool ctx toolName requestBody toMsg =
 
         "completion-report" ->
             dispatchCompletionReport ctx requestBody toMsg
+
+        "planner-output" ->
+            dispatchPlannerOutput requestBody toMsg
 
         "handoff" ->
             dispatchHandoffTool requestBody toMsg
@@ -394,30 +398,10 @@ completionReportInputDecoder =
             , blockedReason = blockedReason
             }
         )
-        (Decode.field "status" completionStatusStringDecoder)
+        (Decode.field "status" Types.completionStatusDecoder)
         (Decode.field "summary" Decode.string)
         (Decode.field "output" Decode.string)
         (Decode.maybe (Decode.field "blockedReason" Decode.string))
-
-
-completionStatusStringDecoder : Decode.Decoder Types.CompletionStatus
-completionStatusStringDecoder =
-    Decode.string
-        |> Decode.andThen
-            (\str ->
-                when str is
-                    "complete" ->
-                        Decode.succeed Types.ReportComplete
-
-                    "blocked" ->
-                        Decode.succeed Types.ReportBlocked
-
-                    "failed" ->
-                        Decode.succeed Types.ReportFailed
-
-                    _ ->
-                        Decode.fail ("Unknown completion status: " ++ str ++ ". Must be 'complete', 'blocked', or 'failed'.")
-            )
 
 
 {-| Execute a file tool task, encoding the result as an ApiResult.
@@ -489,4 +473,33 @@ dispatchHandoffTool requestBody toMsg =
                     , prompt = params.prompt
                     }
                 )
+                |> GrenTask.perform toMsg
+
+
+{-| Dispatch a planner-output tool request by returning a DeferredPlannerOutput result.
+
+The planner output is not applied here. Instead, a DeferredPlannerOutput result
+signals Main.gren to store the structured data on the executor state and apply
+it when the planner process exits.
+-}
+dispatchPlannerOutput : String -> (Api.ApiResult -> msg) -> Cmd msg
+dispatchPlannerOutput requestBody toMsg =
+    let
+        decodeResult =
+            Decode.decodeString Types.plannerOutputDecoder requestBody
+    in
+    when decodeResult is
+        Err err ->
+            GrenTask.succeed
+                (Api.ApiError
+                    { statusCode = 400
+                    , code = "BAD_REQUEST"
+                    , message = "Invalid planner-output: requires 'type' field (plan|questions|error) with corresponding data. Decode error: " ++ Decode.errorToString err
+                    }
+                )
+                |> GrenTask.perform toMsg
+
+        Ok plannerOutput ->
+            GrenTask.succeed
+                (Api.DeferredPlannerOutput plannerOutput)
                 |> GrenTask.perform toMsg

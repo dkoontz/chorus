@@ -7,6 +7,7 @@ module Types exposing
     , HandoffRecord
     , CompletionReport
     , CompletionStatus(..)
+    , PlannerOutput(..)
     , TaskStatus(..)
     , EventType(..)
     , SourceType(..)
@@ -33,6 +34,7 @@ module Types exposing
     , encodeMaybe
     , encodeHandoffRecord
     , encodeCompletionReport
+    , encodePlannerOutput
     , encodeAgentConfig
     , encodePlanningQuestion
     , encodeProviderType
@@ -50,6 +52,8 @@ module Types exposing
     , messageDecoder
     , handoffRecordDecoder
     , completionReportDecoder
+    , completionStatusDecoder
+    , plannerOutputDecoder
     , agentConfigDecoder
     , planningQuestionDecoder
     , providerTypeDecoder
@@ -195,6 +199,14 @@ type alias PlannedTask =
     }
 
 
+{-| Structured output submitted by the planner agent via the planner-output tool.
+-}
+type PlannerOutput
+    = PlanOutput PlanningFields
+    | QuestionsOutput (Array String)
+    | PlannerError String
+
+
 {-| Planning fields used when converting a DescriptionOnly task to Planned.
 -}
 type alias PlanningFields =
@@ -246,6 +258,7 @@ type EventType
     | AgentHandoffStarted
     | AgentHandoffCompleted
     | CompletionReportSubmitted
+    | PlannerOutputSubmitted
 
 
 {-| The source channel that originated a task.
@@ -762,6 +775,37 @@ encodeCompletionReport report =
         ]
 
 
+{-| Encode a PlannerOutput to JSON.
+
+Uses a "type" discriminator: "plan", "questions", or "error".
+-}
+encodePlannerOutput : PlannerOutput -> Encode.Value
+encodePlannerOutput output =
+    when output is
+        PlanOutput fields ->
+            Encode.object
+                [ { key = "type", value = Encode.string "plan" }
+                , { key = "summary", value = Encode.string fields.summary }
+                , { key = "requirements", value = Encode.array Encode.string fields.requirements }
+                , { key = "acceptanceCriteria", value = Encode.array Encode.string fields.acceptanceCriteria }
+                , { key = "plan", value = Encode.array Encode.string fields.plan }
+                , { key = "questions", value = Encode.array encodePlanningQuestion fields.questions }
+                , { key = "assignedAgent", value = encodeMaybe Encode.string fields.assignedAgent }
+                ]
+
+        QuestionsOutput questions ->
+            Encode.object
+                [ { key = "type", value = Encode.string "questions" }
+                , { key = "questions", value = Encode.array Encode.string questions }
+                ]
+
+        PlannerError error ->
+            Encode.object
+                [ { key = "type", value = Encode.string "error" }
+                , { key = "error", value = Encode.string error }
+                ]
+
+
 {-| Convert a CompletionStatus to its string representation.
 -}
 completionStatusToString : CompletionStatus -> String
@@ -1083,6 +1127,47 @@ completionReportDecoder =
         (Decode.field "summary" Decode.string)
         (Decode.field "output" Decode.string)
         (Decode.field "blockedReason" (Decode.maybe Decode.string))
+
+
+{-| Decode a PlannerOutput from JSON.
+
+Discriminated on "type" field: "plan", "questions", or "error".
+-}
+plannerOutputDecoder : Decoder PlannerOutput
+plannerOutputDecoder =
+    Decode.field "type" Decode.string
+        |> Decode.andThen
+            (\outputType ->
+                when outputType is
+                    "plan" ->
+                        Decode.map5
+                            (\summary requirements acceptanceCriteria plan assignedAgent ->
+                                PlanOutput
+                                    { summary = summary
+                                    , requirements = requirements
+                                    , acceptanceCriteria = acceptanceCriteria
+                                    , plan = plan
+                                    , questions = []
+                                    , assignedAgent = assignedAgent
+                                    }
+                            )
+                            (Decode.field "summary" Decode.string)
+                            (Decode.field "requirements" (Decode.array Decode.string))
+                            (Decode.field "acceptanceCriteria" (Decode.array Decode.string))
+                            (Decode.field "plan" (Decode.array Decode.string))
+                            (Decode.maybe (Decode.field "assignedAgent" Decode.string))
+
+                    "questions" ->
+                        Decode.field "questions" (Decode.array Decode.string)
+                            |> Decode.map QuestionsOutput
+
+                    "error" ->
+                        Decode.field "error" Decode.string
+                            |> Decode.map PlannerError
+
+                    _ ->
+                        Decode.fail ("Unknown planner output type: " ++ outputType)
+            )
 
 
 completionStatusDecoder : Decoder CompletionStatus
@@ -1595,6 +1680,9 @@ eventTypeToString eventType =
         CompletionReportSubmitted ->
             "completion_report_submitted"
 
+        PlannerOutputSubmitted ->
+            "planner_output_submitted"
+
 
 {-| Parse an EventType from its string representation.
 -}
@@ -1639,6 +1727,9 @@ eventTypeFromString str =
 
         "completion_report_submitted" ->
             Just CompletionReportSubmitted
+
+        "planner_output_submitted" ->
+            Just PlannerOutputSubmitted
 
         _ ->
             Nothing
