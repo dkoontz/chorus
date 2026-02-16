@@ -11,6 +11,7 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Json.Decode
+import Set exposing (Set)
 import Types exposing (AgentConfig(..), AgentProvider(..), ProviderConfig)
 
 
@@ -55,6 +56,15 @@ type alias Props msg =
     , onSaveAgent : msg
     , onDeleteAgent : String -> msg
     , onNoOp : msg
+    , bulkProviderMode : Bool
+    , selectedAgents : Set String
+    , bulkProvider : String
+    , bulkModel : String
+    , onToggleBulkProviderMode : msg
+    , onToggleAgentSelected : String -> msg
+    , onUpdateBulkProvider : String -> msg
+    , onUpdateBulkModel : String -> msg
+    , onApplyBulkProvider : msg
     }
 
 
@@ -62,7 +72,8 @@ view : Props msg -> Html msg
 view props =
     div [ class "agents-page" ]
         [ viewAgentsHeader props
-        , viewAgentsList props
+        , viewBulkEditBar props
+        , viewAgentsTable props
         , viewAgentFormModal props
         ]
 
@@ -71,13 +82,73 @@ viewAgentsHeader : Props msg -> Html msg
 viewAgentsHeader props =
     div [ class "agents-header" ]
         [ h2 [] [ text "Agents" ]
-        , button [ class "btn btn-primary", onClick props.onOpenCreateForm ]
-            [ text "+ New Agent" ]
+        , div [ class "agents-header-actions" ]
+            [ button
+                [ class "btn btn-secondary"
+                , onClick props.onToggleBulkProviderMode
+                ]
+                [ text
+                    (if props.bulkProviderMode then
+                        "Cancel Bulk Edit"
+                     else
+                        "Set Provider"
+                    )
+                ]
+            , button [ class "btn btn-primary", onClick props.onOpenCreateForm ]
+                [ text "+ New Agent" ]
+            ]
         ]
 
 
-viewAgentsList : Props msg -> Html msg
-viewAgentsList props =
+viewBulkEditBar : Props msg -> Html msg
+viewBulkEditBar props =
+    if not props.bulkProviderMode then
+        text ""
+    else
+        div [ class "bulk-edit-bar" ]
+            [ div [ class "bulk-edit-fields" ]
+                [ div [ class "bulk-edit-field" ]
+                    [ label [ for "bulk-provider" ] [ text "Provider" ]
+                    , select
+                        [ id "bulk-provider"
+                        , onInput props.onUpdateBulkProvider
+                        ]
+                        ([ option [ value "", selected (props.bulkProvider == "") ] [ text "-- Select Provider --" ]
+                         ]
+                            ++ Array.map
+                                (\p ->
+                                    option
+                                        [ value p.name
+                                        , selected (props.bulkProvider == p.name)
+                                        ]
+                                        [ text p.name ]
+                                )
+                                props.providers
+                        )
+                    ]
+                , div [ class "bulk-edit-field" ]
+                    [ label [ for "bulk-model" ] [ text "Model" ]
+                    , input
+                        [ id "bulk-model"
+                        , type_ "text"
+                        , value props.bulkModel
+                        , onInput props.onUpdateBulkModel
+                        , placeholder "e.g. claude-sonnet-4-5-20250929"
+                        ]
+                        []
+                    ]
+                , button
+                    [ class "btn btn-primary"
+                    , onClick props.onApplyBulkProvider
+                    , disabled (Set.isEmpty props.selectedAgents)
+                    ]
+                    [ text "Apply" ]
+                ]
+            ]
+
+
+viewAgentsTable : Props msg -> Html msg
+viewAgentsTable props =
     if props.loading && Array.isEmpty props.agents then
         div [ class "loading" ] [ text "Loading agents..." ]
     else if Array.isEmpty props.agents then
@@ -86,12 +157,29 @@ viewAgentsList props =
             , p [] [ text "Create an agent to get started." ]
             ]
     else
-        div [ class "agents-list" ]
-            (Array.map (viewAgentCard props) props.agents)
+        table [ class "agents-table" ]
+            [ thead []
+                [ tr []
+                    (( if props.bulkProviderMode then
+                        [ th [ class "agents-table-checkbox-col" ] [] ]
+                       else
+                        []
+                     )
+                        ++ [ th [] [ text "Name" ]
+                           , th [] [ text "Provider" ]
+                           , th [] [ text "Status" ]
+                           , th [] [ text "Allowed Tools" ]
+                           , th [ class "agents-table-actions-col" ] []
+                           ]
+                    )
+                ]
+            , tbody []
+                (Array.map (viewAgentRow props) props.agents)
+            ]
 
 
-viewAgentCard : Props msg -> AgentConfig -> Html msg
-viewAgentCard props agent =
+viewAgentRow : Props msg -> AgentConfig -> Html msg
+viewAgentRow props agent =
     let
         name =
             Types.agentConfigName agent
@@ -99,7 +187,7 @@ viewAgentCard props agent =
         providerNames =
             Array.map .name props.providers
 
-        { instructions, providerText, toolsText, isValid } =
+        { providerText, toolsText, isValid } =
             when agent is
                 UserDefinedAgent r ->
                     let
@@ -119,8 +207,7 @@ viewAgentCard props agent =
                                 ProviderRef pName ->
                                     Array.any (\p -> p == pName) providerNames
                     in
-                    { instructions = r.instructions
-                    , providerText =
+                    { providerText =
                         providerName
                             ++ (when r.model is
                                     Just m ->
@@ -133,61 +220,62 @@ viewAgentCard props agent =
                     , isValid = valid
                     }
 
-                InternalAgent r ->
-                    { instructions = r.instructions
-                    , providerText = "internal"
+                InternalAgent _ ->
+                    { providerText = "internal"
                     , toolsText = ""
                     , isValid = True
                     }
 
-        validityIndicator =
+        statusIcon =
             if isValid then
-                span [ class "validity-badge valid", title "Provider configured" ] [ text "Ready" ]
+                span
+                    [ class "status-icon status-icon-valid"
+                    , title "Provider configured"
+                    ]
+                    [ text "\u{2713}" ]
             else
-                span [ class "validity-badge invalid", title "Provider not configured or missing" ] [ text "No Provider" ]
+                span
+                    [ class "status-icon status-icon-invalid"
+                    , title "Provider not configured or missing"
+                    ]
+                    [ text "\u{26A0}" ]
+
+        isSelected =
+            Set.member name props.selectedAgents
     in
-    div [ class "agent-card card" ]
-        [ div [ class "agent-card-header" ]
-            [ div [ class "agent-card-title" ]
-                [ h3 [ class "agent-card-name" ] [ text name ]
-                , validityIndicator
-                ]
-            , div [ class "agent-card-actions" ]
-                [ button
-                    [ class "btn btn-small btn-secondary"
-                    , onClick (props.onOpenEditForm agent)
+    tr [ class "agents-table-row" ]
+        (( if props.bulkProviderMode then
+            [ td [ class "agents-table-checkbox-col" ]
+                [ input
+                    [ type_ "checkbox"
+                    , Html.Attributes.checked isSelected
+                    , onClick (props.onToggleAgentSelected name)
                     ]
-                    [ text "Edit" ]
-                , button
-                    [ class "btn btn-small btn-danger"
-                    , onClick (props.onDeleteAgent name)
-                    ]
-                    [ text "Delete" ]
+                    []
                 ]
             ]
-        , dl [ class "info-list" ]
-            [ dt [] [ text "Provider" ]
-            , dd [ class "monospace" ] [ text providerText ]
-            , dt [] [ text "Allowed Tools" ]
-            , dd [ class "monospace" ] [ text toolsText ]
-            ]
-        , div [ class "agent-card-instructions" ]
-            [ h4 [] [ text "Instructions" ]
-            , if String.isEmpty instructions then
-                p [ class "empty-state-text" ] [ text "No instructions" ]
-              else
-                pre [ class "agent-instructions-preview" ]
-                    [ text (truncateInstructions 300 instructions) ]
-            ]
-        ]
-
-
-truncateInstructions : Int -> String -> String
-truncateInstructions maxLen str =
-    if String.unitLength str <= maxLen then
-        str
-    else
-        String.takeFirst maxLen str ++ "..."
+           else
+            []
+         )
+            ++ [ td [ class "agents-table-name" ] [ text name ]
+               , td [ class "agents-table-provider" ]
+                    [ span
+                        [ class "provider-link"
+                        , onClick (props.onOpenEditForm agent)
+                        ]
+                        [ text providerText ]
+                    ]
+               , td [ class "agents-table-status" ] [ statusIcon ]
+               , td [ class "agents-table-tools monospace" ] [ text toolsText ]
+               , td [ class "agents-table-actions" ]
+                    [ button
+                        [ class "btn btn-small btn-danger"
+                        , onClick (props.onDeleteAgent name)
+                        ]
+                        [ text "Delete" ]
+                    ]
+               ]
+        )
 
 
 viewAgentFormModal : Props msg -> Html msg

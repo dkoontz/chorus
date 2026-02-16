@@ -1252,6 +1252,165 @@ body {
     flex: 1;
 }
 
+/* Agents Table */
+.agents-page {
+    max-width: 900px;
+}
+
+.agents-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.agents-header h2 {
+    font-size: 24px;
+}
+
+.agents-header-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.agents-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+
+.agents-table thead {
+    background: var(--color-bg);
+}
+
+.agents-table th {
+    text-align: left;
+    padding: 10px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.agents-table td {
+    padding: 10px 12px;
+    font-size: 14px;
+    border-bottom: 1px solid var(--color-border);
+    vertical-align: middle;
+}
+
+.agents-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.agents-table-row:hover {
+    background: var(--color-bg);
+}
+
+.agents-table-checkbox-col {
+    width: 40px;
+    text-align: center;
+}
+
+.agents-table-name {
+    font-weight: 500;
+}
+
+.agents-table-provider {
+    max-width: 200px;
+}
+
+.provider-link {
+    color: var(--color-primary);
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.provider-link:hover {
+    text-decoration: underline;
+}
+
+.agents-table-status {
+    width: 60px;
+    text-align: center;
+}
+
+.status-icon {
+    font-size: 16px;
+    cursor: default;
+}
+
+.status-icon-valid {
+    color: var(--color-success);
+}
+
+.status-icon-invalid {
+    color: var(--color-warning);
+}
+
+.agents-table-tools {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+}
+
+.agents-table-actions-col {
+    width: 70px;
+}
+
+.agents-table-actions {
+    text-align: right;
+}
+
+/* Bulk Edit Bar */
+.bulk-edit-bar {
+    background: var(--color-surface);
+    border: 1px solid var(--color-primary);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow);
+}
+
+.bulk-edit-fields {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+}
+
+.bulk-edit-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.bulk-edit-field label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+}
+
+.bulk-edit-field select,
+.bulk-edit-field input[type="text"] {
+    padding: 6px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-family: inherit;
+    min-width: 180px;
+}
+
+.bulk-edit-field select:focus,
+.bulk-edit-field input[type="text"]:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .header-content {

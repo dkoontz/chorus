@@ -95,6 +95,10 @@ type alias Model =
     , websocketConnection : WebSocketConnectionState
     , websocketUrl : String
     , initialUrl : Url
+    , bulkProviderMode : Bool
+    , selectedAgents : Set String
+    , bulkProvider : String
+    , bulkModel : String
     }
 
 
@@ -191,6 +195,13 @@ type Msg
     | UpdateAgentModel String
     | SaveAgent
     | DeleteAgent String
+      -- Agent bulk provider
+    | ToggleBulkProviderMode
+    | ToggleAgentSelected String
+    | UpdateBulkProvider String
+    | UpdateBulkModel String
+    | ApplyBulkProvider
+    | GotBulkAgentSaved (Result Http.Error AgentConfig)
       -- Provider CRUD
     | GotProviders (Result Http.Error (Array ProviderConfig))
     | GotProviderSaved (Result Http.Error ProviderConfig)
@@ -296,6 +307,10 @@ init _ url key =
             , websocketConnection = WsNotConnected
             , websocketUrl = wsUrl
             , initialUrl = url
+            , bulkProviderMode = False
+            , selectedAgents = Set.empty
+            , bulkProvider = ""
+            , bulkModel = ""
             }
     in
     { model = model
@@ -424,6 +439,10 @@ update msg model =
                     , startingAgent = Nothing
                     , draftAnswers = []
                     , expandedEvents = Set.empty
+                    , bulkProviderMode = False
+                    , selectedAgents = Set.empty
+                    , bulkProvider = ""
+                    , bulkModel = ""
                     , settingsForm =
                         if page == SystemSettingsPage then
                             when model.workspaceStatus is
@@ -1053,6 +1072,118 @@ update msg model =
             { model = model
             , command = Api.deleteAgent name (\result -> GotAgentDeleted { name = name, result = result })
             }
+
+        -- Agent bulk provider
+
+        ToggleBulkProviderMode ->
+            { model =
+                { model
+                    | bulkProviderMode = not model.bulkProviderMode
+                    , selectedAgents = Set.empty
+                    , bulkProvider = ""
+                    , bulkModel = ""
+                }
+            , command = Cmd.none
+            }
+
+        ToggleAgentSelected agentName ->
+            { model =
+                { model
+                    | selectedAgents =
+                        Set.toggle agentName model.selectedAgents
+                }
+            , command = Cmd.none
+            }
+
+        UpdateBulkProvider provider ->
+            { model = { model | bulkProvider = provider }
+            , command = Cmd.none
+            }
+
+        UpdateBulkModel bulkModelStr ->
+            { model = { model | bulkModel = bulkModelStr }
+            , command = Cmd.none
+            }
+
+        ApplyBulkProvider ->
+            let
+                selectedNames =
+                    Set.toArray model.selectedAgents
+
+                agentProvider =
+                    if String.isEmpty (String.trim model.bulkProvider) then
+                        NotConfigured
+                    else
+                        ProviderRef (String.trim model.bulkProvider)
+
+                agentModel =
+                    if String.isEmpty (String.trim model.bulkModel) then
+                        Nothing
+                    else
+                        Just (String.trim model.bulkModel)
+
+                commands =
+                    selectedNames
+                        |> Array.mapAndKeepJust
+                            (\name ->
+                                Array.findFirst (\a -> Types.agentConfigName a == name) model.agents
+                                    |> Maybe.map .value
+                                    |> Maybe.andThen
+                                        (\agent ->
+                                            when agent is
+                                                UserDefinedAgent r ->
+                                                    let
+                                                        updatedConfig =
+                                                            UserDefinedAgent
+                                                                { r
+                                                                    | provider = agentProvider
+                                                                    , model = agentModel
+                                                                }
+                                                    in
+                                                    Just (Api.updateAgent name updatedConfig GotBulkAgentSaved)
+
+                                                InternalAgent _ ->
+                                                    Nothing
+                                        )
+                            )
+            in
+            if Array.isEmpty commands then
+                { model = model
+                , command = Cmd.none
+                }
+            else
+                { model = model
+                , command = Cmd.batch commands
+                }
+
+        GotBulkAgentSaved result ->
+            when result is
+                Ok savedAgent ->
+                    let
+                        savedName =
+                            Types.agentConfigName savedAgent
+
+                        updatedAgents =
+                            if Array.any (\a -> Types.agentConfigName a == savedName) model.agents then
+                                Array.map
+                                    (\a ->
+                                        if Types.agentConfigName a == savedName then
+                                            savedAgent
+                                        else
+                                            a
+                                    )
+                                    model.agents
+                            else
+                                Array.pushLast savedAgent model.agents
+                    in
+                    { model = { model | agents = updatedAgents }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = addErrorNotification (httpErrorToString err) model
+                    , command = Cmd.none
+                    }
 
         -- Provider CRUD
 
@@ -2091,6 +2222,15 @@ viewMain model =
                     , onSaveAgent = SaveAgent
                     , onDeleteAgent = DeleteAgent
                     , onNoOp = NoOp
+                    , bulkProviderMode = model.bulkProviderMode
+                    , selectedAgents = model.selectedAgents
+                    , bulkProvider = model.bulkProvider
+                    , bulkModel = model.bulkModel
+                    , onToggleBulkProviderMode = ToggleBulkProviderMode
+                    , onToggleAgentSelected = ToggleAgentSelected
+                    , onUpdateBulkProvider = UpdateBulkProvider
+                    , onUpdateBulkModel = UpdateBulkModel
+                    , onApplyBulkProvider = ApplyBulkProvider
                     }
 
             ProvidersPage ->
