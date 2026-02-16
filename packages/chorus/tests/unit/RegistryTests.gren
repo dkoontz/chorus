@@ -16,6 +16,8 @@ tests =
     [ testTaskEncodeDecode
     , testStatusPending
     , testStatusActive
+    , testStatusPlanning
+    , testStatusWaiting
     , testStatusFailed
     , testSourceInfoEncodeDecode
     , testAttachmentRoundTrip
@@ -30,8 +32,8 @@ tests =
     , testPlannedTaskWithHandoffFieldsEncodeDecode
     , testPlanTaskCarriesHandoffFields
     , testTaskCurrentAgentAccessor
+    , testTaskCurrentAgentDerivedFromStatus
     , testTaskAgentChainAccessor
-    , testSetCurrentAgentMutator
     , testSetAgentChainMutator
     , testInternalAgentEncodeDecode
     , testUserDefinedAgentEncodeDecodeWithoutModel
@@ -107,7 +109,6 @@ testTaskEncodeDecode =
                         }
 
                     , attachments = []
-                    , currentAgent = Nothing
                     , agentChain = []
                     }
 
@@ -141,7 +142,23 @@ testStatusActive : { name : String, run : Task.Task String {} }
 testStatusActive =
     { name = "Active status encodes and decodes"
     , run =
-        testStatusRoundTrip Active
+        testStatusRoundTrip (Active { agentName = "test-agent" })
+    }
+
+
+testStatusPlanning : { name : String, run : Task.Task String {} }
+testStatusPlanning =
+    { name = "Planning status encodes and decodes with agent"
+    , run =
+        testStatusRoundTrip (Planning { agentName = "task-validator" })
+    }
+
+
+testStatusWaiting : { name : String, run : Task.Task String {} }
+testStatusWaiting =
+    { name = "Waiting status encodes and decodes with agent"
+    , run =
+        testStatusRoundTrip (Waiting { agentName = "developer-agent" })
     }
 
 
@@ -170,7 +187,6 @@ testStatusRoundTrip status =
                     , conversationId = Nothing
                     }
                 , attachments = []
-                , currentAgent = Nothing
                 , agentChain = []
                 }
 
@@ -211,7 +227,6 @@ testSourceInfoEncodeDecode =
                         }
 
                     , attachments = []
-                    , currentAgent = Nothing
                     , agentChain = []
                     }
 
@@ -270,7 +285,6 @@ testAttachmentRoundTrip =
                         }
 
                     , attachments = [ attachment1, attachment2 ]
-                    , currentAgent = Nothing
                     , agentChain = []
                     }
 
@@ -402,7 +416,6 @@ testTaskEncodeDecodeWithPlanningFields =
                         }
 
                     , attachments = []
-                    , currentAgent = Nothing
                     , agentChain = []
                     , summary = "Build a REST API for task management"
                     , requirements = [ "Support CRUD operations", "Use JSON format" ]
@@ -439,7 +452,7 @@ testDescriptionOnlyRoundTrip =
                 DescriptionOnly
                     { id = testTaskId "desc-only"
                     , description = "Simple task"
-                    , status = Active
+                    , status = Active { agentName = "test-agent" }
                     , createdAt = Time.millisToPosix 1707048600000
                     , updatedAt = Time.millisToPosix 1707048600000
                     , sessionId = Just (testSessionId "sess-1")
@@ -450,7 +463,6 @@ testDescriptionOnlyRoundTrip =
                         }
 
                     , attachments = []
-                    , currentAgent = Nothing
                     , agentChain = []
                     }
 
@@ -561,7 +573,7 @@ testTaskWithHandoffFieldsEncodeDecode =
                 DescriptionOnly
                     { id = testTaskId "handoff-test"
                     , description = "Test handoff fields"
-                    , status = Active
+                    , status = Active { agentName = "editor" }
                     , createdAt = Time.millisToPosix 1707048500000
                     , updatedAt = Time.millisToPosix 1707048700000
                     , sessionId = Nothing
@@ -572,7 +584,6 @@ testTaskWithHandoffFieldsEncodeDecode =
                         }
 
                     , attachments = []
-                    , currentAgent = Just "editor"
                     , agentChain = [ handoffRecord ]
                     }
 
@@ -623,7 +634,7 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
                 Planned
                     { id = testTaskId "planned-handoff-test"
                     , description = "Test planned task with handoff"
-                    , status = Active
+                    , status = Active { agentName = "writer" }
                     , createdAt = Time.millisToPosix 1707048500000
                     , updatedAt = Time.millisToPosix 1707048700000
                     , sessionId = Nothing
@@ -634,7 +645,6 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
                         }
 
                     , attachments = []
-                    , currentAgent = Just "writer"
                     , agentChain = [ handoffRecord ]
                     , summary = "Test summary"
                     , requirements = [ "Req 1" ]
@@ -676,7 +686,7 @@ testPlannedTaskWithHandoffFieldsEncodeDecode =
 
 testPlanTaskCarriesHandoffFields : { name : String, run : Task.Task String {} }
 testPlanTaskCarriesHandoffFields =
-    { name = "planTask carries forward currentAgent and agentChain"
+    { name = "planTask carries forward agent status and agentChain"
     , run =
         let
             handoffRecord =
@@ -692,7 +702,7 @@ testPlanTaskCarriesHandoffFields =
                 DescriptionOnly
                     { id = testTaskId "plan-carry"
                     , description = "Test carry forward"
-                    , status = Active
+                    , status = Active { agentName = "researcher" }
                     , createdAt = Time.millisToPosix 1707048500000
                     , updatedAt = Time.millisToPosix 1707048600000
                     , sessionId = Nothing
@@ -703,7 +713,6 @@ testPlanTaskCarriesHandoffFields =
                         }
 
                     , attachments = []
-                    , currentAgent = Just "researcher"
                     , agentChain = [ handoffRecord ]
                     }
 
@@ -735,21 +744,20 @@ testPlanTaskCarriesHandoffFields =
 
 testTaskCurrentAgentAccessor : { name : String, run : Task.Task String {} }
 testTaskCurrentAgentAccessor =
-    { name = "taskCurrentAgent accessor works for both task types"
+    { name = "taskCurrentAgent derives agent from status for both task types"
     , run =
         let
             descTask =
                 DescriptionOnly
                     { id = testTaskId "t1"
                     , description = "Test"
-                    , status = Pending
+                    , status = Active { agentName = "writer" }
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
 
                     , attachments = []
-                    , currentAgent = Just "writer"
                     , agentChain = []
                     }
 
@@ -757,14 +765,13 @@ testTaskCurrentAgentAccessor =
                 Planned
                     { id = testTaskId "t2"
                     , description = "Test"
-                    , status = Active
+                    , status = Active { agentName = "editor" }
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
 
                     , attachments = []
-                    , currentAgent = Just "editor"
                     , agentChain = []
                     , summary = ""
                     , requirements = []
@@ -776,6 +783,70 @@ testTaskCurrentAgentAccessor =
         in
         expectEqual (Just "writer") (Types.taskCurrentAgent descTask)
             |> Task.andThen (\_ -> expectEqual (Just "editor") (Types.taskCurrentAgent plannedTask))
+    }
+
+
+testTaskCurrentAgentDerivedFromStatus : { name : String, run : Task.Task String {} }
+testTaskCurrentAgentDerivedFromStatus =
+    { name = "taskCurrentAgent returns Nothing for at-rest statuses"
+    , run =
+        let
+            pendingTask =
+                DescriptionOnly
+                    { id = testTaskId "t-pending"
+                    , description = "Test"
+                    , status = Pending
+                    , createdAt = Time.millisToPosix 0
+                    , updatedAt = Time.millisToPosix 0
+                    , sessionId = Nothing
+                    , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
+                    , attachments = []
+                    , agentChain = []
+                    }
+
+            readyTask =
+                DescriptionOnly
+                    { id = testTaskId "t-ready"
+                    , description = "Test"
+                    , status = ReadyToStart
+                    , createdAt = Time.millisToPosix 0
+                    , updatedAt = Time.millisToPosix 0
+                    , sessionId = Nothing
+                    , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
+                    , attachments = []
+                    , agentChain = []
+                    }
+
+            planningTask =
+                DescriptionOnly
+                    { id = testTaskId "t-planning"
+                    , description = "Test"
+                    , status = Planning { agentName = "task-validator" }
+                    , createdAt = Time.millisToPosix 0
+                    , updatedAt = Time.millisToPosix 0
+                    , sessionId = Nothing
+                    , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
+                    , attachments = []
+                    , agentChain = []
+                    }
+
+            waitingTask =
+                DescriptionOnly
+                    { id = testTaskId "t-waiting"
+                    , description = "Test"
+                    , status = Waiting { agentName = "developer" }
+                    , createdAt = Time.millisToPosix 0
+                    , updatedAt = Time.millisToPosix 0
+                    , sessionId = Nothing
+                    , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
+                    , attachments = []
+                    , agentChain = []
+                    }
+        in
+        expectEqual Nothing (Types.taskCurrentAgent pendingTask)
+            |> Task.andThen (\_ -> expectEqual Nothing (Types.taskCurrentAgent readyTask))
+            |> Task.andThen (\_ -> expectEqual (Just "task-validator") (Types.taskCurrentAgent planningTask))
+            |> Task.andThen (\_ -> expectEqual (Just "developer") (Types.taskCurrentAgent waitingTask))
     }
 
 
@@ -806,14 +877,13 @@ testTaskAgentChainAccessor =
                 DescriptionOnly
                     { id = testTaskId "chain-test"
                     , description = "Test"
-                    , status = Active
+                    , status = Active { agentName = "editor" }
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
 
                     , attachments = []
-                    , currentAgent = Just "editor"
                     , agentChain = [ record1, record2 ]
                     }
         in
@@ -849,37 +919,6 @@ testTaskAgentChainAccessor =
     }
 
 
-testSetCurrentAgentMutator : { name : String, run : Task.Task String {} }
-testSetCurrentAgentMutator =
-    { name = "setCurrentAgent mutator works correctly"
-    , run =
-        let
-            task =
-                DescriptionOnly
-                    { id = testTaskId "mutator-test"
-                    , description = "Test"
-                    , status = Pending
-                    , createdAt = Time.millisToPosix 0
-                    , updatedAt = Time.millisToPosix 0
-                    , sessionId = Nothing
-                    , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
-
-                    , attachments = []
-                    , currentAgent = Nothing
-                    , agentChain = []
-                    }
-
-            updated =
-                Types.setCurrentAgent (Just "writer") task
-
-            cleared =
-                Types.setCurrentAgent Nothing updated
-        in
-        expectEqual (Just "writer") (Types.taskCurrentAgent updated)
-            |> Task.andThen (\_ -> expectEqual Nothing (Types.taskCurrentAgent cleared))
-    }
-
-
 testSetAgentChainMutator : { name : String, run : Task.Task String {} }
 testSetAgentChainMutator =
     { name = "setAgentChain mutator works for both task types"
@@ -905,7 +944,6 @@ testSetAgentChainMutator =
                     , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
 
                     , attachments = []
-                    , currentAgent = Nothing
                     , agentChain = []
                     }
 
@@ -913,14 +951,13 @@ testSetAgentChainMutator =
                 Planned
                     { id = testTaskId "chain-mutator-test-2"
                     , description = "Test"
-                    , status = Active
+                    , status = Active { agentName = "test-agent" }
                     , createdAt = Time.millisToPosix 0
                     , updatedAt = Time.millisToPosix 0
                     , sessionId = Nothing
                     , source = { sourceType = TestSource, userId = "test", conversationId = Nothing }
 
                     , attachments = []
-                    , currentAgent = Nothing
                     , agentChain = []
                     , summary = ""
                     , requirements = []

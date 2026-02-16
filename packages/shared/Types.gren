@@ -8,6 +8,7 @@ module Types exposing
     , CompletionReport
     , CompletionStatus(..)
     , PlannerOutput(..)
+    , AgentInfo
     , TaskStatus(..)
     , EventType(..)
     , SourceType(..)
@@ -81,12 +82,12 @@ module Types exposing
     , planTask
     , setTaskStatus
     , setAttachments
-    , setCurrentAgent
     , setAgentChain
     -- Helpers
     , statusToString
     , statusFromString
     , statusEquals
+    , statusAgentName
     , completionStatusToString
     , eventTypeToString
     , eventTypeFromString
@@ -167,7 +168,6 @@ type alias DescriptionOnlyTask =
     , sessionId : Maybe SessionId
     , source : SourceInfo
     , attachments : Array Attachment
-    , currentAgent : Maybe String
     , agentChain : Array HandoffRecord
     }
 
@@ -191,7 +191,6 @@ type alias PlannedTask =
     , sessionId : Maybe SessionId
     , source : SourceInfo
     , attachments : Array Attachment
-    , currentAgent : Maybe String
     , agentChain : Array HandoffRecord
     , summary : String
     , requirements : Array String
@@ -232,17 +231,29 @@ type alias Attachment =
     }
 
 
+{-| Identity of the agent operating on a task. Using a record instead
+of a bare String makes it extensible — additional agent-related fields
+(e.g., sessionId) can be added later without changing every pattern match.
+-}
+type alias AgentInfo =
+    { agentName : String
+    }
+
+
 {-| Task lifecycle status.
+
+States where an agent is active carry an AgentInfo; at-rest states don't.
+Transitioning to an at-rest state inherently drops the agent — no cleanup needed.
 -}
 type TaskStatus
-    = Pending        -- created but session not started
-    | Planning       -- being analyzed by planning agent
-    | AwaitingInput  -- planning agent returned questions for user
-    | ReadyToStart   -- plan complete, ready to start
-    | Active         -- session is currently processing
-    | Waiting        -- session idle, ready for more input
-    | Completed      -- finished successfully
-    | Failed String  -- finished with error message
+    = Pending              -- created but session not started
+    | Planning AgentInfo   -- being analyzed by planning agent
+    | AwaitingInput        -- planning agent returned questions for user
+    | ReadyToStart         -- plan complete, ready to start
+    | Active AgentInfo     -- session is currently processing
+    | Waiting AgentInfo    -- session idle, ready for more input (preserved for resume/handoff)
+    | Completed            -- finished successfully
+    | Failed String        -- finished with error message
 
 
 {-| The type of event recorded in task history.
@@ -495,16 +506,12 @@ taskAttachments task =
             t.attachments
 
 
-{-| Get the current agent assigned to a task.
+{-| Get the current agent assigned to a task. Derived from the task's status:
+active states (Planning, Active, Waiting) carry the agent; at-rest states don't.
 -}
 taskCurrentAgent : Task -> Maybe String
 taskCurrentAgent task =
-    when task is
-        DescriptionOnly t ->
-            t.currentAgent
-
-        Planned t ->
-            t.currentAgent
+    statusAgentName (taskStatus task)
 
 
 {-| Get the agent chain (hand-off history) of a task.
@@ -575,7 +582,6 @@ planTask task fields =
                 , sessionId = t.sessionId
                 , source = t.source
                 , attachments = t.attachments
-                , currentAgent = t.currentAgent
                 , agentChain = t.agentChain
                 , summary = fields.summary
                 , requirements = fields.requirements
@@ -619,18 +625,6 @@ setAttachments attachments task =
 
         Planned t ->
             Planned { t | attachments = attachments }
-
-
-{-| Set the current agent on a task.
--}
-setCurrentAgent : Maybe String -> Task -> Task
-setCurrentAgent agent task =
-    when task is
-        DescriptionOnly t ->
-            DescriptionOnly { t | currentAgent = agent }
-
-        Planned t ->
-            Planned { t | currentAgent = agent }
 
 
 {-| Set the agent chain (hand-off history) on a task.
@@ -716,7 +710,6 @@ encodeTask task =
                 , { key = "sessionId", value = encodeMaybe Id.encodeSessionId t.sessionId }
                 , { key = "source", value = encodeSourceInfo t.source }
                 , { key = "attachments", value = Encode.array encodeAttachment t.attachments }
-                , { key = "currentAgent", value = encodeMaybe Encode.string t.currentAgent }
                 , { key = "agentChain", value = Encode.array encodeHandoffRecord t.agentChain }
                 ]
 
@@ -731,7 +724,6 @@ encodeTask task =
                 , { key = "sessionId", value = encodeMaybe Id.encodeSessionId t.sessionId }
                 , { key = "source", value = encodeSourceInfo t.source }
                 , { key = "attachments", value = Encode.array encodeAttachment t.attachments }
-                , { key = "currentAgent", value = encodeMaybe Encode.string t.currentAgent }
                 , { key = "agentChain", value = Encode.array encodeHandoffRecord t.agentChain }
                 , { key = "summary", value = Encode.string t.summary }
                 , { key = "requirements", value = Encode.array Encode.string t.requirements }
@@ -842,9 +834,10 @@ encodeStatus status =
                 [ { key = "type", value = Encode.string "pending" }
                 ]
 
-        Planning ->
+        Planning info ->
             Encode.object
                 [ { key = "type", value = Encode.string "planning" }
+                , { key = "agent", value = Encode.string info.agentName }
                 ]
 
         AwaitingInput ->
@@ -857,14 +850,16 @@ encodeStatus status =
                 [ { key = "type", value = Encode.string "planned" }
                 ]
 
-        Active ->
+        Active info ->
             Encode.object
                 [ { key = "type", value = Encode.string "active" }
+                , { key = "agent", value = Encode.string info.agentName }
                 ]
 
-        Waiting ->
+        Waiting info ->
             Encode.object
                 [ { key = "type", value = Encode.string "waiting" }
+                , { key = "agent", value = Encode.string info.agentName }
                 ]
 
         Completed ->
@@ -964,7 +959,6 @@ descriptionOnlyTaskDecoder =
             , sessionId = Nothing
             , source = { sourceType = WebSource, userId = "", conversationId = Nothing }
             , attachments = []
-            , currentAgent = Nothing
             , agentChain = []
             }
         )
@@ -990,11 +984,6 @@ descriptionOnlyTaskDecoder =
             )
         |> Decode.andThen
             (\task ->
-                Decode.field "currentAgent" (Decode.maybe Decode.string)
-                    |> Decode.map (\currentAgent -> { task | currentAgent = currentAgent })
-            )
-        |> Decode.andThen
-            (\task ->
                 Decode.field "agentChain" (Decode.array handoffRecordDecoder)
                     |> Decode.map (\agentChain -> DescriptionOnly { task | agentChain = agentChain })
             )
@@ -1012,7 +1001,6 @@ plannedTaskDecoder =
             , sessionId = Nothing
             , source = { sourceType = WebSource, userId = "", conversationId = Nothing }
             , attachments = []
-            , currentAgent = Nothing
             , agentChain = []
             , summary = ""
             , requirements = []
@@ -1041,11 +1029,6 @@ plannedTaskDecoder =
             (\task ->
                 Decode.field "attachments" (Decode.array attachmentDecoder)
                     |> Decode.map (\attachments -> { task | attachments = attachments })
-            )
-        |> Decode.andThen
-            (\task ->
-                Decode.field "currentAgent" (Decode.maybe Decode.string)
-                    |> Decode.map (\currentAgent -> { task | currentAgent = currentAgent })
             )
         |> Decode.andThen
             (\task ->
@@ -1229,7 +1212,11 @@ statusDecoder =
                         Decode.succeed Pending
 
                     "planning" ->
-                        Decode.succeed Planning
+                        Decode.oneOf
+                            [ Decode.field "agent" Decode.string
+                                |> Decode.map (\agent -> Planning { agentName = agent })
+                            , Decode.succeed (Planning { agentName = "" })
+                            ]
 
                     "awaiting_input" ->
                         Decode.succeed AwaitingInput
@@ -1238,10 +1225,18 @@ statusDecoder =
                         Decode.succeed ReadyToStart
 
                     "active" ->
-                        Decode.succeed Active
+                        Decode.oneOf
+                            [ Decode.field "agent" Decode.string
+                                |> Decode.map (\agent -> Active { agentName = agent })
+                            , Decode.succeed (Active { agentName = "" })
+                            ]
 
                     "waiting" ->
-                        Decode.succeed Waiting
+                        Decode.oneOf
+                            [ Decode.field "agent" Decode.string
+                                |> Decode.map (\agent -> Waiting { agentName = agent })
+                            , Decode.succeed (Waiting { agentName = "" })
+                            ]
 
                     "completed" ->
                         Decode.succeed Completed
@@ -1622,7 +1617,7 @@ statusToString status =
         Pending ->
             "pending"
 
-        Planning ->
+        Planning _ ->
             "planning"
 
         AwaitingInput ->
@@ -1631,10 +1626,10 @@ statusToString status =
         ReadyToStart ->
             "planned"
 
-        Active ->
+        Active _ ->
             "active"
 
-        Waiting ->
+        Waiting _ ->
             "waiting"
 
         Completed ->
@@ -1644,7 +1639,9 @@ statusToString status =
             "failed"
 
 
-{-| Parse status from string.
+{-| Parse status from string. Used for query-parameter filtering where agent
+info is not available. The AgentInfo fields are placeholders — only the
+constructor matters for statusEquals comparisons.
 -}
 statusFromString : String -> Maybe TaskStatus
 statusFromString str =
@@ -1653,7 +1650,7 @@ statusFromString str =
             Just Pending
 
         "planning" ->
-            Just Planning
+            Just (Planning { agentName = "" })
 
         "awaiting_input" ->
             Just AwaitingInput
@@ -1662,10 +1659,10 @@ statusFromString str =
             Just ReadyToStart
 
         "active" ->
-            Just Active
+            Just (Active { agentName = "" })
 
         "waiting" ->
-            Just Waiting
+            Just (Waiting { agentName = "" })
 
         "completed" ->
             Just Completed
@@ -1839,7 +1836,8 @@ isInternalAgent config =
             False
 
 
-{-| Check if two statuses are equal (for filtering).
+{-| Check if two statuses are equal (for filtering). Compares constructors
+only — agent data is ignored so that statusFromString placeholders match.
 -}
 statusEquals : TaskStatus -> TaskStatus -> Bool
 statusEquals a b =
@@ -1847,7 +1845,7 @@ statusEquals a b =
         { a = Pending, b = Pending } ->
             True
 
-        { a = Planning, b = Planning } ->
+        { a = Planning _, b = Planning _ } ->
             True
 
         { a = AwaitingInput, b = AwaitingInput } ->
@@ -1856,10 +1854,10 @@ statusEquals a b =
         { a = ReadyToStart, b = ReadyToStart } ->
             True
 
-        { a = Active, b = Active } ->
+        { a = Active _, b = Active _ } ->
             True
 
-        { a = Waiting, b = Waiting } ->
+        { a = Waiting _, b = Waiting _ } ->
             True
 
         { a = Completed, b = Completed } ->
@@ -1870,3 +1868,21 @@ statusEquals a b =
 
         _ ->
             False
+
+
+{-| Extract the agent name from a status, if the status carries one.
+-}
+statusAgentName : TaskStatus -> Maybe String
+statusAgentName status =
+    when status is
+        Planning info ->
+            Just info.agentName
+
+        Active info ->
+            Just info.agentName
+
+        Waiting info ->
+            Just info.agentName
+
+        _ ->
+            Nothing

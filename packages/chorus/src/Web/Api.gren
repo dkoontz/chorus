@@ -62,7 +62,7 @@ import Task as GrenTask exposing (Task)
 import Task.Queue as Queue
 import Task.Registry as Registry
 import Time
-import Types exposing (Task(..), TaskStatus(..), EventType(..), PlannerOutput(..), SourceInfo, PlanningFields, PlanningQuestion, HandoffRecord, AgentConfig(..), encodeAgentConfig, setAgentChain)
+import Types exposing (Task(..), TaskStatus(..), EventType(..), PlannerOutput(..), AgentInfo, SourceInfo, PlanningFields, PlanningQuestion, HandoffRecord, AgentConfig(..), encodeAgentConfig, setAgentChain)
 import Web.Router exposing (Route(..))
 
 
@@ -239,9 +239,40 @@ requestUpdateStatus ctx taskId status maybeExtraEvent toMsg =
                         let
                             currentStatus =
                                 Types.taskStatus task
+
+                            -- For statuses that carry agent info, inherit from the current
+                            -- status if the requested status has an empty agent name (e.g.
+                            -- when parsed from a bare string like "active" or "waiting").
+                            resolvedStatus =
+                                let
+                                    currentAgent =
+                                        Types.statusAgentName currentStatus
+                                            |> Maybe.withDefault ""
+                                in
+                                when status is
+                                    Active info ->
+                                        if info.agentName == "" then
+                                            Active { agentName = currentAgent }
+                                        else
+                                            status
+
+                                    Waiting info ->
+                                        if info.agentName == "" then
+                                            Waiting { agentName = currentAgent }
+                                        else
+                                            status
+
+                                    Planning info ->
+                                        if info.agentName == "" then
+                                            Planning { agentName = currentAgent }
+                                        else
+                                            status
+
+                                    _ ->
+                                        status
                         in
-                        if isValidTransition currentStatus status then
-                            Registry.updateStatus ctx.registry taskId status
+                        if isValidTransition currentStatus resolvedStatus then
+                            Registry.updateStatus ctx.registry taskId resolvedStatus
                                 |> GrenTask.andThen
                                     (\updatedTask ->
                                         let
@@ -262,7 +293,7 @@ requestUpdateStatus ctx taskId status maybeExtraEvent toMsg =
                                                         , data =
                                                             Dict.empty
                                                                 |> Dict.set "from" (Types.statusToString currentStatus)
-                                                                |> Dict.set "to" (Types.statusToString status)
+                                                                |> Dict.set "to" (Types.statusToString resolvedStatus)
                                                         }
                                                         |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                                 )
@@ -280,7 +311,7 @@ requestUpdateStatus ctx taskId status maybeExtraEvent toMsg =
                                 (ApiError
                                     { statusCode = 409
                                     , code = "INVALID_TRANSITION"
-                                    , message = "Cannot transition from " ++ Types.statusToString currentStatus ++ " to " ++ Types.statusToString status
+                                    , message = "Cannot transition from " ++ Types.statusToString currentStatus ++ " to " ++ Types.statusToString resolvedStatus
                                     }
                                 )
             )
@@ -393,7 +424,11 @@ requestApplyPlan ctx taskId fields planningCompletedData toMsg =
                                 { eventType = StatusChanged
                                 , data =
                                     Dict.empty
-                                        |> Dict.set "from" (Types.statusToString Types.Planning)
+                                        -- Literal "planning" used because this function is only called
+                                        -- when the planner completes, so the previous status is always Planning.
+                                        -- Fetching the task beforehand just for statusToString would add
+                                        -- unnecessary complexity for an event log string.
+                                        |> Dict.set "from" "planning"
                                         |> Dict.set "to" (Types.statusToString Types.ReadyToStart)
                                 }
                                 |> GrenTask.onError (\_ -> GrenTask.succeed {})
@@ -452,7 +487,10 @@ requestSetQuestions ctx taskId questionStrings questionsEventData toMsg =
                                 { eventType = StatusChanged
                                 , data =
                                     Dict.empty
-                                        |> Dict.set "from" (Types.statusToString Types.Planning)
+                                        -- Literal "planning" used because this function is only called
+                                        -- when the planner returns questions, so the previous status
+                                        -- is always Planning.
+                                        |> Dict.set "from" "planning"
                                         |> Dict.set "to" (Types.statusToString Types.AwaitingInput)
                                 }
                                 |> GrenTask.onError (\_ -> GrenTask.succeed {})
@@ -599,10 +637,14 @@ requestSubmitAnswers ctx taskId answers toMsg =
                                 Dict.foldl Dict.set (indexedArrayToDict "question_" questionStrings) (indexedArrayToDict "answer_" answers)
                                     |> Dict.set "answerCount" (String.fromInt (Array.length answers))
                         in
+                        let
+                            planningStatus =
+                                Types.Planning { agentName = "task-validator" }
+                        in
                         Registry.updateTask ctx.registry taskId
                             (\t ->
                                 Types.planTask t currentFields
-                                    |> Types.setTaskStatus Types.Planning
+                                    |> Types.setTaskStatus planningStatus
                             )
                             |> GrenTask.andThen
                                 (\updatedTask ->
@@ -618,7 +660,7 @@ requestSubmitAnswers ctx taskId answers toMsg =
                                                     , data =
                                                         Dict.empty
                                                             |> Dict.set "from" (Types.statusToString Types.AwaitingInput)
-                                                            |> Dict.set "to" (Types.statusToString Types.Planning)
+                                                            |> Dict.set "to" (Types.statusToString planningStatus)
                                                     }
                                                     |> GrenTask.onError (\_ -> GrenTask.succeed {})
                                             )
@@ -1002,16 +1044,16 @@ requestStartHandoff =
 
 {-| Shared implementation for starting an agent on a task.
 
-Sets currentAgent, appends a HandoffRecord to agentChain, records a history event,
-and transitions the task to Active if it was Pending or Waiting.
+Appends a HandoffRecord to agentChain, records a history event,
+and transitions the task to Active (with agent) if it was ReadyToStart or Waiting.
 The actual agent spawning is handled by the caller (Main.gren).
 
-When allowReplace is True (deferred handoffs), an existing currentAgent is
+When allowReplace is True (deferred handoffs), an existing active agent is
 allowed — the new agent replaces it. When False, a 409 CONFLICT is returned.
 -}
 startAgentOnTask : Bool -> EventType -> ApiContext -> TaskId -> StartAgentParams -> (ApiResult -> msg) -> Cmd msg
 startAgentOnTask allowReplace eventType ctx taskId params toMsg =
-    -- First check if the task exists and currentAgent is not already set
+    -- First check if the task exists and no agent is already active
     Registry.getTask ctx.registry taskId
         |> GrenTask.andThen
             (\maybeTask ->
@@ -1022,7 +1064,7 @@ startAgentOnTask allowReplace eventType ctx taskId params toMsg =
                     Just task ->
                         let
                             existingAgent =
-                                Types.taskCurrentAgent task
+                                Types.statusAgentName (Types.taskStatus task)
 
                             blocked =
                                 existingAgent /= Nothing && not allowReplace
@@ -1044,6 +1086,9 @@ startAgentOnTask allowReplace eventType ctx taskId params toMsg =
                                                     , completionReport = Nothing
                                                     }
 
+                                                agentInfo =
+                                                    { agentName = params.agentName }
+
                                                 updateFn t =
                                                     let
                                                         chain =
@@ -1052,21 +1097,20 @@ startAgentOnTask allowReplace eventType ctx taskId params toMsg =
                                                         newChain =
                                                             Array.pushLast newRecord chain
 
-                                                        -- Set status to Active if ReadyToStart or Waiting
+                                                        -- Set status to Active (with agent) if ReadyToStart or Waiting
                                                         newStatus =
                                                             when Types.taskStatus t is
                                                                 ReadyToStart ->
-                                                                    Active
+                                                                    Active agentInfo
 
-                                                                Waiting ->
-                                                                    Active
+                                                                Waiting _ ->
+                                                                    Active agentInfo
 
                                                                 other ->
                                                                     other
 
                                                         updated =
                                                             t
-                                                                |> Types.setCurrentAgent (Just params.agentName)
                                                                 |> Types.setTaskStatus newStatus
                                                     in
                                                     setAgentChain newChain updated
@@ -1130,8 +1174,8 @@ requestCompleteHandoff =
 {-| Shared implementation for completing an agent on a task.
 
 Sets completedAt on the current agent's chain entry, stores the output,
-restores the parent agent as currentAgent (or clears it if no parent),
-sets status to Waiting if no completion report, and records a history event.
+sets status to Waiting (with parent agent, or current agent if no parent)
+if no completion report, and records a history event.
 -}
 completeAgentOnTask : EventType -> ApiContext -> TaskId -> CompleteAgentParams -> (ApiResult -> msg) -> Cmd msg
 completeAgentOnTask eventType ctx taskId params toMsg =
@@ -1152,7 +1196,7 @@ completeAgentOnTask eventType ctx taskId params toMsg =
                                             Types.taskAgentChain task
 
                                         agentName =
-                                            Types.taskCurrentAgent task
+                                            Types.statusAgentName (Types.taskStatus task)
                                                 |> Maybe.withDefault "unknown"
 
                                         -- Update the entry matching the current agent
@@ -1175,21 +1219,30 @@ completeAgentOnTask eventType ctx taskId params toMsg =
                                                 |> Maybe.withDefault False
 
                                         -- Restore parent agent if one exists (last uncompleted entry after update)
-                                        parentAgent =
+                                        parentAgentName =
                                             Types.findParentAgent updatedChain
+
+                                        -- Determine new status: if parent agent exists, wait with parent;
+                                        -- otherwise the completion report handler decides
+                                        waitingStatus =
+                                            when parentAgentName is
+                                                Just name ->
+                                                    Waiting { agentName = name }
+
+                                                Nothing ->
+                                                    Waiting { agentName = agentName }
 
                                         updateFn t =
                                             let
                                                 updated =
                                                     t
-                                                        |> Types.setCurrentAgent parentAgent
                                                         |> setAgentChain updatedChain
                                             in
                                             if hasCompletionReport then
                                                 updated
                                             else
                                                 updated
-                                                    |> Types.setTaskStatus Waiting
+                                                    |> Types.setTaskStatus waitingStatus
                                     in
                                     Registry.updateTask ctx.registry taskId updateFn
                                         |> GrenTask.andThen
@@ -1789,54 +1842,54 @@ isValidTransition : TaskStatus -> TaskStatus -> Bool
 isValidTransition from to =
     when { from = from, to = to } is
         -- From Pending
-        { from = Pending, to = Planning } ->
+        { from = Pending, to = Planning _ } ->
             True
 
         { from = Pending, to = Failed _ } ->
             True
 
         -- From Planning
-        { from = Planning, to = AwaitingInput } ->
+        { from = Planning _, to = AwaitingInput } ->
             True
 
-        { from = Planning, to = ReadyToStart } ->
+        { from = Planning _, to = ReadyToStart } ->
             True
 
-        { from = Planning, to = Failed _ } ->
+        { from = Planning _, to = Failed _ } ->
             True
 
         -- From AwaitingInput
-        { from = AwaitingInput, to = Planning } ->
+        { from = AwaitingInput, to = Planning _ } ->
             True
 
         { from = AwaitingInput, to = Failed _ } ->
             True
 
         -- From ReadyToStart (Planned)
-        { from = ReadyToStart, to = Active } ->
+        { from = ReadyToStart, to = Active _ } ->
             True
 
         { from = ReadyToStart, to = Failed _ } ->
             True
 
         -- From Active
-        { from = Active, to = Waiting } ->
+        { from = Active _, to = Waiting _ } ->
             True
 
-        { from = Active, to = Completed } ->
+        { from = Active _, to = Completed } ->
             True
 
-        { from = Active, to = Failed _ } ->
+        { from = Active _, to = Failed _ } ->
             True
 
         -- From Waiting
-        { from = Waiting, to = Active } ->
+        { from = Waiting _, to = Active _ } ->
             True
 
-        { from = Waiting, to = Completed } ->
+        { from = Waiting _, to = Completed } ->
             True
 
-        { from = Waiting, to = Failed _ } ->
+        { from = Waiting _, to = Failed _ } ->
             True
 
         -- From Failed (allow retry)

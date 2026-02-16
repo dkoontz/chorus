@@ -2263,7 +2263,7 @@ parseCreateTaskBody request =
 parseStatusBody : HttpServer.Request -> Result String TaskStatus
 parseStatusBody request =
     let
-        -- Nested object format: {"status": {"type": "active"}}
+        -- Nested object format: {"status": {"type": "active", "agent": "name"}}
         nestedDecoder =
             Decode.field "status"
                 (Decode.field "type" Decode.string
@@ -2274,7 +2274,11 @@ parseStatusBody request =
                                     Decode.succeed Pending
 
                                 "planning" ->
-                                    Decode.succeed Planning
+                                    Decode.oneOf
+                                        [ Decode.field "agent" Decode.string
+                                            |> Decode.map (\agent -> Planning { agentName = agent })
+                                        , Decode.succeed (Planning { agentName = "" })
+                                        ]
 
                                 "awaiting_input" ->
                                     Decode.succeed AwaitingInput
@@ -2283,10 +2287,18 @@ parseStatusBody request =
                                     Decode.succeed ReadyToStart
 
                                 "active" ->
-                                    Decode.succeed Active
+                                    Decode.oneOf
+                                        [ Decode.field "agent" Decode.string
+                                            |> Decode.map (\agent -> Active { agentName = agent })
+                                        , Decode.succeed (Active { agentName = "" })
+                                        ]
 
                                 "waiting" ->
-                                    Decode.succeed Waiting
+                                    Decode.oneOf
+                                        [ Decode.field "agent" Decode.string
+                                            |> Decode.map (\agent -> Waiting { agentName = agent })
+                                        , Decode.succeed (Waiting { agentName = "" })
+                                        ]
 
                                 "completed" ->
                                     Decode.succeed Completed
@@ -2304,6 +2316,7 @@ parseStatusBody request =
                 )
 
         -- Flat string format: {"status": "active"} (backward compatibility)
+        -- Agent info placeholder (empty) — requestUpdateStatus resolves from current task
         flatDecoder =
             Decode.field "status" Decode.string
                 |> Decode.andThen
@@ -2313,7 +2326,7 @@ parseStatusBody request =
                                 Decode.succeed Pending
 
                             "planning" ->
-                                Decode.succeed Planning
+                                Decode.succeed (Planning { agentName = "" })
 
                             "awaiting_input" ->
                                 Decode.succeed AwaitingInput
@@ -2322,10 +2335,10 @@ parseStatusBody request =
                                 Decode.succeed ReadyToStart
 
                             "active" ->
-                                Decode.succeed Active
+                                Decode.succeed (Active { agentName = "" })
 
                             "waiting" ->
-                                Decode.succeed Waiting
+                                Decode.succeed (Waiting { agentName = "" })
 
                             "completed" ->
                                 Decode.succeed Completed
@@ -2977,7 +2990,7 @@ extractPlannerOutput executorModel =
 {-| Spawn the task-validator agent for a newly created task.
 
 Registers the planner as an active executor with isSystemAgent=True,
-sets the task's currentAgent to "task-validator", and emits GotAgentComplete
+sets the task status to Planning with agent "task-validator", and emits GotAgentComplete
 when the planner process exits. The planner submits its structured output
 via the planner-output tool during execution.
 -}
@@ -3001,7 +3014,7 @@ dispatchPlanner model agentReg taskId description =
                     let
                         -- Async task chain:
                         -- 1. Look up "task-validator" agent config
-                        -- 2. Set task status to Planning, set currentAgent, record PlanningStarted event
+                        -- 2. Set task status to Planning (with agent), record PlanningStarted event
                         -- 3. Resolve the system agent provider config
                         -- 4. Emit GotProviderResolved to trigger spawn
                         spawnCmd =
@@ -3015,22 +3028,16 @@ dispatchPlanner model agentReg taskId description =
                                                 GrenTask.succeed agentConfig
 
                                             Just registry ->
-                                                Registry.updateStatus registry taskId Types.Planning
+                                                Registry.updateStatus registry taskId (Types.Planning { agentName = "task-validator" })
                                                     |> GrenTask.andThen
                                                         (\_ ->
-                                                            -- Set currentAgent to "task-validator"
-                                                            Registry.updateTask registry taskId
-                                                                (Types.setCurrentAgent (Just "task-validator"))
-                                                                |> GrenTask.andThen
-                                                                    (\_ ->
-                                                                        Registry.recordEvent registry taskId
-                                                                            { eventType = PlanningStarted
-                                                                            , data =
-                                                                                Dict.empty
-                                                                                    |> Dict.set "description" description
-                                                                            }
-                                                                            |> GrenTask.map (\_ -> agentConfig)
-                                                                    )
+                                                            Registry.recordEvent registry taskId
+                                                                { eventType = PlanningStarted
+                                                                , data =
+                                                                    Dict.empty
+                                                                        |> Dict.set "description" description
+                                                                }
+                                                                |> GrenTask.map (\_ -> agentConfig)
                                                         )
                                                     |> GrenTask.onError (\_ -> GrenTask.succeed agentConfig)
                                     )

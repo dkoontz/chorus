@@ -370,24 +370,13 @@ dispatchCompletionReport ctx requestBody toMsg =
         Ok report ->
             -- Read the task first to get the current status for the status_changed event
             let
-                newStatus =
-                    when report.status is
-                        Types.ReportComplete ->
-                            Types.Completed
-
-                        Types.ReportBlocked ->
-                            Types.Waiting
-
-                        Types.ReportFailed ->
-                            Types.Failed report.summary
-
                 updateFn task =
                     let
                         chain =
                             Types.taskAgentChain task
 
                         agentName =
-                            Types.taskCurrentAgent task
+                            Types.statusAgentName (Types.taskStatus task)
                                 |> Maybe.withDefault "unknown"
 
                         -- Update the entry matching the current agent
@@ -395,6 +384,17 @@ dispatchCompletionReport ctx requestBody toMsg =
                             Types.updateCurrentAgentEntry agentName
                                 (\entry -> { entry | completionReport = Just report })
                                 chain
+
+                        newStatus =
+                            when report.status is
+                                Types.ReportComplete ->
+                                    Types.Completed
+
+                                Types.ReportBlocked ->
+                                    Types.Waiting { agentName = agentName }
+
+                                Types.ReportFailed ->
+                                    Types.Failed report.summary
                     in
                     task
                         |> Types.setAgentChain updatedChain
@@ -410,7 +410,22 @@ dispatchCompletionReport ctx requestBody toMsg =
                                         Types.taskStatus task
 
                                     Nothing ->
-                                        Types.Active
+                                        Types.Active { agentName = "" }
+
+                            agentName =
+                                Types.statusAgentName previousStatus
+                                    |> Maybe.withDefault "unknown"
+
+                            newStatus =
+                                when report.status is
+                                    Types.ReportComplete ->
+                                        Types.Completed
+
+                                    Types.ReportBlocked ->
+                                        Types.Waiting { agentName = agentName }
+
+                                    Types.ReportFailed ->
+                                        Types.Failed report.summary
                         in
                         Registry.updateTask ctx.apiContext.registry ctx.taskId updateFn
                             |> GrenTask.andThen

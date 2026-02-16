@@ -145,7 +145,7 @@ viewStatusActions props task =
                     , span [ class "status-indicator" ] [ text "Configure a system agent provider in Settings to plan tasks" ]
                     ]
 
-            Planning ->
+            Planning _ ->
                 [ span [ class "status-indicator" ] [ text "Planning in progress..." ]
                 ]
 
@@ -156,7 +156,7 @@ viewStatusActions props task =
             ReadyToStart ->
                 viewStartWithAgent props taskId
 
-            Active ->
+            Active _ ->
                 [ button
                     [ class "btn btn-secondary"
                     , onClick (props.onStatusUpdate taskId "waiting")
@@ -174,7 +174,7 @@ viewStatusActions props task =
                     [ text "Mark Failed" ]
                 ]
 
-            Waiting ->
+            Waiting _ ->
                 [ button
                     [ class "btn btn-primary"
                     , onClick (props.onStatusUpdate taskId "active")

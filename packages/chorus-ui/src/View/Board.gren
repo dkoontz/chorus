@@ -26,11 +26,11 @@ view props =
     else
         div [ class "kanban-board" ]
             [ viewColumn "Pending" "pending" Pending props
-            , viewColumn "Planning" "planning" Planning props
+            , viewColumn "Planning" "planning" (Planning { agentName = "" }) props
             , viewColumn "Awaiting Input" "awaiting_input" AwaitingInput props
             , viewColumn "Planned" "planned" ReadyToStart props
-            , viewColumn "Active" "active" Active props
-            , viewColumn "Waiting" "waiting" Waiting props
+            , viewColumn "Active" "active" (Active { agentName = "" }) props
+            , viewColumn "Waiting" "waiting" (Waiting { agentName = "" }) props
             , viewColumn "Completed" "completed" Completed props
             , viewFailedColumn props
             ]
