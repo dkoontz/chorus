@@ -11,6 +11,6 @@
     "build:dist": "npm run build:all && scripts/build-dist.sh",
     "kill": "pkill -x chorus",
     "test": "cd packages/chorus/tests/unit && gren make TestRunner --output=../../build/unit-tests.js && cd ../.. && cp build/unit-tests.js build/run-unit-tests.js && echo 'this.Gren.TestRunner.init({});' >> build/run-unit-tests.js && node build/run-unit-tests.js",
-    "clean": "rm -rf packages/*/build packages/*/.gren packages/*/gren_packages dist/chorus dist/chorus-tools dist/static"
+    "clean": "rm -rf packages/*/build packages/*/.gren packages/*/gren_packages dist"
   }
 }
