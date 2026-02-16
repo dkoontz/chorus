@@ -137,6 +137,11 @@ body {
     background: var(--color-primary-hover);
 }
 
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .btn-secondary {
     background: var(--color-bg);
     color: var(--color-text);
@@ -1167,26 +1172,12 @@ body {
 
 .recent-workspace-path {
     flex: 1;
-    background: none;
-    border: none;
-    cursor: pointer;
-    text-align: left;
     font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
     font-size: 13px;
-    color: var(--color-primary);
-    padding: 0;
+    color: var(--color-text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-
-.recent-workspace-path:hover {
-    text-decoration: underline;
-}
-
-.recent-workspace-path:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
 }
 
 .recent-workspace-remove {

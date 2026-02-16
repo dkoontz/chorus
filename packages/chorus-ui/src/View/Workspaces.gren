@@ -109,13 +109,24 @@ viewRecentWorkspaces config =
 
 viewRecentWorkspaceEntry : Config msg -> WorkspaceEntry -> Html msg
 viewRecentWorkspaceEntry config entry =
+    let
+        isActiveWorkspace =
+            when config.workspaceStatus is
+                WorkspaceOpened { configPath } ->
+                    configPath == entry.configPath
+
+                _ ->
+                    False
+    in
     div [ class "recent-workspace-entry" ]
-        [ button
-            [ class "recent-workspace-path"
-            , onClick (config.onOpenRecentWorkspace entry.configPath)
-            , disabled config.loading
-            ]
+        [ span [ class "recent-workspace-path" ]
             [ text entry.configPath ]
+        , button
+            [ class "btn btn-primary btn-small"
+            , onClick (config.onOpenRecentWorkspace entry.configPath)
+            , disabled (config.loading || isActiveWorkspace)
+            ]
+            [ text "Load" ]
         , button
             [ class "recent-workspace-remove"
             , onClick (config.onRemoveRecentWorkspace entry.configPath)
