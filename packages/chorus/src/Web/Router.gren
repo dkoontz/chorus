@@ -52,6 +52,7 @@ type Route
     | UpdateConfig                             -- PUT /api/config
     | SelectConfig                             -- POST /api/config/select
     | CreateConfig                             -- POST /api/config/create
+    | GetConfigDefaults                        -- GET /api/config/defaults
     | ListWorkspaces                           -- GET /api/workspaces
     | RemoveWorkspace String                   -- DELETE /api/workspaces?path=...
     | StaticFile String                        -- GET /* (for frontend assets)
@@ -200,6 +201,9 @@ parseRoute method path =
 
         { method = POST, segments = [ "api", "config", "create" ] } ->
             CreateConfig
+
+        { method = GET, segments = [ "api", "config", "defaults" ] } ->
+            GetConfigDefaults
 
         { method = GET, segments = [ "api", "workspaces" ] } ->
             ListWorkspaces
@@ -413,6 +417,9 @@ routeToString route =
 
         CreateConfig ->
             "CreateConfig"
+
+        GetConfigDefaults ->
+            "GetConfigDefaults"
 
         ListWorkspaces ->
             "ListWorkspaces"

@@ -22,12 +22,14 @@ module Api exposing
     , updateProvider
     , deleteProvider
     , getConfig
+    , getConfigDefaults
     , updateConfig
     , selectConfig
     , createConfig
     , getWorkspaces
     , removeWorkspace
     , ConfigResponse
+    , ConfigDefaultsResponse
     , dataDecoder
     , expectApiResponse
     )
@@ -487,6 +489,13 @@ expectApiResponse toMsg decoder =
                             Err (Http.BadBody ("Invalid response: " ++ Decode.errorToString err))
 
 
+{-| Response from the config defaults endpoint.
+-}
+type alias ConfigDefaultsResponse =
+    { defaultWorkspacePath : String
+    }
+
+
 {-| Get the current workspace config.
 -}
 getConfig : (Result Http.Error ConfigResponse -> msg) -> Cmd msg
@@ -494,6 +503,23 @@ getConfig toMsg =
     Http.get
         { url = "/api/config"
         , expect = expectApiResponse toMsg configResponseDecoder
+        }
+
+
+{-| Get the default workspace configuration values.
+-}
+getConfigDefaults : (Result Http.Error ConfigDefaultsResponse -> msg) -> Cmd msg
+getConfigDefaults toMsg =
+    Http.get
+        { url = "/api/config/defaults"
+        , expect =
+            expectApiResponse toMsg
+                (dataDecoder
+                    (Decode.map
+                        (\path -> { defaultWorkspacePath = path })
+                        (Decode.field "defaultWorkspacePath" Decode.string)
+                    )
+                )
         }
 
 

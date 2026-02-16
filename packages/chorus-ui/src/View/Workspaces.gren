@@ -16,9 +16,14 @@ type alias Config msg =
     { workspaceStatus : WorkspaceStatus
     , recentWorkspaces : Array WorkspaceEntry
     , openPath : String
+    , createName : String
     , createPath : String
+    , defaultWorkspacePath : String
+    , createPathManuallyEdited : Bool
+    , nameValidationError : Maybe String
     , loading : Bool
     , onUpdateOpenPath : String -> msg
+    , onUpdateCreateName : String -> msg
     , onUpdateCreatePath : String -> msg
     , onSelectConfig : msg
     , onCreateConfig : msg
@@ -153,23 +158,45 @@ viewCreateWorkspace config =
     div [ class "workspace-section" ]
         [ h3 [] [ text "New Workspace" ]
         , p [ class "section-help" ]
-            [ text "Enter a directory path where the workspace should be created." ]
+            [ text "Give your workspace a name. The path will be generated automatically, or you can edit it." ]
         , Html.form [ onSubmit config.onCreateConfig ]
-            [ div [ class "form-row" ]
-                [ input
+            [ div [ class "form-group" ]
+                [ label [ for "workspace-name" ] [ text "Name" ]
+                , input
                     [ type_ "text"
+                    , id "workspace-name"
                     , class "form-input"
-                    , placeholder "/path/to/workspace/directory"
-                    , value config.createPath
-                    , onInput config.onUpdateCreatePath
+                    , placeholder "my-project"
+                    , value config.createName
+                    , onInput config.onUpdateCreateName
                     ]
                     []
-                , button
-                    [ type_ "submit"
-                    , class "btn btn-primary"
-                    , disabled (String.isEmpty (String.trim config.createPath) || config.loading)
+                , when config.nameValidationError is
+                    Just errorMessage ->
+                        span [ class "validation-error" ] [ text errorMessage ]
+
+                    Nothing ->
+                        text ""
+                ]
+            , div [ class "form-group" ]
+                [ label [ for "workspace-path" ] [ text "Path" ]
+                , div [ class "form-row" ]
+                    [ input
+                        [ type_ "text"
+                        , id "workspace-path"
+                        , class "form-input"
+                        , placeholder "/path/to/workspace/directory"
+                        , value config.createPath
+                        , onInput config.onUpdateCreatePath
+                        ]
+                        []
+                    , button
+                        [ type_ "submit"
+                        , class "btn btn-primary"
+                        , disabled (String.isEmpty (String.trim config.createPath) || config.nameValidationError /= Nothing || config.loading)
+                        ]
+                        [ text "Create" ]
                     ]
-                    [ text "Create" ]
                 ]
             ]
         ]

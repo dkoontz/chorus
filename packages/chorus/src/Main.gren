@@ -1770,6 +1770,9 @@ handleRoute model route request response =
         Router.CreateConfig ->
             handleCreateConfig model request response
 
+        Router.GetConfigDefaults ->
+            handleGetConfigDefaults model response
+
         Router.ListWorkspaces ->
             handleListWorkspaces model response
 
@@ -2141,6 +2144,9 @@ handleRoute model route request response =
                             sendNotFound response
 
                         Router.CreateConfig ->
+                            sendNotFound response
+
+                        Router.GetConfigDefaults ->
                             sendNotFound response
 
                         Router.ListWorkspaces ->
@@ -3784,6 +3790,44 @@ handleCreateConfig model request response =
                         GotConfigLoaded { response = Just response, deferResponse = True, result = result }
                     )
 
+
+{-| Handle GET /api/config/defaults.
+
+Returns the OS-appropriate default workspace base path using FileSystem.homeDirectory.
+-}
+handleGetConfigDefaults : Model -> Response -> Cmd Msg
+handleGetConfigDefaults model response =
+    FileSystem.homeDirectory model.filesystemPermission
+        |> GrenTask.perform
+            (\homePath ->
+                let
+                    defaultWorkspacePath =
+                        homePath
+                            |> Path.toPosixString
+                            |> (\home -> home ++ "/Documents/ChorusWorkspaces")
+
+                    body =
+                        Encode.object
+                            [ { key = "data"
+                              , value =
+                                    Encode.object
+                                        [ { key = "defaultWorkspacePath"
+                                          , value = Encode.string defaultWorkspacePath
+                                          }
+                                        ]
+                              }
+                            ]
+                            |> Encode.encode 0
+                in
+                GotApiResult
+                    { response = response
+                    , result =
+                        Api.ApiSuccess
+                            { statusCode = 200
+                            , body = body
+                            }
+                    }
+            )
 
 
 -- WORKSPACE HISTORY

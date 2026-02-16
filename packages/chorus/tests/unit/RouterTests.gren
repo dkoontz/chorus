@@ -17,6 +17,7 @@ tests =
     , testRemoveWorkspaceMissingPathParam
     , testListTasksWithStatusQuery
     , testListTasksNoQuery
+    , testGetConfigDefaultsRoute
     ]
 
 
@@ -171,6 +172,26 @@ testListTasksNoQuery =
             other ->
                 Task.fail
                     ("Expected ListTasks Nothing, got "
+                        ++ Web.Router.routeToString other
+                    )
+    }
+
+
+testGetConfigDefaultsRoute : { name : String, run : Task.Task String {} }
+testGetConfigDefaultsRoute =
+    { name = "Router: GET /api/config/defaults -> GetConfigDefaults"
+    , run =
+        let
+            route =
+                parseRoute GET "/api/config/defaults"
+        in
+        when route is
+            GetConfigDefaults ->
+                Task.succeed {}
+
+            other ->
+                Task.fail
+                    ("Expected GetConfigDefaults, got "
                         ++ Web.Router.routeToString other
                     )
     }

@@ -85,7 +85,11 @@ type alias Model =
     , workspaceStatus : WorkspaceStatus
     , recentWorkspaces : Array WorkspaceEntry
     , openPath : String
+    , createName : String
     , createPath : String
+    , defaultWorkspacePath : String
+    , createPathManuallyEdited : Bool
+    , nameValidationError : Maybe String
     , settingsForm : Maybe SettingsForm
     , settingsValidationError : Maybe String
     , websocketConnection : WebSocketConnectionState
@@ -214,7 +218,9 @@ type Msg
       -- Workspace config
     | GotInitialConfig (Result Http.Error Api.ConfigResponse)
     | GotConfig (Result Http.Error Api.ConfigResponse)
+    | GotConfigDefaults (Result Http.Error Api.ConfigDefaultsResponse)
     | UpdateOpenPath String
+    | UpdateCreateName String
     | UpdateCreatePath String
     | SelectConfig
     | CreateConfig
@@ -279,7 +285,11 @@ init _ url key =
             , workspaceStatus = NoWorkspace
             , recentWorkspaces = []
             , openPath = ""
+            , createName = ""
             , createPath = ""
+            , defaultWorkspacePath = ""
+            , createPathManuallyEdited = False
+            , nameValidationError = Nothing
             , settingsForm = Nothing
             , settingsValidationError = Nothing
             , websocketConnection = WsNotConnected
@@ -291,6 +301,7 @@ init _ url key =
         Cmd.batch
             [ Api.getConfig GotInitialConfig
             , Api.getWorkspaces GotWorkspaces
+            , Api.getConfigDefaults GotConfigDefaults
             , Task.perform GotZone Time.here
             ]
     }
@@ -355,7 +366,10 @@ loadPageData page =
             Api.getProviders GotProviders
 
         WorkspacesPage ->
-            Api.getWorkspaces GotWorkspaces
+            Cmd.batch
+                [ Api.getWorkspaces GotWorkspaces
+                , Api.getConfigDefaults GotConfigDefaults
+                ]
 
         SystemSettingsPage ->
             Api.getProviders GotProviders
@@ -1341,6 +1355,19 @@ update msg model =
 
         -- Workspace config
 
+        GotConfigDefaults result ->
+            when result is
+                Ok defaults ->
+                    { model = { model | defaultWorkspacePath = defaults.defaultWorkspacePath }
+                    , command = Cmd.none
+                    }
+
+                Err _ ->
+                    -- Non-critical: the user can still type a path manually
+                    { model = model
+                    , command = Cmd.none
+                    }
+
         GotInitialConfig result ->
             when result is
                 Ok configResponse ->
@@ -1458,8 +1485,52 @@ update msg model =
             , command = Cmd.none
             }
 
+        UpdateCreateName name ->
+            let
+                validationError =
+                    if String.contains "/" name then
+                        Just "Name cannot contain '/'"
+                    else if String.contains "\\" name then
+                        Just "Name cannot contain '\\'"
+                    else if String.contains ".." name then
+                        Just "Name cannot contain '..'"
+                    else
+                        Nothing
+
+                newPath =
+                    if validationError /= Nothing then
+                        model.createPath
+                    else if model.createPathManuallyEdited then
+                        model.createPath
+                    else if String.isEmpty name then
+                        ""
+                    else if String.isEmpty model.defaultWorkspacePath then
+                        model.createPath
+                    else
+                        model.defaultWorkspacePath ++ "/" ++ name
+
+                resetManualEdit =
+                    if String.isEmpty name then
+                        False
+                    else
+                        model.createPathManuallyEdited
+            in
+            { model =
+                { model
+                    | createName = name
+                    , createPath = newPath
+                    , createPathManuallyEdited = resetManualEdit
+                    , nameValidationError = validationError
+                }
+            , command = Cmd.none
+            }
+
         UpdateCreatePath path ->
-            { model = { model | createPath = path }
+            { model =
+                { model
+                    | createPath = path
+                    , createPathManuallyEdited = True
+                }
             , command = Cmd.none
             }
 
@@ -2037,9 +2108,14 @@ viewMain model =
                     { workspaceStatus = model.workspaceStatus
                     , recentWorkspaces = model.recentWorkspaces
                     , openPath = model.openPath
+                    , createName = model.createName
                     , createPath = model.createPath
+                    , defaultWorkspacePath = model.defaultWorkspacePath
+                    , createPathManuallyEdited = model.createPathManuallyEdited
+                    , nameValidationError = model.nameValidationError
                     , loading = model.loading
                     , onUpdateOpenPath = UpdateOpenPath
+                    , onUpdateCreateName = UpdateCreateName
                     , onUpdateCreatePath = UpdateCreatePath
                     , onSelectConfig = SelectConfig
                     , onCreateConfig = CreateConfig
