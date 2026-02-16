@@ -52,6 +52,8 @@ type Route
     | UpdateConfig                             -- PUT /api/config
     | SelectConfig                             -- POST /api/config/select
     | CreateConfig                             -- POST /api/config/create
+    | ListWorkspaces                           -- GET /api/workspaces
+    | RemoveWorkspace String                   -- DELETE /api/workspaces?path=...
     | StaticFile String                        -- GET /* (for frontend assets)
     | NotFound
 
@@ -68,16 +70,17 @@ Takes the HTTP method and URL path, returns the matching route.
 parseRoute : Method -> String -> Route
 parseRoute method path =
     let
-        -- Remove leading slash and split into segments
-        segments =
-            path
-                |> String.dropFirst 1
+        -- Split query string from the raw path BEFORE splitting on "/"
+        -- to avoid slashes in query parameter values being treated as
+        -- path separators (e.g., ?path=/tmp/test/chorus.json)
+        { rawPath, queryParams } =
+            splitQueryString (String.dropFirst 1 path)
+
+        -- Split path into segments
+        pathSegments =
+            rawPath
                 |> String.split "/"
                 |> Array.keepIf (\s -> not (String.isEmpty s))
-
-        -- Extract query string from last segment if present
-        { pathSegments, queryParams } =
-            extractQueryParams segments
     in
     when { method = method, segments = pathSegments } is
         -- API routes
@@ -198,6 +201,17 @@ parseRoute method path =
         { method = POST, segments = [ "api", "config", "create" ] } ->
             CreateConfig
 
+        { method = GET, segments = [ "api", "workspaces" ] } ->
+            ListWorkspaces
+
+        { method = DELETE, segments = [ "api", "workspaces" ] } ->
+            when Dict.get "path" queryParams is
+                Just workspacePath ->
+                    RemoveWorkspace workspacePath
+
+                Nothing ->
+                    NotFound
+
         -- Static files (anything not matching /api/*)
         { method = GET, segments = segs } ->
             if Array.first segs == Just "api" then
@@ -224,31 +238,28 @@ withTaskId raw toRoute =
             NotFound
 
 
-{-| Extract query parameters from URL segments.
+{-| Split a URL path into the path portion and query parameters.
 
-The last segment might contain query string like "tasks?status=pending".
-Returns cleaned segments and a dict of query params.
+Splits on the FIRST "?" character so that slashes in query parameter
+values (e.g., ?path=/tmp/test/chorus.json) are not treated as path
+separators.
 
 -}
-extractQueryParams :
-    Array String
-    -> { pathSegments : Array String, queryParams : Dict String String }
-extractQueryParams segments =
-    when Array.popLast segments is
+splitQueryString :
+    String
+    -> { rawPath : String, queryParams : Dict String String }
+splitQueryString url =
+    when String.firstIndexOf "?" url is
         Nothing ->
-            { pathSegments = [], queryParams = Dict.empty }
+            { rawPath = url, queryParams = Dict.empty }
 
-        Just { last, initial } ->
-            when String.split "?" last is
-                [ pathPart, queryString ] ->
-                    { pathSegments = Array.pushLast pathPart initial
-                    , queryParams = parseQueryString queryString
-                    }
-
-                _ ->
-                    { pathSegments = segments
-                    , queryParams = Dict.empty
-                    }
+        Just index ->
+            { rawPath = String.takeFirst index url
+            , queryParams =
+                url
+                    |> String.dropFirst (index + 1)
+                    |> parseQueryString
+            }
 
 
 {-| Parse a query string into key-value pairs.
@@ -402,6 +413,12 @@ routeToString route =
 
         CreateConfig ->
             "CreateConfig"
+
+        ListWorkspaces ->
+            "ListWorkspaces"
+
+        RemoveWorkspace path ->
+            "RemoveWorkspace(" ++ path ++ ")"
 
         StaticFile path ->
             "StaticFile(" ++ path ++ ")"

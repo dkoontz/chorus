@@ -28,7 +28,7 @@ import Process
 import Set exposing (Set)
 import Task
 import Time
-import Types exposing (AgentConfig(..), AgentProvider(..), ProviderConfig, SourceType(..), Task(..), TaskStatus(..), WorkspaceConfig)
+import Types exposing (AgentConfig(..), AgentProvider(..), ProviderConfig, SourceType(..), Task(..), TaskStatus(..), WorkspaceConfig, WorkspaceEntry)
 import Url exposing (Url)
 import View.Agents as Agents exposing (AgentForm)
 import View.Providers as Providers exposing (ProviderForm)
@@ -83,6 +83,7 @@ type alias Model =
     , draftAnswers : Array String
     , expandedEvents : Set Int
     , workspaceStatus : WorkspaceStatus
+    , recentWorkspaces : Array WorkspaceEntry
     , openPath : String
     , createPath : String
     , settingsForm : Maybe SettingsForm
@@ -217,6 +218,11 @@ type Msg
     | UpdateCreatePath String
     | SelectConfig
     | CreateConfig
+      -- Workspace history
+    | GotWorkspaces (Result Http.Error (Array WorkspaceEntry))
+    | OpenRecentWorkspace String
+    | RemoveRecentWorkspace String
+    | WorkspaceRemoved { path : String, result : Result Http.Error {} }
       -- System settings
     | UpdateSettingsAllowedDir { index : Int, value : String }
     | AddSettingsAllowedDir
@@ -271,6 +277,7 @@ init _ url key =
             , draftAnswers = []
             , expandedEvents = Set.empty
             , workspaceStatus = NoWorkspace
+            , recentWorkspaces = []
             , openPath = ""
             , createPath = ""
             , settingsForm = Nothing
@@ -283,6 +290,7 @@ init _ url key =
     , command =
         Cmd.batch
             [ Api.getConfig GotInitialConfig
+            , Api.getWorkspaces GotWorkspaces
             , Task.perform GotZone Time.here
             ]
     }
@@ -347,7 +355,7 @@ loadPageData page =
             Api.getProviders GotProviders
 
         WorkspacesPage ->
-            Cmd.none
+            Api.getWorkspaces GotWorkspaces
 
         SystemSettingsPage ->
             Api.getProviders GotProviders
@@ -1420,11 +1428,16 @@ update msg model =
                             Cmd.batch
                                 [ loadPageData BoardPage
                                 , wsCmd
+                                , Api.getWorkspaces GotWorkspaces
                                 ]
                         }
                     else
                         { model = { newModel | websocketConnection = wsState }
-                        , command = wsCmd
+                        , command =
+                            Cmd.batch
+                                [ wsCmd
+                                , Api.getWorkspaces GotWorkspaces
+                                ]
                         }
 
                 Err err ->
@@ -1469,6 +1482,47 @@ update msg model =
                 { model = { model | loading = True }
                 , command = Api.createConfig (String.trim model.createPath) GotConfig
                 }
+
+        -- Workspace history
+
+        GotWorkspaces result ->
+            when result is
+                Ok entries ->
+                    { model = { model | recentWorkspaces = entries }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = addErrorNotification ("Failed to load recent workspaces: " ++ httpErrorToString err) model
+                    , command = Cmd.none
+                    }
+
+        OpenRecentWorkspace path ->
+            { model = { model | loading = True }
+            , command = Api.selectConfig path GotConfig
+            }
+
+        RemoveRecentWorkspace path ->
+            { model = model
+            , command = Api.removeWorkspace path (\result -> WorkspaceRemoved { path = path, result = result })
+            }
+
+        WorkspaceRemoved { path, result } ->
+            when result is
+                Ok _ ->
+                    { model =
+                        { model
+                            | recentWorkspaces =
+                                model.recentWorkspaces
+                                    |> Array.keepIf (\e -> e.configPath /= path)
+                        }
+                    , command = Cmd.none
+                    }
+
+                Err err ->
+                    { model = addErrorNotification ("Failed to remove workspace: " ++ httpErrorToString err) model
+                    , command = Cmd.none
+                    }
 
         -- System settings
 
@@ -1981,6 +2035,7 @@ viewMain model =
             WorkspacesPage ->
                 Workspaces.view
                     { workspaceStatus = model.workspaceStatus
+                    , recentWorkspaces = model.recentWorkspaces
                     , openPath = model.openPath
                     , createPath = model.createPath
                     , loading = model.loading
@@ -1988,6 +2043,8 @@ viewMain model =
                     , onUpdateCreatePath = UpdateCreatePath
                     , onSelectConfig = SelectConfig
                     , onCreateConfig = CreateConfig
+                    , onOpenRecentWorkspace = OpenRecentWorkspace
+                    , onRemoveRecentWorkspace = RemoveRecentWorkspace
                     }
 
             SystemSettingsPage ->

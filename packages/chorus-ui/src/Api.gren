@@ -25,6 +25,8 @@ module Api exposing
     , updateConfig
     , selectConfig
     , createConfig
+    , getWorkspaces
+    , removeWorkspace
     , ConfigResponse
     , dataDecoder
     , expectApiResponse
@@ -41,7 +43,7 @@ import Bytes exposing (Bytes)
 import Http
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
-import Types exposing (AgentConfig, History, ProviderConfig, Queue, SourceInfo, Task, WorkspaceConfig)
+import Types exposing (AgentConfig, History, ProviderConfig, Queue, SourceInfo, Task, WorkspaceConfig, WorkspaceEntry)
 
 
 
@@ -539,6 +541,35 @@ createConfig dirPath toMsg =
                     ]
                 )
         , expect = expectApiResponse toMsg configResponseDecoder
+        }
+
+
+
+-- WORKSPACE HISTORY API
+
+
+{-| Get the list of recent workspaces.
+-}
+getWorkspaces : (Result Http.Error (Array WorkspaceEntry) -> msg) -> Cmd msg
+getWorkspaces toMsg =
+    Http.get
+        { url = "/api/workspaces"
+        , expect = expectApiResponse toMsg (dataDecoder (Decode.array Types.workspaceEntryDecoder))
+        }
+
+
+{-| Remove a workspace entry from the recent list.
+-}
+removeWorkspace : String -> (Result Http.Error {} -> msg) -> Cmd msg
+removeWorkspace path toMsg =
+    Http.request
+        { method = "DELETE"
+        , headers = []
+        , url = "/api/workspaces?path=" ++ path
+        , body = Http.emptyBody
+        , expect = expectApiResponse toMsg (Decode.succeed {})
+        , timeout = Nothing
+        , tracker = Nothing
         }
 
 

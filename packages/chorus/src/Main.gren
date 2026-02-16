@@ -37,6 +37,7 @@ import Provider.ClaudeCode as ClaudeCode
 import Provider.OpenCode as OpenCode
 import Provider.Registry as ProviderRegistry
 import Stream
+import Time
 import Task as GrenTask
 import Task.Registry as Registry
 import Types exposing (AgentConfig(..), AgentProvider(..), EventType(..), PlannerOutput(..), ProviderType(..), TaskStatus(..), SourceInfo, WorkspaceConfig)
@@ -86,6 +87,7 @@ type alias Model =
     , cliPort : Maybe Int
     , websocketServer : Maybe WebSocketServer.Server
     , websocketClients : Dict Int WebSocketServer.Connection
+    , workspacesPath : String
     }
 
 
@@ -158,6 +160,7 @@ type Msg
     | WsClientDisconnected { connection : WebSocketServer.Connection, reason : WebSocketServer.CloseReason }
     | WsClientError { connection : WebSocketServer.Connection, error : String }
     | WsBroadcastResult (Result WsConnection.Error {})
+    | GotWorkspaceRecorded (Result String {})
     | NoOp
 
 
@@ -249,6 +252,7 @@ init env =
                                         , cliPort = cliPort
                                         , websocketServer = Nothing
                                         , websocketClients = Dict.empty
+                                        , workspacesPath = baseDir ++ "/workspaces.json"
                                         }
 
                                     -- Deliver pre-loaded config to GotConfigLoaded for registry init
@@ -1666,6 +1670,8 @@ update msg model =
                             , portWarningCmd
                             , broadcastToClients model "config_changed" Encode.null
                             , Logging.logInfo model.logger ("Workspace config loaded from: " ++ configPath) NoOp
+                            , recordWorkspaceEntry model.filesystemPermission model.workspacesPath configPath
+                                |> GrenTask.perform GotWorkspaceRecorded
                             ]
                     }
 
@@ -1720,6 +1726,18 @@ update msg model =
             , command = Cmd.none
             }
 
+        GotWorkspaceRecorded result ->
+            when result is
+                Ok _ ->
+                    { model = model
+                    , command = Cmd.none
+                    }
+
+                Err errMsg ->
+                    { model = model
+                    , command = Logging.logError model.logger ("Failed to record workspace entry: " ++ errMsg) NoOp
+                    }
+
         NoOp ->
             { model = model
             , command = Cmd.none
@@ -1751,6 +1769,12 @@ handleRoute model route request response =
 
         Router.CreateConfig ->
             handleCreateConfig model request response
+
+        Router.ListWorkspaces ->
+            handleListWorkspaces model response
+
+        Router.RemoveWorkspace path ->
+            handleRemoveWorkspace model path response
 
         _ ->
             -- All other API routes need registry
@@ -2117,6 +2141,12 @@ handleRoute model route request response =
                             sendNotFound response
 
                         Router.CreateConfig ->
+                            sendNotFound response
+
+                        Router.ListWorkspaces ->
+                            sendNotFound response
+
+                        Router.RemoveWorkspace _ ->
                             sendNotFound response
 
 
@@ -3753,6 +3783,205 @@ handleCreateConfig model request response =
                     (\result ->
                         GotConfigLoaded { response = Just response, deferResponse = True, result = result }
                     )
+
+
+
+-- WORKSPACE HISTORY
+
+
+{-| Handle GET /api/workspaces.
+-}
+handleListWorkspaces : Model -> Response -> Cmd Msg
+handleListWorkspaces model response =
+    loadWorkspaceEntries model.filesystemPermission model.workspacesPath
+        |> GrenTask.perform
+            (\result ->
+                when result is
+                    Ok entries ->
+                        let
+                            sortedEntries =
+                                entries
+                                    |> Array.sortBy .lastOpenedAt
+                                    |> Array.reverse
+
+                            body =
+                                Encode.object
+                                    [ { key = "data", value = Encode.array Types.encodeWorkspaceEntry sortedEntries }
+                                    ]
+                                    |> Encode.encode 0
+                        in
+                        GotApiResult
+                            { response = response
+                            , result =
+                                Api.ApiSuccess
+                                    { statusCode = 200
+                                    , body = body
+                                    }
+                            }
+
+                    Err errMsg ->
+                        GotApiResult
+                            { response = response
+                            , result =
+                                Api.ApiError
+                                    { statusCode = 500
+                                    , code = "READ_ERROR"
+                                    , message = errMsg
+                                    }
+                            }
+            )
+
+
+{-| Handle DELETE /api/workspaces?path=...
+-}
+handleRemoveWorkspace : Model -> String -> Response -> Cmd Msg
+handleRemoveWorkspace model path response =
+    removeWorkspaceEntry model.filesystemPermission model.workspacesPath path
+        |> GrenTask.perform
+            (\result ->
+                when result is
+                    Ok _ ->
+                        GotApiResult
+                            { response = response
+                            , result =
+                                Api.ApiSuccess
+                                    { statusCode = 200
+                                    , body = Encode.encode 0 (Encode.object [ { key = "data", value = Encode.object [] } ])
+                                    }
+                            }
+
+                    Err errMsg ->
+                        GotApiResult
+                            { response = response
+                            , result =
+                                Api.ApiError
+                                    { statusCode = 500
+                                    , code = "WRITE_ERROR"
+                                    , message = errMsg
+                                    }
+                            }
+            )
+
+
+{-| Load workspace entries from the workspaces.json file.
+
+If the file does not exist, returns an empty array.
+If the file exists but cannot be parsed, returns an error.
+-}
+loadWorkspaceEntries : FileSystem.Permission -> String -> GrenTask.Task Never (Result String (Array Types.WorkspaceEntry))
+loadWorkspaceEntries filesystemPermission workspacesPath =
+    let
+        path =
+            Path.fromPosixString workspacesPath
+    in
+    FileSystem.readFile filesystemPermission path
+        |> GrenTask.mapError (\e -> FileSystem.errorToString e)
+        |> GrenTask.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Nothing ->
+                        GrenTask.fail "Could not decode workspaces file as UTF-8"
+
+                    Just content ->
+                        when Decode.decodeString (Decode.field "workspaces" (Decode.array Types.workspaceEntryDecoder)) content is
+                            Ok entries ->
+                                GrenTask.succeed entries
+
+                            Err err ->
+                                GrenTask.fail ("Invalid workspaces JSON: " ++ Decode.errorToString err)
+            )
+        |> GrenTask.map Ok
+        |> GrenTask.onError
+            (\err ->
+                -- If the file doesn't exist, treat as empty list
+                if String.contains "ENOENT" err then
+                    GrenTask.succeed (Ok [])
+                else
+                    GrenTask.succeed (Err err)
+            )
+
+
+{-| Save workspace entries to the workspaces.json file.
+-}
+saveWorkspaceEntries : FileSystem.Permission -> String -> Array Types.WorkspaceEntry -> GrenTask.Task Never (Result String {})
+saveWorkspaceEntries filesystemPermission workspacesPath entries =
+    let
+        path =
+            Path.fromPosixString workspacesPath
+
+        json =
+            Encode.object
+                [ { key = "workspaces", value = Encode.array Types.encodeWorkspaceEntry entries }
+                ]
+                |> Encode.encode 2
+
+        bytes =
+            Bytes.fromString json
+    in
+    FileSystem.writeFile filesystemPermission bytes path
+        |> GrenTask.map (\_ -> Ok {})
+        |> GrenTask.onError (\err -> GrenTask.succeed (Err (FileSystem.errorToString err)))
+
+
+{-| Record a workspace entry in workspaces.json.
+
+Reads the existing list, updates or adds the entry with the current timestamp,
+and writes back. If the file does not exist, it is created.
+-}
+recordWorkspaceEntry : FileSystem.Permission -> String -> String -> GrenTask.Task Never (Result String {})
+recordWorkspaceEntry filesystemPermission workspacesPath configPath =
+    loadWorkspaceEntries filesystemPermission workspacesPath
+        |> GrenTask.andThen
+            (\loadResult ->
+                when loadResult is
+                    Err errMsg ->
+                        GrenTask.succeed (Err errMsg)
+
+                    Ok entries ->
+                        Time.now
+                            |> GrenTask.map
+                                (\timestamp ->
+                                    let
+                                        nowMillis =
+                                            Time.posixToMillis timestamp
+
+                                        filtered =
+                                            entries
+                                                |> Array.keepIf (\e -> e.configPath /= configPath)
+
+                                        newEntry =
+                                            { configPath = configPath
+                                            , lastOpenedAt = nowMillis
+                                            }
+                                    in
+                                    Array.pushLast newEntry filtered
+                                )
+                            |> GrenTask.andThen
+                                (\updatedEntries ->
+                                    saveWorkspaceEntries filesystemPermission workspacesPath updatedEntries
+                                )
+            )
+
+
+{-| Remove a workspace entry from workspaces.json by config path.
+-}
+removeWorkspaceEntry : FileSystem.Permission -> String -> String -> GrenTask.Task Never (Result String {})
+removeWorkspaceEntry filesystemPermission workspacesPath configPath =
+    loadWorkspaceEntries filesystemPermission workspacesPath
+        |> GrenTask.andThen
+            (\loadResult ->
+                when loadResult is
+                    Err errMsg ->
+                        GrenTask.succeed (Err errMsg)
+
+                    Ok entries ->
+                        let
+                            filtered =
+                                entries
+                                    |> Array.keepIf (\e -> e.configPath /= configPath)
+                        in
+                        saveWorkspaceEntries filesystemPermission workspacesPath filtered
+            )
 
 
 

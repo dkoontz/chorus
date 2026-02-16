@@ -6,7 +6,7 @@ module View.Workspaces exposing (view)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput, onSubmit)
-import Types exposing (WorkspaceConfig)
+import Types exposing (WorkspaceConfig, WorkspaceEntry)
 import WorkspaceStatus exposing (WorkspaceStatus(..))
 
 
@@ -14,6 +14,7 @@ import WorkspaceStatus exposing (WorkspaceStatus(..))
 -}
 type alias Config msg =
     { workspaceStatus : WorkspaceStatus
+    , recentWorkspaces : Array WorkspaceEntry
     , openPath : String
     , createPath : String
     , loading : Bool
@@ -21,6 +22,8 @@ type alias Config msg =
     , onUpdateCreatePath : String -> msg
     , onSelectConfig : msg
     , onCreateConfig : msg
+    , onOpenRecentWorkspace : String -> msg
+    , onRemoveRecentWorkspace : String -> msg
     }
 
 
@@ -53,6 +56,7 @@ viewActiveWorkspace config _ configPath =
                 ]
             ]
         , hr [] []
+        , viewRecentWorkspaces config
         , viewOpenWorkspace config
         , viewCreateWorkspace config
         ]
@@ -65,6 +69,7 @@ viewWorkspaceError config errorMessage =
             [ p [ class "workspace-error-message" ]
                 [ text errorMessage ]
             ]
+        , viewRecentWorkspaces config
         , div [ class "workspace-actions" ]
             [ viewOpenWorkspace config
             , viewCreateWorkspace config
@@ -77,10 +82,42 @@ viewNoWorkspace config =
     div [ class "no-workspace" ]
         [ p [ class "workspace-notice" ]
             [ text "No workspace is loaded. Open an existing workspace or create a new one to get started." ]
+        , viewRecentWorkspaces config
         , div [ class "workspace-actions" ]
             [ viewOpenWorkspace config
             , viewCreateWorkspace config
             ]
+        ]
+
+
+viewRecentWorkspaces : Config msg -> Html msg
+viewRecentWorkspaces config =
+    if Array.isEmpty config.recentWorkspaces then
+        text ""
+    else
+        div [ class "workspace-section recent-workspaces" ]
+            [ h3 [] [ text "Recent Workspaces" ]
+            , div [ class "recent-workspaces-list" ]
+                (Array.map (viewRecentWorkspaceEntry config) config.recentWorkspaces)
+            ]
+
+
+viewRecentWorkspaceEntry : Config msg -> WorkspaceEntry -> Html msg
+viewRecentWorkspaceEntry config entry =
+    div [ class "recent-workspace-entry" ]
+        [ button
+            [ class "recent-workspace-path"
+            , onClick (config.onOpenRecentWorkspace entry.configPath)
+            , disabled config.loading
+            ]
+            [ text entry.configPath ]
+        , button
+            [ class "recent-workspace-remove"
+            , onClick (config.onRemoveRecentWorkspace entry.configPath)
+            , disabled config.loading
+            , title "Remove from recent workspaces"
+            ]
+            [ text "×" ]
         ]
 
 

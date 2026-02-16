@@ -11,6 +11,7 @@ import ClaudeCodeTests
 import ConfigTests
 import RegistryTests
 import QueueTests
+import RouterTests
 import ToolContextTests
 
 
@@ -28,6 +29,7 @@ init env =
                 , ConfigTests.tests
                 , RegistryTests.tests
                 , QueueTests.tests
+                , RouterTests.tests
                 , ToolContextTests.tests
                 ]
 

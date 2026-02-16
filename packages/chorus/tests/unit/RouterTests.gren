@@ -1,0 +1,176 @@
+module RouterTests exposing (tests)
+
+{-| Unit tests for Web.Router module.
+-}
+
+import HttpServer exposing (Method(..))
+import Task
+import Web.Router exposing (Route(..), parseRoute)
+
+
+tests : Array { name : String, run : Task.Task String {} }
+tests =
+    [ testListWorkspacesRoute
+    , testRemoveWorkspaceSimplePath
+    , testRemoveWorkspaceWithSlashes
+    , testRemoveWorkspaceDeepPath
+    , testRemoveWorkspaceMissingPathParam
+    , testListTasksWithStatusQuery
+    , testListTasksNoQuery
+    ]
+
+
+testListWorkspacesRoute : { name : String, run : Task.Task String {} }
+testListWorkspacesRoute =
+    { name = "Router: GET /api/workspaces -> ListWorkspaces"
+    , run =
+        let
+            route =
+                parseRoute GET "/api/workspaces"
+        in
+        when route is
+            ListWorkspaces ->
+                Task.succeed {}
+
+            other ->
+                Task.fail
+                    ("Expected ListWorkspaces, got "
+                        ++ Web.Router.routeToString other
+                    )
+    }
+
+
+testRemoveWorkspaceSimplePath : { name : String, run : Task.Task String {} }
+testRemoveWorkspaceSimplePath =
+    { name = "Router: DELETE /api/workspaces?path=test -> RemoveWorkspace \"test\""
+    , run =
+        let
+            route =
+                parseRoute DELETE "/api/workspaces?path=test"
+        in
+        when route is
+            RemoveWorkspace path ->
+                if path == "test" then
+                    Task.succeed {}
+                else
+                    Task.fail
+                        ("Expected path \"test\", got \"" ++ path ++ "\"")
+
+            other ->
+                Task.fail
+                    ("Expected RemoveWorkspace, got "
+                        ++ Web.Router.routeToString other
+                    )
+    }
+
+
+testRemoveWorkspaceWithSlashes : { name : String, run : Task.Task String {} }
+testRemoveWorkspaceWithSlashes =
+    { name = "Router: DELETE /api/workspaces?path=/tmp/test/chorus.json -> RemoveWorkspace with full path"
+    , run =
+        let
+            route =
+                parseRoute DELETE "/api/workspaces?path=/tmp/test/chorus.json"
+        in
+        when route is
+            RemoveWorkspace path ->
+                if path == "/tmp/test/chorus.json" then
+                    Task.succeed {}
+                else
+                    Task.fail
+                        ("Expected path \"/tmp/test/chorus.json\", got \"" ++ path ++ "\"")
+
+            other ->
+                Task.fail
+                    ("Expected RemoveWorkspace, got "
+                        ++ Web.Router.routeToString other
+                    )
+    }
+
+
+testRemoveWorkspaceDeepPath : { name : String, run : Task.Task String {} }
+testRemoveWorkspaceDeepPath =
+    { name = "Router: DELETE /api/workspaces?path=/home/user/projects/my-app/chorus.json -> RemoveWorkspace with deep path"
+    , run =
+        let
+            route =
+                parseRoute DELETE "/api/workspaces?path=/home/user/projects/my-app/chorus.json"
+        in
+        when route is
+            RemoveWorkspace path ->
+                if path == "/home/user/projects/my-app/chorus.json" then
+                    Task.succeed {}
+                else
+                    Task.fail
+                        ("Expected path \"/home/user/projects/my-app/chorus.json\", got \"" ++ path ++ "\"")
+
+            other ->
+                Task.fail
+                    ("Expected RemoveWorkspace, got "
+                        ++ Web.Router.routeToString other
+                    )
+    }
+
+
+testRemoveWorkspaceMissingPathParam : { name : String, run : Task.Task String {} }
+testRemoveWorkspaceMissingPathParam =
+    { name = "Router: DELETE /api/workspaces (no path param) -> NotFound"
+    , run =
+        let
+            route =
+                parseRoute DELETE "/api/workspaces"
+        in
+        when route is
+            NotFound ->
+                Task.succeed {}
+
+            other ->
+                Task.fail
+                    ("Expected NotFound, got "
+                        ++ Web.Router.routeToString other
+                    )
+    }
+
+
+testListTasksWithStatusQuery : { name : String, run : Task.Task String {} }
+testListTasksWithStatusQuery =
+    { name = "Router: GET /api/tasks?status=pending -> ListTasks (Just \"pending\")"
+    , run =
+        let
+            route =
+                parseRoute GET "/api/tasks?status=pending"
+        in
+        when route is
+            ListTasks (Just status) ->
+                if status == "pending" then
+                    Task.succeed {}
+                else
+                    Task.fail
+                        ("Expected status \"pending\", got \"" ++ status ++ "\"")
+
+            other ->
+                Task.fail
+                    ("Expected ListTasks (Just \"pending\"), got "
+                        ++ Web.Router.routeToString other
+                    )
+    }
+
+
+testListTasksNoQuery : { name : String, run : Task.Task String {} }
+testListTasksNoQuery =
+    { name = "Router: GET /api/tasks -> ListTasks Nothing"
+    , run =
+        let
+            route =
+                parseRoute GET "/api/tasks"
+        in
+        when route is
+            ListTasks Nothing ->
+                Task.succeed {}
+
+            other ->
+                Task.fail
+                    ("Expected ListTasks Nothing, got "
+                        ++ Web.Router.routeToString other
+                    )
+    }

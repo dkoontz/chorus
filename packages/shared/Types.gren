@@ -22,6 +22,7 @@ module Types exposing
     , ProviderConfig
     , AgentProvider(..)
     , WorkspaceConfig
+    , WorkspaceEntry
     -- Encoders
     , encodeTask
     , encodeStatus
@@ -41,6 +42,7 @@ module Types exposing
     , encodeProviderConfig
     , encodeAgentProvider
     , encodeWorkspaceConfig
+    , encodeWorkspaceEntry
     -- Decoders
     , taskDecoder
     , statusDecoder
@@ -60,6 +62,7 @@ module Types exposing
     , providerConfigDecoder
     , agentProviderDecoder
     , workspaceConfigDecoder
+    , workspaceEntryDecoder
     -- Accessors
     , taskId
     , taskDescription
@@ -379,6 +382,16 @@ type alias WorkspaceConfig =
     , initialAgentDirectory : String
     , systemAgentProvider : AgentProvider
     , serverPort : Maybe Int
+    }
+
+
+{-| An entry in the recent workspaces list.
+
+Records the path to a workspace config file and when it was last opened.
+-}
+type alias WorkspaceEntry =
+    { configPath : String
+    , lastOpenedAt : Int
     }
 
 
@@ -1567,6 +1580,34 @@ workspaceConfigDecoder =
                 Decode.maybe (Decode.field "port" Decode.int)
                     |> Decode.map (\maybePort -> { config | serverPort = maybePort })
             )
+
+
+
+-- WORKSPACE ENTRY JSON
+
+
+{-| Encode a WorkspaceEntry to JSON.
+-}
+encodeWorkspaceEntry : WorkspaceEntry -> Encode.Value
+encodeWorkspaceEntry entry =
+    Encode.object
+        [ { key = "configPath", value = Encode.string entry.configPath }
+        , { key = "lastOpenedAt", value = Encode.int entry.lastOpenedAt }
+        ]
+
+
+{-| Decode a WorkspaceEntry from JSON.
+-}
+workspaceEntryDecoder : Decoder WorkspaceEntry
+workspaceEntryDecoder =
+    Decode.map2
+        (\configPath lastOpenedAt ->
+            { configPath = configPath
+            , lastOpenedAt = lastOpenedAt
+            }
+        )
+        (Decode.field "configPath" Decode.string)
+        (Decode.field "lastOpenedAt" Decode.int)
 
 
 
