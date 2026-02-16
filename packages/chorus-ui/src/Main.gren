@@ -94,6 +94,7 @@ type alias Model =
     , settingsValidationError : Maybe String
     , websocketConnection : WebSocketConnectionState
     , websocketUrl : String
+    , initialUrl : Url
     }
 
 
@@ -294,6 +295,7 @@ init _ url key =
             , settingsValidationError = Nothing
             , websocketConnection = WsNotConnected
             , websocketUrl = wsUrl
+            , initialUrl = url
             }
     in
     { model = model
@@ -1390,10 +1392,21 @@ update msg model =
                             { newModel | websocketConnection = WsConnecting }
                     in
                     if model.page == WorkspacesPage then
-                        { model = { updatedModel | page = BoardPage }
+                        let
+                            targetPage =
+                                let
+                                    parsedPage =
+                                        urlToPage model.initialUrl
+                                in
+                                if requiresConfig parsedPage then
+                                    parsedPage
+                                else
+                                    BoardPage
+                        in
+                        { model = { updatedModel | page = targetPage }
                         , command =
                             Cmd.batch
-                                [ loadPageData BoardPage
+                                [ loadPageData targetPage
                                 , wsConnectCmd
                                 ]
                         }
