@@ -224,6 +224,7 @@ type alias StartConfig msg =
     , workspaceRoot : String
     , taskId : Maybe String
     , allowedTools : Maybe String
+    , resumeSessionId : Maybe String
     , onEvent : ProviderEvent -> msg
     }
 
@@ -234,7 +235,7 @@ These are delivered asynchronously via the `onEvent` callback.
 -}
 type ProviderEvent
     = ToolCallReceived ToolCall
-    | AgentCompleted String
+    | AgentCompleted { output : String, sessionId : Maybe String }
     | AgentFailed String
 
 

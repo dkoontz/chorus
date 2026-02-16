@@ -90,8 +90,14 @@ startAgent config state startConfig =
             startConfig.agentSpec
 
         cliArgs =
-            { systemPrompt = Just agentSpec.systemPrompt
-            , resumeSessionId = Nothing
+            { systemPrompt =
+                when startConfig.resumeSessionId is
+                    Just _ ->
+                        Nothing
+
+                    Nothing ->
+                        Just agentSpec.systemPrompt
+            , resumeSessionId = startConfig.resumeSessionId
             , workspaceRoot = startConfig.workspaceRoot
             , chorusToolsPath = config.chorusToolsPath
             , message = startConfig.message
@@ -128,8 +134,16 @@ startAgent config state startConfig =
 
                                     Err _ ->
                                         output
+
+                            sessionId =
+                                when Decode.decodeString (Decode.field "session_id" Decode.string) output is
+                                    Ok sid ->
+                                        Just sid
+
+                                    Err _ ->
+                                        Nothing
                         in
-                        startConfig.onEvent (AgentCompleted resultText)
+                        startConfig.onEvent (AgentCompleted { output = resultText, sessionId = sessionId })
                     )
                 |> Task.onError
                     (\runError ->

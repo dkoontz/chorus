@@ -429,7 +429,7 @@ spawnAgent model taskId prompt agentConfig providerConfig isSystemAgent =
 
         outputToolInstruction =
             if isSystemAgent then
-                "\n\nRemember: you must call the planner-output tool before finishing."
+                "\n\nRemember: you must call the planner-output tool via chorus-tools before finishing. Use Bash to invoke:\nchorus-tools <workspace-root> '{\"tool\": \"planner-output\", ...}'"
             else
                 "\n\nIMPORTANT: Before finishing your work, you MUST call the completion-report tool to submit your results. Use: {\"tool\": \"completion-report\", \"status\": \"complete\", \"summary\": \"Brief summary of what was done\", \"output\": \"Detailed output\"}\nFor blocked work, use status \"blocked\" with a \"blockedReason\". For failures, use status \"failed\"."
 
@@ -491,6 +491,7 @@ spawnAgent model taskId prompt agentConfig providerConfig isSystemAgent =
                     , workspaceRoot = initialAgentDir model
                     , taskId = Just taskIdStr
                     , allowedTools = allowedToolsFlag
+                    , resumeSessionId = Nothing
                     , onEvent = \event -> GotProviderEvent { taskId = taskId, event = event }
                     }
 
@@ -2557,6 +2558,23 @@ handleProviderEvent model taskId event =
         Just executor ->
             -- Convert ProviderEvent to an Executor message and process it
             let
+                -- Extract session ID from AgentCompleted and store it on the executor
+                updatedExecutor =
+                    when event is
+                        Provider.AgentCompleted { sessionId } ->
+                            when sessionId is
+                                Just sid ->
+                                    { executor | sessionId = Just sid }
+
+                                Nothing ->
+                                    executor
+
+                        _ ->
+                            executor
+
+                modelWithSessionId =
+                    { model | activeExecutors = Dict.set taskIdStr updatedExecutor model.activeExecutors }
+
                 executorMsg =
                     when event is
                         Provider.ToolCallReceived toolCall ->
@@ -2566,13 +2584,13 @@ handleProviderEvent model taskId event =
                                 , input = toolCall.input
                                 }
 
-                        Provider.AgentCompleted output ->
+                        Provider.AgentCompleted { output } ->
                             Executor.AgentCompleted output
 
                         Provider.AgentFailed error ->
                             Executor.AgentFailed error
             in
-            handleExecutorMsg model taskId executorMsg
+            handleExecutorMsg modelWithSessionId taskId executorMsg
 
 
 {-| Handle a message for the Executor.
@@ -3215,34 +3233,89 @@ handlePlannerComplete model taskId taskIdStr executor result =
                     }
 
         AgentManager.PlannerOutputMissing ->
-            -- Planner exited without calling planner-output tool - record failure
-            when model.registry is
-                Nothing ->
-                    { model = updatedModel
-                    , command = Logging.logError model.logger ("Planner exited without calling planner-output tool for task " ++ taskIdStr) NoOp
-                    }
+            -- Planner exited without calling planner-output tool
+            -- Attempt to resume the session with a reminder before failing
+            let
+                canRetry =
+                    AgentManager.shouldRetry { retryCount = executor.retryCount, maxRetries = 1 }
 
-                Just registry ->
-                    let
-                        planningFailedEvent =
-                            Just
-                                { eventType = PlanningFailed
-                                , data =
-                                    Dict.empty
-                                        |> Dict.set "error" "Planner exited without calling planner-output tool"
-                                }
+                hasSessionId =
+                    executor.sessionId /= Nothing
+            in
+            if canRetry && hasSessionId then
+                -- Resume the session with a reminder to call planner-output
+                let
+                    resumeSessionId =
+                        executor.sessionId
 
-                        ctx =
-                            makeApiContext model registry
-                    in
-                    { model = updatedModel
-                    , command =
-                        Cmd.batch
-                            [ Api.requestUpdateStatus ctx taskId (Types.Failed "Planner exited without calling planner-output tool") planningFailedEvent (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
-                            , Logging.logError model.logger ("Planner exited without calling planner-output tool for task " ++ taskIdStr) NoOp
-                            , broadcastToClients updatedModel "tasks_changed" Encode.null
-                            ]
-                    }
+                    reminderMessage =
+                        "You exited without calling the planner-output tool. You MUST call it before finishing. Use Bash to invoke:\nchorus-tools <workspace-root> '{\"tool\": \"planner-output\", ...}'"
+
+                    resumeStartConfig =
+                        { agentSpec =
+                            { name = executor.agentName
+                            , systemPrompt = ""
+                            }
+                        , message = reminderMessage
+                        , workspaceRoot = initialAgentDir model
+                        , taskId = Just taskIdStr
+                        , allowedTools = Nothing
+                        , resumeSessionId = resumeSessionId
+                        , onEvent = \event -> GotProviderEvent { taskId = taskId, event = event }
+                        }
+
+                    startResult =
+                        executor.provider.startAgent executor.providerState resumeStartConfig
+
+                    retriedExecutor =
+                        { executor
+                            | retryCount = executor.retryCount + 1
+                            , executorModel = Executor.Idle
+                            , sessionId = Nothing
+                            , providerState = startResult.state
+                        }
+
+                    -- Use `model` (not `updatedModel`) to preserve the executor in activeExecutors
+                    retryModel =
+                        { model | activeExecutors = Dict.set taskIdStr retriedExecutor model.activeExecutors }
+                in
+                { model = retryModel
+                , command =
+                    Cmd.batch
+                        [ startResult.cmd
+                        , Logging.logWarn model.logger ("Planner exited without calling planner-output tool for task " ++ taskIdStr ++ " — resuming session (retry " ++ String.fromInt (executor.retryCount + 1) ++ ")") NoOp
+                        ]
+                }
+
+            else
+                -- No retry possible — fail the task
+                when model.registry is
+                    Nothing ->
+                        { model = updatedModel
+                        , command = Logging.logError model.logger ("Planner exited without calling planner-output tool for task " ++ taskIdStr) NoOp
+                        }
+
+                    Just registry ->
+                        let
+                            planningFailedEvent =
+                                Just
+                                    { eventType = PlanningFailed
+                                    , data =
+                                        Dict.empty
+                                            |> Dict.set "error" "Planner exited without calling planner-output tool"
+                                    }
+
+                            ctx =
+                                makeApiContext model registry
+                        in
+                        { model = updatedModel
+                        , command =
+                            Cmd.batch
+                                [ Api.requestUpdateStatus ctx taskId (Types.Failed "Planner exited without calling planner-output tool") planningFailedEvent (\_ -> GotInternalApiResult (Api.ApiSuccess { statusCode = 200, body = "" }))
+                                , Logging.logError model.logger ("Planner exited without calling planner-output tool for task " ++ taskIdStr) NoOp
+                                , broadcastToClients updatedModel "tasks_changed" Encode.null
+                                ]
+                        }
 
 
 {-| Handle user agent (non-system) completion.

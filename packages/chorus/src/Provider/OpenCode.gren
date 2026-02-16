@@ -94,7 +94,7 @@ startAgent config state startConfig =
             Path.append (Path.fromPosixString "AGENTS.md") (Path.fromPosixString startConfig.workspaceRoot)
 
         cliArgs =
-            { sessionId = Nothing
+            { sessionId = startConfig.resumeSessionId
             , workspaceRoot = startConfig.workspaceRoot
             , message = startConfig.message
             , chorusToolsPath = config.chorusToolsPath
@@ -113,55 +113,70 @@ startAgent config state startConfig =
             , runDuration = ChildProcess.Milliseconds 600000
             }
 
-        cmd =
-            FileSystem.writeFile config.filesystemPermission (Bytes.fromString agentSpec.systemPrompt) agentsPath
-                |> Task.mapError (\fsErr -> "Failed to write AGENTS.md: " ++ FileSystem.errorToString fsErr)
-                |> Task.andThen
-                    (\_ ->
-                        ChildProcess.run config.childProcessPermission "bash" [ "-c", shellCommand ] options
-                            |> Task.map
-                                (\cliResult ->
-                                    let
-                                        output =
-                                            cliResult.stdout
-                                                |> Bytes.toString
-                                                |> Maybe.withDefault ""
+        runCli =
+            ChildProcess.run config.childProcessPermission "bash" [ "-c", shellCommand ] options
+                |> Task.map
+                    (\cliResult ->
+                        let
+                            output =
+                                cliResult.stdout
+                                    |> Bytes.toString
+                                    |> Maybe.withDefault ""
 
-                                        resultText =
-                                            when Decode.decodeString (Decode.field "result" Decode.string) output is
-                                                Ok text ->
-                                                    text
+                            resultText =
+                                when Decode.decodeString (Decode.field "result" Decode.string) output is
+                                    Ok text ->
+                                        text
 
-                                                Err _ ->
-                                                    output
-                                    in
-                                    startConfig.onEvent (AgentCompleted resultText)
-                                )
-                            |> Task.onError
-                                (\runError ->
-                                    let
-                                        errMsg =
-                                            when runError is
-                                                ChildProcess.InitError { errorCode } ->
-                                                    "Failed to start agent CLI: " ++ errorCode
+                                    Err _ ->
+                                        output
 
-                                                ChildProcess.ProgramError { exitCode, stderr } ->
-                                                    let
-                                                        stderrStr =
-                                                            stderr
-                                                                |> Bytes.toString
-                                                                |> Maybe.withDefault ""
-                                                    in
-                                                    "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
-                                    in
-                                    Task.succeed (startConfig.onEvent (AgentFailed errMsg))
-                                )
+                            sessionId =
+                                when Decode.decodeString (Decode.field "session_id" Decode.string) output is
+                                    Ok sid ->
+                                        Just sid
+
+                                    Err _ ->
+                                        Nothing
+                        in
+                        startConfig.onEvent (AgentCompleted { output = resultText, sessionId = sessionId })
                     )
                 |> Task.onError
-                    (\errMsg ->
+                    (\runError ->
+                        let
+                            errMsg =
+                                when runError is
+                                    ChildProcess.InitError { errorCode } ->
+                                        "Failed to start agent CLI: " ++ errorCode
+
+                                    ChildProcess.ProgramError { exitCode, stderr } ->
+                                        let
+                                            stderrStr =
+                                                stderr
+                                                    |> Bytes.toString
+                                                    |> Maybe.withDefault ""
+                                        in
+                                        "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                        in
                         Task.succeed (startConfig.onEvent (AgentFailed errMsg))
                     )
-                |> Task.perform identity
+
+        cmd =
+            when startConfig.resumeSessionId is
+                Just _ ->
+                    -- Skip AGENTS.md write on resume — session already has the system prompt
+                    runCli
+                        |> Task.perform identity
+
+                Nothing ->
+                    FileSystem.writeFile config.filesystemPermission (Bytes.fromString agentSpec.systemPrompt) agentsPath
+                        |> Task.mapError (\fsErr -> "Failed to write AGENTS.md: " ++ FileSystem.errorToString fsErr)
+                        |> Task.andThen (\_ -> runCli)
+                        |> Task.onError
+                            (\errMsg ->
+                                Task.succeed (startConfig.onEvent (AgentFailed errMsg))
+                            )
+                        |> Task.perform identity
     in
     { state = state
     , cmd = cmd
