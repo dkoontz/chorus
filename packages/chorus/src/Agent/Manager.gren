@@ -19,10 +19,15 @@ import Types exposing (CompletionReport, PlannerOutput(..), PlanningFields)
 
 
 {-| Result of processing an agent's completion.
+
+- `CompletedWithReport`: Agent exited successfully and submitted a completion report.
+- `ExitedWithoutReport`: Agent exited successfully but did not submit a completion
+  report. This is a distinct state from success and error.
+- `AgentExitError`: Agent exited with an error.
 -}
 type AgentCompletionResult
     = CompletedWithReport CompletionReport
-    | CompletedWithoutReport String
+    | ExitedWithoutReport String
     | AgentExitError String
 
 
@@ -59,7 +64,7 @@ processAgentCompletion { exitResult, completionReport } =
         Nothing ->
             when exitResult is
                 Ok output ->
-                    CompletedWithoutReport output
+                    ExitedWithoutReport output
 
                 Err errMsg ->
                     AgentExitError errMsg

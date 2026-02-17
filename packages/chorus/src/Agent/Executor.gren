@@ -2,6 +2,7 @@ module Agent.Executor exposing
     ( Config
     , Msg(..)
     , Model(..)
+    , AccumulatedData(..)
     , PendingTool
     , DeferredAction(..)
     , UpdateEffect(..)
@@ -68,9 +69,23 @@ type Msg
     | AgentFailed String
 
 
+{-| Per-agent-type accumulated metadata.
+
+Each agent kind carries only its own completion data shape, making
+invalid combinations (e.g. a user agent with planner output)
+unrepresentable.
+
+-}
+type AccumulatedData
+    = UserAgentData { completionReport : Maybe Types.CompletionReport }
+    | TaskValidatorData { plannerOutput : Maybe Types.PlannerOutput }
+
+
 {-| Executor state.
 
-- `Idle`: Executor created but no conversation started yet.
+- `Idle`: Executor created but no conversation started yet. Carries the
+  `AccumulatedData` variant so the correct shape is available when
+  the first tool call transitions the executor to `Running`.
 - `Running`: Conversation active, processing tool calls.
 - `AwaitingDeferredAction`: A tool call produced a deferred result (handoff
   or planner output) that Main.gren must handle before the executor can
@@ -80,23 +95,20 @@ type Msg
 
 -}
 type Model
-    = Idle
+    = Idle AccumulatedData
     | Running
         { pendingToolCalls : Dict String PendingTool
         , completedResults : Array ToolResult
-        , completionReport : Maybe Types.CompletionReport
-        , plannerOutput : Maybe Types.PlannerOutput
+        , accumulatedData : AccumulatedData
         }
     | AwaitingDeferredAction DeferredAction
     | Complete
         { output : String
-        , completionReport : Maybe Types.CompletionReport
-        , plannerOutput : Maybe Types.PlannerOutput
+        , accumulatedData : AccumulatedData
         }
     | Failed
         { error : String
-        , completionReport : Maybe Types.CompletionReport
-        , plannerOutput : Maybe Types.PlannerOutput
+        , accumulatedData : AccumulatedData
         }
 
 
@@ -140,11 +152,14 @@ type UpdateEffect
     | DeferredActionRequired DeferredAction
 
 
-{-| Initialize the executor.
+{-| Initialize the executor with the appropriate accumulated data shape.
+
+The `AccumulatedData` variant determines which completion data the executor
+tracks. It must be provided before the first tool call arrives.
 -}
-init : Model
-init =
-    Idle
+init : AccumulatedData -> Model
+init accumulatedData =
+    Idle accumulatedData
 
 
 {-| Update the executor state based on messages.
@@ -176,17 +191,39 @@ update msg model config =
                                     Dict.set toolCall.id pendingTool state.pendingToolCalls
                             }
 
-                        _ ->
-                            -- For Idle, Complete, Failed, or AwaitingDeferredAction,
-                            -- create fresh running state. This handles both the
-                            -- normal first-tool-call case (Idle) and edge cases
-                            -- where a tool call arrives after unexpected state
-                            -- transitions.
+                        Idle accumulatedData ->
+                            -- Normal first-tool-call case: use the AccumulatedData
+                            -- variant from init to construct the running state.
                             { pendingToolCalls =
                                 Dict.singleton toolCall.id pendingTool
                             , completedResults = []
-                            , completionReport = Nothing
-                            , plannerOutput = Nothing
+                            , accumulatedData = accumulatedData
+                            }
+
+                        Complete { accumulatedData } ->
+                            -- Edge case: tool call arrives after completion.
+                            { pendingToolCalls =
+                                Dict.singleton toolCall.id pendingTool
+                            , completedResults = []
+                            , accumulatedData = accumulatedData
+                            }
+
+                        Failed { accumulatedData } ->
+                            -- Edge case: tool call arrives after failure.
+                            { pendingToolCalls =
+                                Dict.singleton toolCall.id pendingTool
+                            , completedResults = []
+                            , accumulatedData = accumulatedData
+                            }
+
+                        AwaitingDeferredAction _ ->
+                            -- Edge case: tool call arrives while awaiting deferred
+                            -- action. Fall back to user agent data since we cannot
+                            -- recover the accumulated data from this state.
+                            { pendingToolCalls =
+                                Dict.singleton toolCall.id pendingTool
+                            , completedResults = []
+                            , accumulatedData = UserAgentData { completionReport = Nothing }
                             }
 
                 cmd =
@@ -214,23 +251,27 @@ update msg model config =
 
         AgentCompleted output ->
             let
-                { completionReport, plannerOutput } =
+                accumulatedData =
                     when model is
                         Running state ->
-                            { completionReport = state.completionReport
-                            , plannerOutput = state.plannerOutput
-                            }
+                            state.accumulatedData
 
-                        _ ->
-                            { completionReport = Nothing
-                            , plannerOutput = Nothing
-                            }
+                        Idle data ->
+                            data
+
+                        Complete state ->
+                            state.accumulatedData
+
+                        Failed state ->
+                            state.accumulatedData
+
+                        AwaitingDeferredAction _ ->
+                            UserAgentData { completionReport = Nothing }
             in
             { model =
                 Complete
                     { output = output
-                    , completionReport = completionReport
-                    , plannerOutput = plannerOutput
+                    , accumulatedData = accumulatedData
                     }
             , cmd = Cmd.none
             , effect = NoEffect
@@ -238,23 +279,27 @@ update msg model config =
 
         AgentFailed error ->
             let
-                { completionReport, plannerOutput } =
+                accumulatedData =
                     when model is
                         Running state ->
-                            { completionReport = state.completionReport
-                            , plannerOutput = state.plannerOutput
-                            }
+                            state.accumulatedData
 
-                        _ ->
-                            { completionReport = Nothing
-                            , plannerOutput = Nothing
-                            }
+                        Idle data ->
+                            data
+
+                        Complete state ->
+                            state.accumulatedData
+
+                        Failed state ->
+                            state.accumulatedData
+
+                        AwaitingDeferredAction _ ->
+                            UserAgentData { completionReport = Nothing }
             in
             { model =
                 Failed
                     { error = error
-                    , completionReport = completionReport
-                    , plannerOutput = plannerOutput
+                    , accumulatedData = accumulatedData
                     }
             , cmd = Cmd.none
             , effect = NoEffect
@@ -272,8 +317,7 @@ handleToolCallCompleted :
     ToolExecution.ToolCallResult
     -> { pendingToolCalls : Dict String PendingTool
        , completedResults : Array ToolResult
-       , completionReport : Maybe Types.CompletionReport
-       , plannerOutput : Maybe Types.PlannerOutput
+       , accumulatedData : AccumulatedData
        }
     -> { model : Model, cmd : Cmd msg, effect : UpdateEffect }
 handleToolCallCompleted toolCallResult state =
@@ -319,20 +363,28 @@ handleToolCallCompleted toolCallResult state =
         Api.ApiSuccess { body } ->
             let
                 -- Check if this is a completion-report result by tool name
-                updatedCompletionReport =
+                -- and update the accumulated data accordingly.
+                updatedAccumulatedData =
                     if toolCallResult.toolName == "completion-report" then
-                        -- Parse the completion report from the original request body.
-                        -- If decode succeeds, store the report. If it fails (which
-                        -- should not happen since the tool already validated the
-                        -- input), keep the existing report.
-                        when Decode.decodeString ToolExecution.completionReportInputDecoder toolCallResult.requestBody is
-                            Ok report ->
-                                Just report
+                        when state.accumulatedData is
+                            UserAgentData userData ->
+                                -- Parse the completion report from the original request body.
+                                -- If decode succeeds, store the report. If it fails (which
+                                -- should not happen since the tool already validated the
+                                -- input), keep the existing report.
+                                when Decode.decodeString ToolExecution.completionReportInputDecoder toolCallResult.requestBody is
+                                    Ok report ->
+                                        UserAgentData { userData | completionReport = Just report }
 
-                            Err _ ->
-                                state.completionReport
+                                    Err _ ->
+                                        state.accumulatedData
+
+                            TaskValidatorData _ ->
+                                -- completion-report is not valid for task validators;
+                                -- leave data unchanged.
+                                state.accumulatedData
                     else
-                        state.completionReport
+                        state.accumulatedData
 
                 toolResult =
                     { toolCallId = toolCallResult.toolCallId
@@ -343,7 +395,7 @@ handleToolCallCompleted toolCallResult state =
 
                 updatedState =
                     { state
-                        | completionReport = updatedCompletionReport
+                        | accumulatedData = updatedAccumulatedData
                     }
             in
             collectResultAndCheckBatch toolResult remainingPending updatedState
@@ -372,8 +424,7 @@ collectResultAndCheckBatch :
     -> Dict String PendingTool
     -> { pendingToolCalls : Dict String PendingTool
        , completedResults : Array ToolResult
-       , completionReport : Maybe Types.CompletionReport
-       , plannerOutput : Maybe Types.PlannerOutput
+       , accumulatedData : AccumulatedData
        }
     -> { model : Model, cmd : Cmd msg, effect : UpdateEffect }
 collectResultAndCheckBatch toolResult remainingPending state =

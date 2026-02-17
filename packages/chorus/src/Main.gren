@@ -120,7 +120,7 @@ type alias SpawningExecutor =
     { taskId : TaskId
     , agentName : String
     , agentConfig : Types.AgentConfig
-    , agentKind : AgentKind
+    , agentType : AgentType
     , deferredResponse : Maybe Response
     }
 
@@ -131,7 +131,7 @@ type alias ActiveExecutor =
     { taskId : TaskId
     , agentName : String
     , agentConfig : Types.AgentConfig
-    , agentKind : AgentKind
+    , agentType : AgentType
     , executorModel : Executor.Model
     , providerState : Provider.ProviderState
     , provider : Provider.Provider Msg
@@ -140,11 +140,23 @@ type alias ActiveExecutor =
     }
 
 
-{-| Whether an executor is running a system agent (planner) or a user-defined agent.
+{-| The type of agent an executor is running.
+
+- `Internal`: A system agent with a specific internal type (e.g. TaskValidator).
+- `UserDefined`: A user-configured agent.
 -}
-type AgentKind
-    = SystemAgent
-    | UserAgent
+type AgentType
+    = Internal InternalAgentType
+    | UserDefined
+
+
+{-| Enumeration of internal agent types.
+
+Currently only `TaskValidator` exists. New internal agents should be added
+as variants here.
+-}
+type InternalAgentType
+    = TaskValidator
 
 
 type alias PendingConfigResponse =
@@ -448,11 +460,19 @@ spawnAgent model taskId prompt agentConfig providerConfig isSystemAgent =
         taskIdStr =
             Id.taskIdToString taskId
 
-        agentKind =
+        agentType =
             if isSystemAgent then
-                SystemAgent
+                Internal TaskValidator
             else
-                UserAgent
+                UserDefined
+
+        accumulatedData =
+            when agentType is
+                Internal TaskValidator ->
+                    Executor.TaskValidatorData { plannerOutput = Nothing }
+
+                UserDefined ->
+                    Executor.UserAgentData { completionReport = Nothing }
 
         agentInstructions =
             when agentConfig is
@@ -507,7 +527,7 @@ spawnAgent model taskId prompt agentConfig providerConfig isSystemAgent =
                     { taskId = taskId
                     , agentName = agentName
                     , agentConfig = agentConfig
-                    , agentKind = agentKind
+                    , agentType = agentType
                     , deferredResponse = Nothing
                     }
             , spawnCmd =
@@ -544,8 +564,8 @@ spawnAgent model taskId prompt agentConfig providerConfig isSystemAgent =
                         { taskId = taskId
                         , agentName = agentName
                         , agentConfig = agentConfig
-                        , agentKind = agentKind
-                        , executorModel = Executor.Idle
+                        , agentType = agentType
+                        , executorModel = Executor.init accumulatedData
                         , providerState = startResult.state
                         , provider = resolvedProvider
                         , retryCount = 0
@@ -576,18 +596,18 @@ resolveAndSpawnAgent model taskId prompt agentConfig isSystemAgent =
         agentName =
             Types.agentConfigName agentConfig
 
-        agentKind =
+        agentType =
             if isSystemAgent then
-                SystemAgent
+                Internal TaskValidator
             else
-                UserAgent
+                UserDefined
 
         executorState =
             Spawning
                 { taskId = taskId
                 , agentName = agentName
                 , agentConfig = agentConfig
-                , agentKind = agentKind
+                , agentType = agentType
                 , deferredResponse = Nothing
                 }
 
@@ -1067,19 +1087,19 @@ update msg model =
                     }
 
                 Just (AgentActive executor) ->
-                    when executor.agentKind is
-                        SystemAgent ->
+                    when executor.agentType is
+                        Internal TaskValidator ->
                             handlePlannerComplete model taskId taskIdStr executor result
 
-                        UserAgent ->
+                        UserDefined ->
                             handleUserAgentComplete model taskId taskIdStr executor Nothing result
 
                 Just (ActiveHandoff { executor, deferredResponse }) ->
-                    when executor.agentKind is
-                        SystemAgent ->
+                    when executor.agentType is
+                        Internal TaskValidator ->
                             handlePlannerComplete model taskId taskIdStr executor result
 
-                        UserAgent ->
+                        UserDefined ->
                             handleUserAgentComplete model taskId taskIdStr executor (Just deferredResponse) result
 
         GotProviderEvent { taskId, event } ->
@@ -1263,7 +1283,7 @@ update msg model =
                             }
 
                         Just executor ->
-                            when extractPlannerOutput executor.executorModel is
+                            when extractPlannerData executor.executorModel is
                                 Just _ ->
                                     -- Already received - exactly-once enforcement
                                     { model = model
@@ -2803,11 +2823,11 @@ handleExecutorStateTransition model taskId taskIdStr executor additionalCmd =
                     Nothing
 
         dispatchCompletion result =
-            when executor.agentKind is
-                SystemAgent ->
+            when executor.agentType is
+                Internal TaskValidator ->
                     handlePlannerComplete model taskId taskIdStr executor result
 
-                UserAgent ->
+                UserDefined ->
                     handleUserAgentComplete model taskId taskIdStr executor maybeHandoffResponse result
     in
     when executor.executorModel is
@@ -2953,15 +2973,14 @@ handleDeferredAction model taskId taskIdStr executor action additionalCmd =
                     { executor | providerState = deliverResult.state }
 
                 -- Transition executor back to Running with the planner output stored
-                -- so extractPlannerOutput can find it when the agent completes.
+                -- so extractPlannerData can find it when the agent completes.
                 executorWithOutput =
                     { executorWithProvider
                         | executorModel =
                             Executor.Running
                                 { pendingToolCalls = Dict.empty
                                 , completedResults = []
-                                , completionReport = Nothing
-                                , plannerOutput = Just plannerOutput
+                                , accumulatedData = Executor.TaskValidatorData { plannerOutput = Just plannerOutput }
                                 }
                     }
 
@@ -2987,37 +3006,67 @@ handleDeferredAction model taskId taskIdStr executor action additionalCmd =
             }
 
 
-{-| Extract the completion report from an executor model, if available.
+{-| Extract user agent data (completion report) from an executor model.
+
+Returns `Nothing` if the executor is not carrying `UserAgentData`, or if
+no completion report has been submitted yet.
 -}
-extractCompletionReport : Executor.Model -> Maybe Types.CompletionReport
-extractCompletionReport executorModel =
+extractUserAgentData : Executor.Model -> Maybe Types.CompletionReport
+extractUserAgentData executorModel =
+    let
+        fromAccumulatedData accumulatedData =
+            when accumulatedData is
+                Executor.UserAgentData { completionReport } ->
+                    completionReport
+
+                _ ->
+                    Nothing
+    in
     when executorModel is
-        Executor.Running state ->
-            state.completionReport
+        Executor.Running { accumulatedData } ->
+            fromAccumulatedData accumulatedData
 
-        Executor.Complete state ->
-            state.completionReport
+        Executor.Complete { accumulatedData } ->
+            fromAccumulatedData accumulatedData
 
-        Executor.Failed state ->
-            state.completionReport
+        Executor.Failed { accumulatedData } ->
+            fromAccumulatedData accumulatedData
+
+        Executor.Idle accumulatedData ->
+            fromAccumulatedData accumulatedData
 
         _ ->
             Nothing
 
 
-{-| Extract the planner output from an executor model, if available.
+{-| Extract planner data (planner output) from an executor model.
+
+Returns `Nothing` if the executor is not carrying `TaskValidatorData`, or if
+no planner output has been submitted yet.
 -}
-extractPlannerOutput : Executor.Model -> Maybe Types.PlannerOutput
-extractPlannerOutput executorModel =
+extractPlannerData : Executor.Model -> Maybe Types.PlannerOutput
+extractPlannerData executorModel =
+    let
+        fromAccumulatedData accumulatedData =
+            when accumulatedData is
+                Executor.TaskValidatorData { plannerOutput } ->
+                    plannerOutput
+
+                _ ->
+                    Nothing
+    in
     when executorModel is
-        Executor.Running state ->
-            state.plannerOutput
+        Executor.Running { accumulatedData } ->
+            fromAccumulatedData accumulatedData
 
-        Executor.Complete state ->
-            state.plannerOutput
+        Executor.Complete { accumulatedData } ->
+            fromAccumulatedData accumulatedData
 
-        Executor.Failed state ->
-            state.plannerOutput
+        Executor.Failed { accumulatedData } ->
+            fromAccumulatedData accumulatedData
+
+        Executor.Idle accumulatedData ->
+            fromAccumulatedData accumulatedData
 
         _ ->
             Nothing
@@ -3029,7 +3078,7 @@ extractPlannerOutput executorModel =
 
 {-| Spawn the task-validator agent for a newly created task.
 
-Registers the planner as an active executor with isSystemAgent=True,
+Registers the planner as an active executor with agentType=Internal TaskValidator,
 sets the task status to Planning with agent "task-validator", and emits GotAgentComplete
 when the planner process exits. The planner submits its structured output
 via the planner-output tool during execution.
@@ -3125,7 +3174,7 @@ dispatchPlanner model agentReg taskId description =
                                 { taskId = taskId
                                 , agentName = "task-validator"
                                 , agentConfig = InternalAgent { name = "task-validator", instructions = "" }
-                                , agentKind = SystemAgent
+                                , agentType = Internal TaskValidator
                                 , deferredResponse = Nothing
                                 }
                     in
@@ -3197,7 +3246,7 @@ handlePlannerComplete model taskId taskIdStr executor result =
             result
 
         plannerOutput =
-            extractPlannerOutput executor.executorModel
+            extractPlannerData executor.executorModel
 
         completionResult =
             AgentManager.processPlannerCompletion
@@ -3342,7 +3391,7 @@ handlePlannerComplete model taskId taskIdStr executor result =
                     retriedExecutor =
                         { executor
                             | retryCount = executor.retryCount + 1
-                            , executorModel = Executor.Idle
+                            , executorModel = Executor.init (Executor.TaskValidatorData { plannerOutput = Nothing })
                             , sessionId = Nothing
                             , providerState = startResult.state
                         }
@@ -3406,7 +3455,7 @@ handleUserAgentComplete :
 handleUserAgentComplete model taskId taskIdStr executor maybeDeferredResponse result =
     let
         completionReport =
-            extractCompletionReport executor.executorModel
+            extractUserAgentData executor.executorModel
 
         completionResult =
             AgentManager.processAgentCompletion
@@ -3488,7 +3537,7 @@ handleUserAgentComplete model taskId taskIdStr executor maybeDeferredResponse re
                             ]
                     }
 
-        AgentManager.CompletedWithoutReport outputText ->
+        AgentManager.ExitedWithoutReport outputText ->
             when model.registry is
                 Nothing ->
                     { model = updatedModel
@@ -4156,7 +4205,7 @@ routeToolCallToExecutor model taskId taskIdStr executor requestBody response =
         -- Exactly-once check for completion-report
         alreadySubmitted =
             if toolName == "completion-report" then
-                extractCompletionReport executor.executorModel
+                extractUserAgentData executor.executorModel
                     |> isJust
             else
                 False
