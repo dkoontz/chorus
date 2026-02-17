@@ -73,7 +73,6 @@ type alias Model =
     , agentRegistry : Maybe AgentRegistry.AgentRegistry
     , providerRegistry : Maybe ProviderRegistry.ProviderRegistry
     , activeExecutors : Dict String ExecutorState
-    , pendingHandoffResponses : Dict String Response
     , filesystemPermission : FileSystem.Permission
     , childProcessPermission : ChildProcess.Permission
     , httpClientPermission : HttpClient.Permission
@@ -91,26 +90,61 @@ type alias Model =
     }
 
 
-{-| State of an active agent executor, keyed by task ID.
+{-| State of an agent executor, keyed by task ID.
 
-Combines the Executor model (tool processing state machine) with
-the Provider state (pending HTTP responses for CLI, session for API) and
-the Provider record (functions for communicating with the agent).
+Lifecycle phases are encoded as union variants:
 
-The `retryCount` and `sessionId` fields are scaffolding for future retry
-support. They are initialized but not yet wired into the completion flow.
+- `Spawning`: Provider is resolving asynchronously. No agent process is running.
+  Tool calls arriving in this state are rejected.
+- `AgentActive`: Provider is resolved and agent is running. Tool calls are routed
+  through the provider.
+- `ActiveHandoff`: Same as AgentActive but this agent was spawned via a deferred
+  handoff. Carries the HTTP response handle that must be resolved when the
+  agent completes.
+
 -}
-type alias ExecutorState =
+type ExecutorState
+    = Spawning SpawningExecutor
+    | AgentActive ActiveExecutor
+    | ActiveHandoff { executor : ActiveExecutor, deferredResponse : Response }
+
+
+{-| Fields present while the provider is still resolving.
+
+The `deferredResponse` field carries the HTTP response handle for deferred
+handoffs. When the provider resolves and the executor transitions to AgentActive,
+the presence of this field determines whether the state becomes `AgentActive`
+or `ActiveHandoff`.
+-}
+type alias SpawningExecutor =
     { taskId : TaskId
     , agentName : String
     , agentConfig : Types.AgentConfig
+    , agentKind : AgentKind
+    , deferredResponse : Maybe Response
+    }
+
+
+{-| Fields present when the agent is actively running.
+-}
+type alias ActiveExecutor =
+    { taskId : TaskId
+    , agentName : String
+    , agentConfig : Types.AgentConfig
+    , agentKind : AgentKind
     , executorModel : Executor.Model
     , providerState : Provider.ProviderState
     , provider : Provider.Provider Msg
-    , isSystemAgent : Bool
     , retryCount : Int
     , sessionId : Maybe String
     }
+
+
+{-| Whether an executor is running a system agent (planner) or a user-defined agent.
+-}
+type AgentKind
+    = SystemAgent
+    | UserAgent
 
 
 type alias PendingConfigResponse =
@@ -238,7 +272,6 @@ init env =
                                         , agentRegistry = Nothing
                                         , providerRegistry = Nothing
                                         , activeExecutors = Dict.empty
-                                        , pendingHandoffResponses = Dict.empty
                                         , filesystemPermission = filesystemPermission
                                         , childProcessPermission = childProcessPermission
                                         , httpClientPermission = httpClientPermission
@@ -415,6 +448,12 @@ spawnAgent model taskId prompt agentConfig providerConfig isSystemAgent =
         taskIdStr =
             Id.taskIdToString taskId
 
+        agentKind =
+            if isSystemAgent then
+                SystemAgent
+            else
+                UserAgent
+
         agentInstructions =
             when agentConfig is
                 InternalAgent r ->
@@ -461,27 +500,25 @@ spawnAgent model taskId prompt agentConfig providerConfig isSystemAgent =
     in
     when maybeProvider is
         Nothing ->
-            -- Provider could not be created; return a failed executor state
+            -- Provider could not be created; emit an AgentFailed event
+            -- so that the executor lifecycle handles it correctly.
             { executorState =
-                { taskId = taskId
-                , agentName = agentName
-                , agentConfig = agentConfig
-                , executorModel = Executor.Failed { error = "Could not create provider for agent: " ++ agentName, completionReport = Nothing, plannerOutput = Nothing }
-                , providerState = Provider.NoProviderState
-                , provider =
-                    -- Placeholder provider that does nothing; the executor is already in Failed state
-                    { kind = CliProvider
-                    , validateEnvironment = \_ -> Cmd.none
-                    , startAgent = \s _ -> { state = s, cmd = Cmd.none }
-                    , deliverToolResults = \s _ -> { state = s, cmd = Cmd.none }
-                    , handleHttpToolCall = \s _ -> { state = s, cmd = Cmd.none }
-                    , initState = Provider.NoProviderState
+                Spawning
+                    { taskId = taskId
+                    , agentName = agentName
+                    , agentConfig = agentConfig
+                    , agentKind = agentKind
+                    , deferredResponse = Nothing
                     }
-                , isSystemAgent = isSystemAgent
-                , retryCount = 0
-                , sessionId = Nothing
-                }
-            , spawnCmd = Logging.logError model.logger ("Could not create provider for agent: " ++ agentName) NoOp
+            , spawnCmd =
+                GrenTask.succeed {}
+                    |> GrenTask.perform
+                        (\_ ->
+                            GotProviderEvent
+                                { taskId = taskId
+                                , event = Provider.AgentFailed ("Could not create provider for agent: " ++ agentName)
+                                }
+                        )
             }
 
         Just resolvedProvider ->
@@ -503,16 +540,17 @@ spawnAgent model taskId prompt agentConfig providerConfig isSystemAgent =
                     resolvedProvider.startAgent resolvedProvider.initState startConfig
 
                 executorState =
-                    { taskId = taskId
-                    , agentName = agentName
-                    , agentConfig = agentConfig
-                    , executorModel = Executor.Idle
-                    , providerState = startResult.state
-                    , provider = resolvedProvider
-                    , isSystemAgent = isSystemAgent
-                    , retryCount = 0
-                    , sessionId = Nothing
-                    }
+                    AgentActive
+                        { taskId = taskId
+                        , agentName = agentName
+                        , agentConfig = agentConfig
+                        , agentKind = agentKind
+                        , executorModel = Executor.Idle
+                        , providerState = startResult.state
+                        , provider = resolvedProvider
+                        , retryCount = 0
+                        , sessionId = Nothing
+                        }
             in
             { executorState = executorState
             , spawnCmd = startResult.cmd
@@ -532,35 +570,26 @@ resolveAndSpawnAgent :
     -> String
     -> Types.AgentConfig
     -> Bool
-    -> { executorState : ExecutorState, spawnCmd : Cmd Msg }
+    -> { executorState : ExecutorState, spawnCmd : Cmd Msg, agentName : String }
 resolveAndSpawnAgent model taskId prompt agentConfig isSystemAgent =
     let
         agentName =
             Types.agentConfigName agentConfig
 
-        taskIdStr =
-            Id.taskIdToString taskId
-
-        noopProvider =
-            { kind = CliProvider
-            , validateEnvironment = \_ -> Cmd.none
-            , startAgent = \s _ -> { state = s, cmd = Cmd.none }
-            , deliverToolResults = \s _ -> { state = s, cmd = Cmd.none }
-            , handleHttpToolCall = \s _ -> { state = s, cmd = Cmd.none }
-            , initState = Provider.NoProviderState
-            }
+        agentKind =
+            if isSystemAgent then
+                SystemAgent
+            else
+                UserAgent
 
         executorState =
-            { taskId = taskId
-            , agentName = agentName
-            , agentConfig = agentConfig
-            , executorModel = Executor.Idle
-            , providerState = Provider.NoProviderState
-            , provider = noopProvider
-            , isSystemAgent = isSystemAgent
-            , retryCount = 0
-            , sessionId = Nothing
-            }
+            Spawning
+                { taskId = taskId
+                , agentName = agentName
+                , agentConfig = agentConfig
+                , agentKind = agentKind
+                , deferredResponse = Nothing
+                }
 
         -- Resolve the provider config asynchronously. On success, emit
         -- GotProviderResolved to trigger the agent start. On failure, emit
@@ -593,6 +622,7 @@ resolveAndSpawnAgent model taskId prompt agentConfig isSystemAgent =
     in
     { executorState = executorState
     , spawnCmd = spawnCmd
+    , agentName = agentName
     }
 
 
@@ -818,112 +848,28 @@ update msg model =
                     in
                     when maybeExecutor is
                         Nothing ->
-                            -- No active executor - fall back to direct tool execution
-                            when model.registry is
-                                Nothing ->
-                                    { model = model
-                                    , command = Cmd.none
-                                    }
+                            -- No active executor — reject with error
+                            { model = model
+                            , command =
+                                Cmd.batch
+                                    [ sendBadRequest response "No active agent session for this task"
+                                    , Logging.logWarn model.logger
+                                        ("Tool request rejected for task " ++ taskIdStr ++ ": no active executor")
+                                        NoOp
+                                    ]
+                            }
 
-                                Just reg ->
-                                    let
-                                        toolCtx =
-                                            makeToolExecutionContext model taskId agentConfig
+                        Just (Spawning _) ->
+                            -- Provider still resolving — reject, agent not ready yet
+                            { model = model
+                            , command = sendBadRequest response "Agent is still starting"
+                            }
 
-                                        toolName =
-                                            Decode.decodeString (Decode.field "tool" Decode.string) requestBody
-                                                |> Result.withDefault "unknown"
+                        Just (AgentActive executor) ->
+                            routeToolCallToExecutor model taskId taskIdStr executor requestBody response
 
-                                        toMsg =
-                                            \apiResult -> GotToolResult { taskId = taskId, toolName = toolName, requestBody = requestBody, response = response, result = apiResult }
-                                    in
-                                    { model = model
-                                    , command = ToolExecution.requestExecuteTool toolCtx requestBody toMsg
-                                    }
-
-                        Just executor ->
-                            -- Route through the Provider -> Executor path
-                            let
-                                -- Parse the tool call from the request body
-                                toolName =
-                                    Decode.decodeString (Decode.field "tool" Decode.string) requestBody
-                                        |> Result.withDefault "unknown"
-
-                                -- Exactly-once check for completion-report
-                                alreadySubmitted =
-                                    if toolName == "completion-report" then
-                                        extractCompletionReport executor.executorModel
-                                            |> isJust
-                                    else
-                                        False
-                            in
-                            if alreadySubmitted then
-                                { model = model
-                                , command = Api.sendApiResponse response (Api.ApiError { statusCode = 409, code = "CONFLICT", message = "Completion report already submitted for this task" })
-                                }
-                            else
-                                let
-                                    -- Parse the tool input from the request body
-                                    toolInput =
-                                        Decode.decodeString Decode.value requestBody
-                                            |> Result.withDefault Encode.null
-
-                                    -- Generate a unique tool call ID from the tool name and task ID.
-                                    -- Uses the count of pending HTTP responses to avoid collisions.
-                                    pendingCount =
-                                        when executor.providerState is
-                                            Provider.CliProviderState cliState ->
-                                                Array.length (Dict.keys cliState.pendingHttpResponses)
-
-                                            _ ->
-                                                0
-
-                                    toolCallId =
-                                        taskIdStr ++ "-" ++ toolName ++ "-" ++ String.fromInt pendingCount
-
-                                    toolCall =
-                                        { id = toolCallId
-                                        , name = toolName
-                                        , input = toolInput
-                                        }
-
-                                    -- Store the HTTP response handle via the provider
-                                    handleResult =
-                                        executor.provider.handleHttpToolCall
-                                            executor.providerState
-                                            { toolCall = toolCall
-                                            , httpResponse = response
-                                            }
-
-                                    updatedExecutor =
-                                        { executor | providerState = handleResult.state }
-
-                                    updatedModel =
-                                        { model | activeExecutors = Dict.set taskIdStr updatedExecutor model.activeExecutors }
-
-                                    -- Forward the tool call to the Executor
-                                    executorCmd =
-                                        GrenTask.succeed {}
-                                            |> GrenTask.perform
-                                                (\_ ->
-                                                    GotExecutorMsg
-                                                        { taskId = taskId
-                                                        , msg =
-                                                            Executor.ToolCallReceived
-                                                                { id = toolCallId
-                                                                , name = toolName
-                                                                , input = toolInput
-                                                                }
-                                                        }
-                                                )
-                                in
-                                { model = updatedModel
-                                , command =
-                                    Cmd.batch
-                                        [ handleResult.cmd
-                                        , executorCmd
-                                        ]
-                                }
+                        Just (ActiveHandoff { executor }) ->
+                            routeToolCallToExecutor model taskId taskIdStr executor requestBody response
 
         GotAgentLookup { taskId, prompt, response, result } ->
             when result is
@@ -1008,7 +954,7 @@ update msg model =
                             [ sendResponseCmd
                             , spawnResult.spawnCmd
                             , broadcastToClients model "tasks_changed" (Encode.string body)
-                            , Logging.logInfo model.logger ("Spawned agent " ++ spawnResult.executorState.agentName ++ " for task " ++ taskIdStr) NoOp
+                            , Logging.logInfo model.logger ("Spawned agent " ++ spawnResult.agentName ++ " for task " ++ taskIdStr) NoOp
                             ]
                     }
 
@@ -1067,12 +1013,9 @@ update msg model =
                     }
 
                 Api.ApiSuccess _ ->
-                    -- Handoff started successfully. Store the HTTP response for later resolution.
-                    -- Note: The deferred response is implicitly timed out by the ChildProcess
-                    -- runDuration of 600 seconds (10 minutes). If the agent process is killed
-                    -- by that timeout, GotProviderEvent fires with AgentFailed and resolves
-                    -- the pending response. No separate timeout mechanism is needed as long
-                    -- as the ChildProcess timeout remains in place.
+                    -- Handoff started successfully. Store the HTTP response on the
+                    -- Spawning executor so it carries through to ActiveHandoff when
+                    -- the provider resolves.
                     let
                         spawnResult =
                             resolveAndSpawnAgent model taskId prompt agentConfig False
@@ -1080,17 +1023,26 @@ update msg model =
                         taskIdStr =
                             Id.taskIdToString taskId
 
+                        -- Attach the deferred response to the Spawning executor
+                        executorWithResponse =
+                            when spawnResult.executorState is
+                                Spawning spawning ->
+                                    Spawning { spawning | deferredResponse = Just response }
+
+                                other ->
+                                    -- Should not happen — resolveAndSpawnAgent always returns Spawning
+                                    other
+
                         updatedModel =
                             { model
-                                | activeExecutors = Dict.set taskIdStr spawnResult.executorState model.activeExecutors
-                                , pendingHandoffResponses = Dict.set taskIdStr response model.pendingHandoffResponses
+                                | activeExecutors = Dict.set taskIdStr executorWithResponse model.activeExecutors
                             }
                     in
                     { model = updatedModel
                     , command =
                         Cmd.batch
                             [ spawnResult.spawnCmd
-                            , Logging.logInfo model.logger ("Spawned deferred handoff agent " ++ spawnResult.executorState.agentName ++ " for task " ++ taskIdStr) NoOp
+                            , Logging.logInfo model.logger ("Spawned deferred handoff agent " ++ spawnResult.agentName ++ " for task " ++ taskIdStr) NoOp
                             ]
                     }
 
@@ -1099,20 +1051,36 @@ update msg model =
                 taskIdStr =
                     Id.taskIdToString taskId
 
-                maybeExecutor =
+                maybeExecutorState =
                     Dict.get taskIdStr model.activeExecutors
             in
-            when maybeExecutor is
+            when maybeExecutorState is
                 Nothing ->
                     { model = model
                     , command = Logging.logWarn model.logger ("GotAgentComplete for unknown executor: " ++ taskIdStr) NoOp
                     }
 
-                Just executor ->
-                    if executor.isSystemAgent then
-                        handlePlannerComplete model taskId taskIdStr executor result
-                    else
-                        handleUserAgentComplete model taskId taskIdStr executor result
+                Just (Spawning _) ->
+                    -- Should not happen — agent hasn't started yet
+                    { model = { model | activeExecutors = Dict.remove taskIdStr model.activeExecutors }
+                    , command = Logging.logWarn model.logger ("GotAgentComplete for spawning executor: " ++ taskIdStr) NoOp
+                    }
+
+                Just (AgentActive executor) ->
+                    when executor.agentKind is
+                        SystemAgent ->
+                            handlePlannerComplete model taskId taskIdStr executor result
+
+                        UserAgent ->
+                            handleUserAgentComplete model taskId taskIdStr executor Nothing result
+
+                Just (ActiveHandoff { executor, deferredResponse }) ->
+                    when executor.agentKind is
+                        SystemAgent ->
+                            handlePlannerComplete model taskId taskIdStr executor result
+
+                        UserAgent ->
+                            handleUserAgentComplete model taskId taskIdStr executor (Just deferredResponse) result
 
         GotProviderEvent { taskId, event } ->
             handleProviderEvent model taskId event
@@ -1126,12 +1094,40 @@ update msg model =
                 taskIdStr =
                     Id.taskIdToString taskId
 
+                -- Check if the previous Spawning state had a deferred handoff response
+                maybeDeferredResponse =
+                    when Dict.get taskIdStr model.activeExecutors is
+                        Just (Spawning spawning) ->
+                            spawning.deferredResponse
+
+                        _ ->
+                            Nothing
+
                 spawnResult =
                     spawnAgent model taskId prompt agentConfig providerConfig isSystemAgent
 
-                -- Update the executor state with the resolved provider and model
+                -- If there was a deferred response, wrap the AgentActive executor in ActiveHandoff.
+                -- If the provider failed (Spawning state), attach the deferred response so
+                -- the AgentFailed handler can resolve it.
+                finalExecutorState =
+                    when maybeDeferredResponse is
+                        Just deferredResponse ->
+                            when spawnResult.executorState is
+                                AgentActive executor ->
+                                    ActiveHandoff { executor = executor, deferredResponse = deferredResponse }
+
+                                Spawning spawning ->
+                                    Spawning { spawning | deferredResponse = Just deferredResponse }
+
+                                ActiveHandoff record ->
+                                    -- Should not happen — spawnAgent doesn't return ActiveHandoff
+                                    ActiveHandoff record
+
+                        Nothing ->
+                            spawnResult.executorState
+
                 updatedModel =
-                    { model | activeExecutors = Dict.set taskIdStr spawnResult.executorState model.activeExecutors }
+                    { model | activeExecutors = Dict.set taskIdStr finalExecutorState model.activeExecutors }
             in
             { model = updatedModel
             , command = spawnResult.spawnCmd
@@ -1255,8 +1251,12 @@ update msg model =
                     let
                         taskIdStr =
                             Id.taskIdToString taskId
+
+                        maybeActiveExecutor =
+                            Dict.get taskIdStr model.activeExecutors
+                                |> Maybe.andThen activeExecutorFromState
                     in
-                    when Dict.get taskIdStr model.activeExecutors is
+                    when maybeActiveExecutor is
                         Nothing ->
                             { model = model
                             , command = Api.sendApiResponse response (Api.ApiError { statusCode = 400, code = "BAD_REQUEST", message = "No active executor for task: " ++ taskIdStr })
@@ -1308,65 +1308,15 @@ update msg model =
                                     }
 
                 _ ->
-                    let
-                        toolStatus =
-                            when result is
-                                Api.ApiSuccess _ ->
-                                    "success"
-
-                                Api.ApiError _ ->
-                                    "error"
-
-                                Api.DeferredHandoff _ ->
-                                    "deferred"
-
-                                Api.DeferredPlannerOutput _ ->
-                                    "deferred"
-
-                        toolOutput =
-                            when result is
-                                Api.ApiSuccess { body } ->
-                                    body
-
-                                Api.ApiError { message } ->
-                                    message
-
-                                Api.DeferredHandoff _ ->
-                                    ""
-
-                                Api.DeferredPlannerOutput _ ->
-                                    ""
-
-                        logCmd =
-                            when model.registry is
-                                Nothing ->
-                                    Cmd.none
-
-                                Just reg ->
-                                    Registry.recordEvent reg taskId
-                                        { eventType = ToolExecuted
-                                        , data =
-                                            Dict.empty
-                                                |> Dict.set "tool" toolName
-                                                |> Dict.set "status" toolStatus
-                                                |> Dict.set "input" requestBody
-                                                |> Dict.set "output" toolOutput
-                                        }
-                                        |> GrenTask.onError (\_ -> GrenTask.succeed {})
-                                        |> GrenTask.perform (\_ -> NoOp)
-
-                        -- Completion reports are tracked by the Executor state machine.
-                        -- This GotToolResult path runs for tool calls that arrived when
-                        -- no active executor existed, so there is no executor to update.
-                        updatedModel =
-                            model
-                    in
-                    { model = updatedModel
+                    -- This branch handles tool results that arrive without an active
+                    -- executor (e.g., orphaned tool calls). Since the no-executor
+                    -- fallback has been removed from GotToolAgentLookup, this path
+                    -- should not be reached in normal operation. Log and reject.
+                    { model = model
                     , command =
                         Cmd.batch
-                            [ Api.sendApiResponse response result
-                            , logCmd
-                            , broadcastToClients updatedModel "tasks_changed" Encode.null
+                            [ Api.sendApiResponse response (Api.ApiError { statusCode = 400, code = "BAD_REQUEST", message = "Unexpected GotToolResult: no active executor" })
+                            , Logging.logWarn model.logger ("GotToolResult received for tool " ++ toolName ++ " but no active executor") NoOp
                             ]
                     }
 
@@ -1473,75 +1423,90 @@ update msg model =
             let
                 taskIdStr =
                     Id.taskIdToString taskId
+
+                executorState =
+                    Dict.get taskIdStr model.activeExecutors
             in
-            when Dict.get taskIdStr model.activeExecutors is
+            when executorState is
                 Nothing ->
                     { model = model
                     , command = sendBadRequest response ("No active executor for task: " ++ taskIdStr)
                     }
 
-                Just executor ->
-                    let
-                        agentConfig =
-                            executor.agentConfig
-
-                        currentTools =
-                            when agentConfig is
-                                UserDefinedAgent r ->
-                                    r.allowedTools
-
-                                InternalAgent _ ->
-                                    []
-
-                        withAdded =
-                            Array.foldl
-                                (\tool tools ->
-                                    if Array.any (\t -> t == tool) tools then
-                                        tools
-                                    else
-                                        Array.pushLast tool tools
-                                )
-                                currentTools
-                                addTools
-
-                        withRemoved =
-                            Array.keepIf
-                                (\tool ->
-                                    not (Array.any (\r -> r == tool) removeTools)
-                                )
-                                withAdded
-
-                        updatedConfig =
-                            when agentConfig is
-                                UserDefinedAgent r ->
-                                    UserDefinedAgent { r | allowedTools = withRemoved }
-
-                                InternalAgent _ ->
-                                    agentConfig
-
-                        updatedExecutor =
-                            { executor | agentConfig = updatedConfig }
-
-                        updatedExecutors =
-                            Dict.set taskIdStr updatedExecutor model.activeExecutors
-
-                        responseBody =
-                            Encode.object
-                                [ { key = "allowedTools", value = Encode.array Encode.string withRemoved }
-                                ]
-                                |> Encode.encode 0
-                    in
-                    { model = { model | activeExecutors = updatedExecutors }
-                    , command =
-                        Cmd.batch
-                            [ response
-                                |> Response.setStatus 200
-                                |> Response.setHeader "Content-Type" "application/json"
-                                |> Response.setBody responseBody
-                                |> Response.send
-                            , Logging.logInfo model.logger ("Updated tools for task " ++ taskIdStr ++ ": " ++ String.join ", " withRemoved) NoOp
-                            ]
+                Just (Spawning _) ->
+                    { model = model
+                    , command = sendBadRequest response ("Agent is still starting for task: " ++ taskIdStr)
                     }
+
+                Just currentState ->
+                    when activeExecutorFromState currentState is
+                        Nothing ->
+                            { model = model
+                            , command = sendBadRequest response ("No active executor for task: " ++ taskIdStr)
+                            }
+
+                        Just executor ->
+                            let
+                                agentConfig =
+                                    executor.agentConfig
+
+                                currentTools =
+                                    when agentConfig is
+                                        UserDefinedAgent r ->
+                                            r.allowedTools
+
+                                        InternalAgent _ ->
+                                            []
+
+                                withAdded =
+                                    Array.foldl
+                                        (\tool tools ->
+                                            if Array.any (\t -> t == tool) tools then
+                                                tools
+                                            else
+                                                Array.pushLast tool tools
+                                        )
+                                        currentTools
+                                        addTools
+
+                                withRemoved =
+                                    Array.keepIf
+                                        (\tool ->
+                                            not (Array.any (\r -> r == tool) removeTools)
+                                        )
+                                        withAdded
+
+                                updatedConfig =
+                                    when agentConfig is
+                                        UserDefinedAgent r ->
+                                            UserDefinedAgent { r | allowedTools = withRemoved }
+
+                                        InternalAgent _ ->
+                                            agentConfig
+
+                                updatedExecutorState =
+                                    updateActiveExecutor (\e -> { e | agentConfig = updatedConfig }) currentState
+
+                                updatedExecutors =
+                                    Dict.set taskIdStr updatedExecutorState model.activeExecutors
+
+                                responseBody =
+                                    Encode.object
+                                        [ { key = "allowedTools", value = Encode.array Encode.string withRemoved }
+                                        ]
+                                        |> Encode.encode 0
+                            in
+                            { model = { model | activeExecutors = updatedExecutors }
+                            , command =
+                                Cmd.batch
+                                    [ response
+                                        |> Response.setStatus 200
+                                        |> Response.setHeader "Content-Type" "application/json"
+                                        |> Response.setBody responseBody
+                                        |> Response.send
+                                    , Logging.logInfo model.logger ("Updated tools for task " ++ taskIdStr ++ ": " ++ String.join ", " withRemoved) NoOp
+                                    ]
+                            }
 
         GotConfigLoaded { response, deferResponse, result } ->
             when result is
@@ -2600,46 +2565,98 @@ handleProviderEvent model taskId event =
     in
     when Dict.get taskIdStr model.activeExecutors is
         Nothing ->
+            -- No executor found. For AgentFailed events this can happen if the
+            -- provider resolution itself failed (the Spawning executor was already
+            -- cleaned up). Just log and move on.
             { model = model
             , command = Logging.logWarn model.logger ("ProviderEvent for unknown executor: " ++ taskIdStr) NoOp
             }
 
-        Just executor ->
-            -- Convert ProviderEvent to an Executor message and process it
-            let
-                -- Extract session ID from AgentCompleted and store it on the executor
-                updatedExecutor =
-                    when event is
-                        Provider.AgentCompleted { sessionId } ->
-                            when sessionId is
-                                Just sid ->
-                                    { executor | sessionId = Just sid }
+        Just (Spawning spawning) ->
+            -- Provider event arrived for a spawning executor. This happens when
+            -- provider resolution fails — the async task emits AgentFailed.
+            -- Clean up the spawning placeholder and resolve any deferred response.
+            when event is
+                Provider.AgentFailed error ->
+                    let
+                        deferredCmd =
+                            when spawning.deferredResponse is
+                                Just deferredResponse ->
+                                    Api.sendApiResponse deferredResponse
+                                        (Api.ApiError { statusCode = 500, code = "AGENT_FAILED", message = error })
 
                                 Nothing ->
-                                    executor
+                                    Cmd.none
+                    in
+                    { model = { model | activeExecutors = Dict.remove taskIdStr model.activeExecutors }
+                    , command =
+                        Cmd.batch
+                            [ Logging.logError model.logger ("Agent failed during spawn for task " ++ taskIdStr ++ ": " ++ error) NoOp
+                            , deferredCmd
+                            ]
+                    }
 
-                        _ ->
-                            executor
+                _ ->
+                    -- Unexpected event for a spawning executor; discard
+                    { model = model
+                    , command = Logging.logWarn model.logger ("Unexpected ProviderEvent for spawning executor: " ++ taskIdStr) NoOp
+                    }
 
-                modelWithSessionId =
-                    { model | activeExecutors = Dict.set taskIdStr updatedExecutor model.activeExecutors }
+        Just (AgentActive executor) ->
+            handleProviderEventForExecutor model taskId taskIdStr executor event
 
-                executorMsg =
-                    when event is
-                        Provider.ToolCallReceived toolCall ->
-                            Executor.ToolCallReceived
-                                { id = toolCall.id
-                                , name = toolCall.name
-                                , input = toolCall.input
-                                }
+        Just (ActiveHandoff { executor }) ->
+            handleProviderEventForExecutor model taskId taskIdStr executor event
 
-                        Provider.AgentCompleted { output } ->
-                            Executor.AgentCompleted output
 
-                        Provider.AgentFailed error ->
-                            Executor.AgentFailed error
-            in
-            handleExecutorMsg modelWithSessionId taskId executorMsg
+{-| Handle a provider event for an active executor.
+-}
+handleProviderEventForExecutor :
+    Model
+    -> TaskId
+    -> String
+    -> ActiveExecutor
+    -> Provider.ProviderEvent
+    -> { model : Model, command : Cmd Msg }
+handleProviderEventForExecutor model taskId taskIdStr executor event =
+    -- Convert ProviderEvent to an Executor message and process it
+    let
+        -- Extract session ID from AgentCompleted and store it on the executor
+        currentState =
+            Maybe.withDefault (AgentActive executor) (Dict.get taskIdStr model.activeExecutors)
+
+        updatedExecutorState =
+            when event is
+                Provider.AgentCompleted { sessionId } ->
+                    when sessionId is
+                        Just sid ->
+                            updateActiveExecutor (\e -> { e | sessionId = Just sid }) currentState
+
+                        Nothing ->
+                            currentState
+
+                _ ->
+                    currentState
+
+        modelWithSessionId =
+            { model | activeExecutors = Dict.set taskIdStr updatedExecutorState model.activeExecutors }
+
+        executorMsg =
+            when event is
+                Provider.ToolCallReceived toolCall ->
+                    Executor.ToolCallReceived
+                        { id = toolCall.id
+                        , name = toolCall.name
+                        , input = toolCall.input
+                        }
+
+                Provider.AgentCompleted { output } ->
+                    Executor.AgentCompleted output
+
+                Provider.AgentFailed error ->
+                    Executor.AgentFailed error
+    in
+    handleExecutorMsg modelWithSessionId taskId executorMsg
 
 
 {-| Handle a message for the Executor.
@@ -2668,80 +2685,101 @@ handleExecutorMsg model taskId executorMsg =
             , command = Logging.logWarn model.logger ("ExecutorMsg for unknown executor: " ++ taskIdStr) NoOp
             }
 
-        Just executor ->
-            let
-                toolExecutionContext =
-                    makeToolExecutionContext model taskId executor.agentConfig
+        Just (Spawning _) ->
+            -- Executor is still spawning — discard the message
+            { model = model
+            , command = Logging.logWarn model.logger ("ExecutorMsg for spawning executor: " ++ taskIdStr) NoOp
+            }
 
-                executorConfig =
-                    { executeTool =
-                        ToolExecution.executeToolCall toolExecutionContext
-                    , toMsg =
-                        \msg -> GotExecutorMsg { taskId = taskId, msg = msg }
+        Just executorState ->
+            -- executorState is AgentActive or ActiveHandoff — extract the active executor
+            when activeExecutorFromState executorState is
+                Nothing ->
+                    -- Should not happen since we already handled Spawning above
+                    { model = model
+                    , command = Cmd.none
                     }
 
-                updateResult =
-                    Executor.update executorMsg executor.executorModel executorConfig
-
-                updatedExecutor =
-                    { executor | executorModel = updateResult.model }
-
-                updatedModel =
-                    { model | activeExecutors = Dict.set taskIdStr updatedExecutor model.activeExecutors }
-            in
-            -- Handle the effect
-            when updateResult.effect is
-                Executor.NoEffect ->
-                    -- Check if executor transitioned to complete/failed
-                    handleExecutorStateTransition updatedModel taskId taskIdStr updatedExecutor updateResult.cmd
-
-                Executor.DeliverToolResults results ->
-                    -- Send results back to the agent via the provider
+                Just executor ->
                     let
-                        deliverResult =
-                            executor.provider.deliverToolResults updatedExecutor.providerState results
+                        toolExecutionContext =
+                            makeToolExecutionContext model taskId executor.agentConfig
 
-                        executorWithUpdatedProvider =
-                            { updatedExecutor | providerState = deliverResult.state }
+                        executorConfig =
+                            { executeTool =
+                                ToolExecution.executeToolCall toolExecutionContext
+                            , toMsg =
+                                \msg -> GotExecutorMsg { taskId = taskId, msg = msg }
+                            }
 
-                        finalModel =
-                            { model | activeExecutors = Dict.set taskIdStr executorWithUpdatedProvider model.activeExecutors }
+                        updateResult =
+                            Executor.update executorMsg executor.executorModel executorConfig
 
-                        -- Record tool events for each result
-                        logToolEvents =
-                            results
-                                |> Array.map
-                                    (\toolResult ->
-                                        when model.registry is
-                                            Just reg ->
-                                                Registry.recordEvent reg taskId
-                                                    { eventType = ToolExecuted
-                                                    , data =
-                                                        Dict.empty
-                                                            |> Dict.set "tool" toolResult.toolCallId
-                                                            |> Dict.set "status" (if toolResult.isError then "error" else "success")
-                                                            |> Dict.set "output" toolResult.output
-                                                    }
-                                                    |> GrenTask.onError (\_ -> GrenTask.succeed {})
-                                                    |> GrenTask.perform (\_ -> NoOp)
+                        updatedExecutor =
+                            { executor | executorModel = updateResult.model }
 
-                                            Nothing ->
-                                                Cmd.none
-                                    )
-                                |> Cmd.batch
+                        updatedExecutorState =
+                            updateActiveExecutor (\_ -> updatedExecutor) executorState
+
+                        updatedModel =
+                            { model | activeExecutors = Dict.set taskIdStr updatedExecutorState model.activeExecutors }
                     in
-                    { model = finalModel
-                    , command =
-                        Cmd.batch
-                            [ updateResult.cmd
-                            , deliverResult.cmd
-                            , logToolEvents
-                            , broadcastToClients finalModel "tasks_changed" Encode.null
-                            ]
-                    }
+                    -- Handle the effect
+                    when updateResult.effect is
+                        Executor.NoEffect ->
+                            -- Check if executor transitioned to complete/failed
+                            handleExecutorStateTransition updatedModel taskId taskIdStr updatedExecutor updateResult.cmd
 
-                Executor.DeferredActionRequired action ->
-                    handleDeferredAction updatedModel taskId taskIdStr updatedExecutor action updateResult.cmd
+                        Executor.DeliverToolResults results ->
+                            -- Send results back to the agent via the provider
+                            let
+                                deliverResult =
+                                    executor.provider.deliverToolResults updatedExecutor.providerState results
+
+                                executorWithUpdatedProvider =
+                                    { updatedExecutor | providerState = deliverResult.state }
+
+                                finalExecutorState =
+                                    updateActiveExecutor (\_ -> executorWithUpdatedProvider) executorState
+
+                                finalModel =
+                                    { model | activeExecutors = Dict.set taskIdStr finalExecutorState model.activeExecutors }
+
+                                -- Record tool events for each result
+                                logToolEvents =
+                                    results
+                                        |> Array.map
+                                            (\toolResult ->
+                                                when model.registry is
+                                                    Just reg ->
+                                                        Registry.recordEvent reg taskId
+                                                            { eventType = ToolExecuted
+                                                            , data =
+                                                                Dict.empty
+                                                                    |> Dict.set "tool" toolResult.toolName
+                                                                    |> Dict.set "status" (if toolResult.isError then "error" else "success")
+                                                                    |> Dict.set "output" toolResult.output
+                                                            }
+                                                            |> GrenTask.onError (\_ -> GrenTask.succeed {})
+                                                            |> GrenTask.perform (\_ -> NoOp)
+
+                                                    Nothing ->
+                                                        Cmd.none
+                                            )
+                                            |> Cmd.batch
+                            in
+                            { model = finalModel
+                            , command =
+                                Cmd.batch
+                                    [ updateResult.cmd
+                                    , deliverResult.cmd
+                                    , logToolEvents
+                                    , broadcastToClients finalModel "tasks_changed" Encode.null
+                                    ]
+                            }
+
+                        Executor.DeferredActionRequired action ->
+                            handleDeferredAction updatedModel taskId taskIdStr updatedExecutor action updateResult.cmd
 
 
 {-| Check if the executor has transitioned to a terminal state and handle it.
@@ -2750,54 +2788,46 @@ handleExecutorStateTransition :
     Model
     -> TaskId
     -> String
-    -> ExecutorState
+    -> ActiveExecutor
     -> Cmd Msg
     -> { model : Model, command : Cmd Msg }
 handleExecutorStateTransition model taskId taskIdStr executor additionalCmd =
+    let
+        -- Look up the handoff response from the executor state if this is an ActiveHandoff
+        maybeHandoffResponse =
+            when Dict.get taskIdStr model.activeExecutors is
+                Just (ActiveHandoff { deferredResponse }) ->
+                    Just deferredResponse
+
+                _ ->
+                    Nothing
+
+        dispatchCompletion result =
+            when executor.agentKind is
+                SystemAgent ->
+                    handlePlannerComplete model taskId taskIdStr executor result
+
+                UserAgent ->
+                    handleUserAgentComplete model taskId taskIdStr executor maybeHandoffResponse result
+    in
     when executor.executorModel is
         Executor.Complete { output } ->
             let
-                result =
-                    Ok output
+                completionResult =
+                    dispatchCompletion (Ok output)
             in
-            if executor.isSystemAgent then
-                let
-                    completionResult =
-                        handlePlannerComplete model taskId taskIdStr executor result
-                in
-                { model = completionResult.model
-                , command = Cmd.batch [ completionResult.command, additionalCmd ]
-                }
-            else
-                let
-                    completionResult =
-                        handleUserAgentComplete model taskId taskIdStr executor result
-                in
-                { model = completionResult.model
-                , command = Cmd.batch [ completionResult.command, additionalCmd ]
-                }
+            { model = completionResult.model
+            , command = Cmd.batch [ completionResult.command, additionalCmd ]
+            }
 
         Executor.Failed { error } ->
             let
-                result =
-                    Err error
+                completionResult =
+                    dispatchCompletion (Err error)
             in
-            if executor.isSystemAgent then
-                let
-                    completionResult =
-                        handlePlannerComplete model taskId taskIdStr executor result
-                in
-                { model = completionResult.model
-                , command = Cmd.batch [ completionResult.command, additionalCmd ]
-                }
-            else
-                let
-                    completionResult =
-                        handleUserAgentComplete model taskId taskIdStr executor result
-                in
-                { model = completionResult.model
-                , command = Cmd.batch [ completionResult.command, additionalCmd ]
-                }
+            { model = completionResult.model
+            , command = Cmd.batch [ completionResult.command, additionalCmd ]
+            }
 
         _ ->
             -- Executor is still running or idle
@@ -2818,7 +2848,7 @@ handleDeferredAction :
     Model
     -> TaskId
     -> String
-    -> ExecutorState
+    -> ActiveExecutor
     -> Executor.DeferredAction
     -> Cmd Msg
     -> { model : Model, command : Cmd Msg }
@@ -2913,6 +2943,7 @@ handleDeferredAction model taskId taskIdStr executor action additionalCmd =
                 deliverResult =
                     executor.provider.deliverToolResults executor.providerState
                         [ { toolCallId = toolCallId
+                          , toolName = "planner-output"
                           , output = Encode.encode 0 (Encode.object [ { key = "success", value = Encode.bool True } ])
                           , isError = False
                           }
@@ -2934,8 +2965,17 @@ handleDeferredAction model taskId taskIdStr executor action additionalCmd =
                                 }
                     }
 
+                -- Preserve the executor variant (AgentActive or ActiveHandoff)
+                finalExecutorState =
+                    when Dict.get taskIdStr model.activeExecutors is
+                        Just (ActiveHandoff { deferredResponse }) ->
+                            ActiveHandoff { executor = executorWithOutput, deferredResponse = deferredResponse }
+
+                        _ ->
+                            AgentActive executorWithOutput
+
                 finalModel =
-                    { model | activeExecutors = Dict.set taskIdStr executorWithOutput model.activeExecutors }
+                    { model | activeExecutors = Dict.set taskIdStr finalExecutorState model.activeExecutors }
             in
             { model = finalModel
             , command =
@@ -3077,28 +3117,17 @@ dispatchPlanner model agentReg taskId description =
                                                     }
                                     )
 
-                        -- Register a placeholder executor state immediately so that
-                        -- tool calls arriving before GotProviderResolved can find it.
-                        noopProvider =
-                            { kind = CliProvider
-                            , validateEnvironment = \_ -> Cmd.none
-                            , startAgent = \s _ -> { state = s, cmd = Cmd.none }
-                            , deliverToolResults = \s _ -> { state = s, cmd = Cmd.none }
-                            , handleHttpToolCall = \s _ -> { state = s, cmd = Cmd.none }
-                            , initState = Provider.NoProviderState
-                            }
-
+                        -- Register a Spawning executor state immediately so that
+                        -- tool calls arriving before GotProviderResolved are rejected
+                        -- with "Agent is still starting" rather than silently discarded.
                         executorState =
-                            { taskId = taskId
-                            , agentName = "task-validator"
-                            , agentConfig = InternalAgent { name = "task-validator", instructions = "" }
-                            , executorModel = Executor.Idle
-                            , providerState = Provider.NoProviderState
-                            , provider = noopProvider
-                            , isSystemAgent = True
-                            , retryCount = 0
-                            , sessionId = Nothing
-                            }
+                            Spawning
+                                { taskId = taskId
+                                , agentName = "task-validator"
+                                , agentConfig = InternalAgent { name = "task-validator", instructions = "" }
+                                , agentKind = SystemAgent
+                                , deferredResponse = Nothing
+                                }
                     in
                     { model =
                         { model
@@ -3159,7 +3188,7 @@ handlePlannerComplete :
     Model
     -> TaskId
     -> String
-    -> ExecutorState
+    -> ActiveExecutor
     -> Result String String
     -> { model : Model, command : Cmd Msg }
 handlePlannerComplete model taskId taskIdStr executor result =
@@ -3320,7 +3349,7 @@ handlePlannerComplete model taskId taskIdStr executor result =
 
                     -- Use `model` (not `updatedModel`) to preserve the executor in activeExecutors
                     retryModel =
-                        { model | activeExecutors = Dict.set taskIdStr retriedExecutor model.activeExecutors }
+                        { model | activeExecutors = Dict.set taskIdStr (AgentActive retriedExecutor) model.activeExecutors }
                 in
                 { model = retryModel
                 , command =
@@ -3370,10 +3399,11 @@ handleUserAgentComplete :
     Model
     -> TaskId
     -> String
-    -> ExecutorState
+    -> ActiveExecutor
+    -> Maybe Response
     -> Result String String
     -> { model : Model, command : Cmd Msg }
-handleUserAgentComplete model taskId taskIdStr executor result =
+handleUserAgentComplete model taskId taskIdStr executor maybeDeferredResponse result =
     let
         completionReport =
             extractCompletionReport executor.executorModel
@@ -3384,10 +3414,6 @@ handleUserAgentComplete model taskId taskIdStr executor result =
                 , completionReport = completionReport
                 }
 
-        -- Check for pending deferred handoff response
-        maybeDeferredResponse =
-            Dict.get taskIdStr model.pendingHandoffResponses
-
         -- Use the appropriate complete function based on whether this was a handoff
         requestComplete =
             when maybeDeferredResponse is
@@ -3397,11 +3423,10 @@ handleUserAgentComplete model taskId taskIdStr executor result =
                 Nothing ->
                     Api.requestCompleteAgent
 
-        -- Remove executor from active and clear pending response
+        -- Remove executor from active state
         updatedModel =
             { model
                 | activeExecutors = Dict.remove taskIdStr model.activeExecutors
-                , pendingHandoffResponses = Dict.remove taskIdStr model.pendingHandoffResponses
             }
 
         -- Build the deferred response command if there's a pending response
@@ -4105,6 +4130,146 @@ getSecureContext : GrenTask.Task Never SecureContext
 getSecureContext =
     Crypto.getSecureContext
         |> GrenTask.mapError (\{} -> Debug.todo "SecureContext failed")
+
+
+{-| Route a tool call HTTP request to an active executor.
+
+Parses the tool call from the request body, stores the HTTP response handle
+in the provider, and forwards the tool call to the Executor. Used by both
+`AgentActive` and `ActiveHandoff` branches in `GotToolAgentLookup`.
+-}
+routeToolCallToExecutor :
+    Model
+    -> TaskId
+    -> String
+    -> ActiveExecutor
+    -> String
+    -> Response
+    -> { model : Model, command : Cmd Msg }
+routeToolCallToExecutor model taskId taskIdStr executor requestBody response =
+    let
+        -- Parse the tool call from the request body
+        toolName =
+            Decode.decodeString (Decode.field "tool" Decode.string) requestBody
+                |> Result.withDefault "unknown"
+
+        -- Exactly-once check for completion-report
+        alreadySubmitted =
+            if toolName == "completion-report" then
+                extractCompletionReport executor.executorModel
+                    |> isJust
+            else
+                False
+    in
+    if alreadySubmitted then
+        { model = model
+        , command = Api.sendApiResponse response (Api.ApiError { statusCode = 409, code = "CONFLICT", message = "Completion report already submitted for this task" })
+        }
+    else
+        let
+            -- Parse the tool input from the request body
+            toolInput =
+                Decode.decodeString Decode.value requestBody
+                    |> Result.withDefault Encode.null
+
+            -- Generate a unique tool call ID from the tool name and task ID.
+            -- Uses the count of pending HTTP responses to avoid collisions.
+            pendingCount =
+                when executor.providerState is
+                    Provider.CliProviderState cliState ->
+                        Array.length (Dict.keys cliState.pendingHttpResponses)
+
+                    Provider.ApiProviderState _ ->
+                        0
+
+            toolCallId =
+                taskIdStr ++ "-" ++ toolName ++ "-" ++ String.fromInt pendingCount
+
+            toolCall =
+                { id = toolCallId
+                , name = toolName
+                , input = toolInput
+                }
+
+            -- Store the HTTP response handle via the provider
+            handleResult =
+                executor.provider.handleHttpToolCall
+                    executor.providerState
+                    { toolCall = toolCall
+                    , httpResponse = response
+                    }
+
+            updatedExecutor =
+                { executor | providerState = handleResult.state }
+
+            -- Preserve the executor variant (AgentActive or ActiveHandoff) by looking up
+            -- the current state and updating the ActiveExecutor record inside it.
+            updatedExecutorState =
+                when Dict.get taskIdStr model.activeExecutors is
+                    Just (ActiveHandoff { deferredResponse }) ->
+                        ActiveHandoff { executor = updatedExecutor, deferredResponse = deferredResponse }
+
+                    _ ->
+                        AgentActive updatedExecutor
+
+            updatedModel =
+                { model | activeExecutors = Dict.set taskIdStr updatedExecutorState model.activeExecutors }
+
+            -- Forward the tool call to the Executor
+            executorCmd =
+                GrenTask.succeed {}
+                    |> GrenTask.perform
+                        (\_ ->
+                            GotExecutorMsg
+                                { taskId = taskId
+                                , msg =
+                                    Executor.ToolCallReceived
+                                        { id = toolCallId
+                                        , name = toolName
+                                        , input = toolInput
+                                        }
+                                }
+                        )
+        in
+        { model = updatedModel
+        , command =
+            Cmd.batch
+                [ handleResult.cmd
+                , executorCmd
+                ]
+        }
+
+
+{-| Extract the ActiveExecutor record from any executor state variant.
+
+Returns Nothing for Spawning since there is no active executor.
+-}
+activeExecutorFromState : ExecutorState -> Maybe ActiveExecutor
+activeExecutorFromState state =
+    when state is
+        Spawning _ ->
+            Nothing
+
+        AgentActive executor ->
+            Just executor
+
+        ActiveHandoff { executor } ->
+            Just executor
+
+
+{-| Update the ActiveExecutor inside an ExecutorState, preserving the variant.
+-}
+updateActiveExecutor : (ActiveExecutor -> ActiveExecutor) -> ExecutorState -> ExecutorState
+updateActiveExecutor fn state =
+    when state is
+        Spawning s ->
+            Spawning s
+
+        AgentActive executor ->
+            AgentActive (fn executor)
+
+        ActiveHandoff record ->
+            ActiveHandoff { record | executor = fn record.executor }
 
 
 {-| Check whether a Maybe value is Just (contains a value).

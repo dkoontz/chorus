@@ -94,6 +94,7 @@ type alias ToolCall =
 -}
 type alias ToolResult =
     { toolCallId : String
+    , toolName : String
     , output : String
     , isError : Bool
     }
@@ -247,7 +248,6 @@ Each variant holds the state specific to its provider kind:
   keyed by tool call ID.
 - `ApiProviderState`: The active session and any provider-specific data needed
   to continue the conversation.
-- `NoProviderState`: Initial state before a provider is started.
 
 -}
 type ProviderState
@@ -255,9 +255,8 @@ type ProviderState
         { pendingHttpResponses : Dict String HttpResponse.Response
         }
     | ApiProviderState
-        { session : Maybe Session
+        { session : Session
         }
-    | NoProviderState
 
 
 {-| Context for an incoming chorus-tools HTTP tool call callback.

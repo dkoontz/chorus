@@ -160,7 +160,10 @@ startAgent config state startConfig =
                                                     |> Bytes.toString
                                                     |> Maybe.withDefault ""
                                         in
-                                        "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
+                                        if String.isEmpty (String.trim stderrStr) then
+                                            "Agent CLI exited with code " ++ String.fromInt exitCode ++ " (no stderr output — process may have been killed by signal or timeout)"
+                                        else
+                                            "Agent CLI exited with code " ++ String.fromInt exitCode ++ ": " ++ stderrStr
                         in
                         Task.succeed (startConfig.onEvent (AgentFailed errMsg))
                     )
@@ -233,8 +236,8 @@ deliverToolResults state results =
             , cmd = Cmd.batch foldResult.cmds
             }
 
-        _ ->
-            -- Not in CLI provider state; no-op
+        ApiProviderState _ ->
+            -- API providers do not use HTTP response handles
             { state = state
             , cmd = Cmd.none
             }
@@ -260,8 +263,8 @@ handleHttpToolCall state context =
             , cmd = Cmd.none
             }
 
-        _ ->
-            -- Not in CLI provider state; no-op
+        ApiProviderState _ ->
+            -- API providers do not use HTTP response handles
             { state = state
             , cmd = Cmd.none
             }
@@ -435,7 +438,7 @@ buildShellCommand args =
             in
             taskIdVar ++ baseUrlVar
     in
-    envVars ++ baseArgs ++ sessionArgs ++ promptArgs ++ toolArgs ++ dirArgs ++ messageArg ++ stdinRedirect
+    envVars ++ "exec " ++ baseArgs ++ sessionArgs ++ promptArgs ++ toolArgs ++ dirArgs ++ messageArg ++ stdinRedirect
 
 
 {-| Map Chorus tool names to Claude CLI --tools and --allowedTools flags.

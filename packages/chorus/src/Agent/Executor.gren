@@ -336,6 +336,7 @@ handleToolCallCompleted toolCallResult state =
 
                 toolResult =
                     { toolCallId = toolCallResult.toolCallId
+                    , toolName = toolCallResult.toolName
                     , output = body
                     , isError = False
                     }
@@ -351,6 +352,7 @@ handleToolCallCompleted toolCallResult state =
             let
                 toolResult =
                     { toolCallId = toolCallResult.toolCallId
+                    , toolName = toolCallResult.toolName
                     , output = message
                     , isError = True
                     }

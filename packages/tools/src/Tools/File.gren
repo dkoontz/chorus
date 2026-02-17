@@ -716,13 +716,30 @@ listWithPattern childProcessPermission allowedDirs validPath pattern =
                             |> Bytes.toString
                             |> Maybe.withDefault ""
 
+                    -- Strip the search directory prefix so paths are relative,
+                    -- consistent with listDirectorySimple which returns relative paths.
+                    -- find returns absolute paths like /a/b/c/file.txt; we strip /a/b/c/
+                    -- to produce file.txt (or subdir/file.txt for nested results).
+                    prefixToStrip =
+                        if String.endsWith "/" searchPath then
+                            searchPath
+                        else
+                            searchPath ++ "/"
+
+                    makeRelative : String -> String
+                    makeRelative absPath =
+                        if String.startsWith prefixToStrip absPath then
+                            String.dropFirst (String.unitLength prefixToStrip) absPath
+                        else
+                            absPath
+
                     files =
                         output
                             |> String.split "\n"
                             |> Array.keepIf (\s -> not (String.isEmpty s))
                             |> Array.map
                                 (\filePath ->
-                                    { path = filePath
+                                    { path = makeRelative filePath
                                     , size = 0
                                     , modified = Time.millisToPosix 0
                                     , isDirectory = False
